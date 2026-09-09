@@ -386,6 +386,30 @@ model.Mesh.GenerateMesh()
    CSF is 1.7 S/m vs nerve 0.1432 S/m — a 12× difference in tissue immediately
    around the electrodes, so this materially changes the answer.
 
+## The deck has CRLF line endings — end-anchored regexes silently fail
+
+`scs_model_bipolar_current.dat` was written by Workbench on Windows:
+`file` reports *ASCII text, with CRLF line terminators*, and `cat -A` shows
+`solve^M$`. So a sed expression like
+
+```sed
+0,/^solve$/s//eqslv,pcg,1e-8\nsolve/     # never matches: the line is "solve\r"
+```
+
+does nothing, while the **unanchored** substitutions in the same command
+(`s/^MP,RSVX,1,2\.5e-13,/.../`, `s|^/fclean|...|`) succeed normally. The patch
+therefore *looks* like it worked. A run was launched, sat on a compute node
+using the wrong solver, and would have burned the whole allocation before the
+mistake surfaced.
+
+Two habits that catch this:
+
+1. Strip CR as the first expression in the stream: `sed -e 's/\r$//' -e ...`
+   (MAPDL is perfectly happy with LF-only input on Linux).
+2. **Verify every edit and abort if one is missing.** The job script now greps
+   for each expected result and `exit 1`s if any is absent, rather than
+   proceeding with a half-patched deck.
+
 ## Account limits on Pioneer (this bit us twice)
 
 `sacctmgr show assoc account=tlv` → **`GrpTRES cpu=24,gres/gpu=1`**. The whole
