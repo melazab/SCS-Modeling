@@ -1,0 +1,8 @@
+# FreeCAD "exploded" document scratch directory (same name as a tracked .FCStd) —
+# mesh-kernel cache, thumbnails, and appearance cache, regenerable on next open.
+NBF_RADO-SCS/
+*.FCBak
+
+# Kept locally for Claude Code / HPC operational notes, deliberately not published
+# (repo is public; CLAUDE.md was stripped from history — see git-filter-repo run)
+CLAUDE.md
