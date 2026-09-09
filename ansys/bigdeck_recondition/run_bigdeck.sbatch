@@ -58,8 +58,15 @@ free -g | head -2
 # ---------------------------------------------------------------- patch deck
 # The deck is lowercase throughout except the MP lines, and is 4.5 GB, so this
 # is a single streaming pass. NEVER cat this file.
+#
+# GOTCHA: the deck was written by Workbench on Windows and has CRLF line
+# terminators, so every line is really "solve\r". An end-anchored regex like
+# /^solve$/ therefore never matches, and the injection silently does nothing --
+# while the unanchored MP/fclean substitutions still work, which makes the patch
+# look successful. Strip the CR first (MAPDL is happy with LF on Linux).
 patch_deck () {   # $1 = solver block to inject before the first bare `solve`
-  sed -e 's/^MP,RSVX,1,2\.5e-13,/MP,RSVX,1,1.0e-08,/' \
+  sed -e 's/\r$//' \
+      -e 's/^MP,RSVX,1,2\.5e-13,/MP,RSVX,1,1.0e-08,/' \
       -e 's/^MP,RSVX,5,0\.05,/MP,RSVX,5,1.0e-03,/' \
       -e 's|^/fclean|!/fclean  ! disabled: keep the .rst|' \
       -e "0,/^solve$/s//$1\nsolve/" \
@@ -124,10 +131,23 @@ run_mapdl () {    # $1 = tag
 # matrix is cheap to store for SOLID232.
 echo "--- patching deck for PCG ---"
 time patch_deck 'eqslv,pcg,1e-8'
+
+# Verify every edit actually landed, and abort if not. A silently-missed
+# injection wastes the whole allocation running the wrong configuration.
 echo "--- verify patch ---"
 grep -nE "^MP,RSVX,(1|5)," "$WORK/scs_model.dat" | head
-grep -n "^eqslv,pcg" "$WORK/scs_model.dat" | head -2
-grep -c "^!/fclean" "$WORK/scs_model.dat"
+ok=1
+grep -q "^MP,RSVX,1,1\.0e-08," "$WORK/scs_model.dat" || { echo "FAIL: metal not reconditioned"; ok=0; }
+grep -q "^MP,RSVX,5,1\.0e-03," "$WORK/scs_model.dat" || { echo "FAIL: insulation not reconditioned"; ok=0; }
+grep -q "^eqslv,pcg,1e-8"      "$WORK/scs_model.dat" || { echo "FAIL: PCG directive not injected"; ok=0; }
+grep -q "^!/fclean"            "$WORK/scs_model.dat" || { echo "FAIL: /fclean not disabled"; ok=0; }
+if [ "$ok" -ne 1 ]; then
+  echo "=== aborting: deck patch incomplete ==="
+  grep -n "^solve" "$WORK/scs_model.dat" | head -3
+  exit 1
+fi
+echo "patch verified: materials reconditioned, PCG injected, /fclean disabled"
+grep -n -B2 -A1 "^eqslv,pcg" "$WORK/scs_model.dat" | head
 
 run_mapdl pcg
 if [ -f "$WORK/bigdeck_slice.csv" ] && [ -s "$WORK/bigdeck_slice.csv" ]; then
