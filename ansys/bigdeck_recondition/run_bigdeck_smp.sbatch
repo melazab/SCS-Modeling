@@ -38,8 +38,6 @@ free -g | head -2
 
 echo "--- patching deck ---"
 time sed -e 's/\r$//' \
-    -e 's/^MP,RSVX,1,2\.5e-13,/MP,RSVX,1,1.0e-08,/' \
-    -e 's/^MP,RSVX,5,0\.05,/MP,RSVX,5,1.0e-03,/' \
     -e 's|^/fclean|!/fclean  ! disabled: keep the .rst|' \
     "$SRC" > "$WORK/scs_model.dat"
 

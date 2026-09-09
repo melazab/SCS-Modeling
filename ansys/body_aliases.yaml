@@ -1,0 +1,453 @@
+# Human-readable Label rules for the NBF_RADO-SCS FreeCAD document (245 bodies).
+#
+# Purpose: Khadka's STL filenames are the provenance link to the published model
+# and are referenced by the Ansys .wbpj / .mechdb / .pmdb files and the 4.5 GB
+# MAPDL deck, so they must NOT be renamed. A FreeCAD object carries two strings:
+#   Name  -- immutable, auto-derived from the filename, what everything keys on
+#   Label -- free text, what the model tree shows, nothing depends on it
+# This file drives ansys/apply_labels.py, which sets Label only. Nothing here can
+# break the Ansys chain; delete the labels and the model is unchanged.
+#
+# ---------------------------------------------------------------------------
+# MATCHING
+# ---------------------------------------------------------------------------
+# `pattern` is a Python regex applied with re.match() to the STL filename stem
+# with the common "T8-10 - " prefix stripped (every RADO body has it; the five
+# newer "SCS Lead ..." bodies do not, and are matched whole). First rule that
+# matches wins, top to bottom -- same convention as tissue_map.yaml.
+#
+# `label` is a template. Placeholders:
+#   {1} {2} ...  regex capture groups, verbatim from the filename
+#   {side}       L or R, from `side` or `side_map` (GEOMETRY-derived, see below)
+#   {level}      1..4, from `level` or `level_map` (GEOMETRY-derived, see below)
+# `side_map` / `level_map` are keyed on capture group 1 (the source index) and
+# written as a flat "key:value, key:value" string so the tiny YAML reader in
+# apply_labels.py stays tiny. PyYAML is not installed here.
+#
+# ---------------------------------------------------------------------------
+# LATERALITY: WHY THE FILENAME TAGS ARE IGNORED
+# ---------------------------------------------------------------------------
+# Every L/R in this file comes from the STL geometry, not from the filename.
+# ansys/check_laterality.py re-derives it and validates this file against it.
+#
+# The anatomical frame was established two independent ways, which agree:
+#   1. Frame construction. +Z is rostral (the T9/10 disc sits at z=153, the
+#      T12/L1 disc at z=66). -Y is anterior (the descending aorta is at y=32,
+#      the vertebral bodies at y=47..78, the cord at y=76). In a right-handed
+#      Cartesian frame anatomical Right = Anterior x Superior = (-y) x (+z) =
+#      -x. So +X is anatomical LEFT.
+#   2. Aorta anchor. The descending thoracic aorta lies left of midline.
+#      Thoracic_aorta-1 has centroid x = 67.2, i.e. +10.6 mm. Same conclusion.
+# Midline is x = 56.60 mm: the median centroid-x of the 14 unambiguously midline
+# bodies (cord, CSF, meninges, epidural space, the 3 vertebrae, the 4 discs);
+# they span only 56.27..56.91, and the white-matter bounding box is centred on
+# 56.40, so the midline is good to about +/-0.2 mm.
+#
+# What the tags actually say, checked body by body against that midline:
+#   AprilRootMainRootL-*        centroid x-18 -> on the RIGHT.  tag INVERTED (12)
+#   AprilRootMainRootR-*        centroid x+18 -> on the LEFT.   tag INVERTED (8)
+#   AprilRootBranchRootL-*      centroid x-14 -> on the RIGHT.  tag INVERTED (12)
+#   AprilRootBranchRootR-*      centroid x+15 -> on the LEFT.   tag INVERTED (12)
+#   AprilRootDGR_right-*        centroid x+15 -> on the LEFT.   tag INVERTED (8)
+#   connection_R-*              centroid x+35 -> on the LEFT.   tag INVERTED (4)
+#   AprilRootDGR-* (_r files)   centroid x-15 -> on the RIGHT.  tag CORRECT  (12)
+#   AprilDorsalRootsBloodParallel_L/R  x+21 / x-19.  tag CORRECT (8)
+# So 56 of the 76 tagged bodies are wrong. The inversion is not uniform, which
+# is the trap: a blanket "swap L and R" would corrupt the 20 correct ones.
+# Worse, AprilRootDGR_right-N contradicts itself -- the assembly says _right but
+# its csf_coating part says _l, and the geometry agrees with the part, not the
+# assembly.
+#
+# ---------------------------------------------------------------------------
+# LEVEL NUMBERING: WHY IT IS NOT THE SOURCE INDEX
+# ---------------------------------------------------------------------------
+# {level} is 1..4 counted ROSTRAL to CAUDAL, one per neuroforamen, assigned from
+# the body's centroid Z rank within its family and side. It is NOT the number in
+# the filename, because those numbers do not agree between families:
+#   source index 1 is level 2 for AprilRootDGR, level 2 for AprilRootMainRootL,
+#   level 2 for AprilRootBranchRootL, but level 4 for AprilRootBranchRootR and
+#   level 1 for connection_R.
+# Labelling with the raw index would put "DRG R1" and "Root branch R1" at
+# different spinal levels, which is exactly the confusion this file exists to
+# remove. The level bands are set by the disc centroids (z = 153, 124, 95, 66),
+# and every 4-per-side family lands one body in each band, so the numbering is
+# geometric fact, not interpretation. The source index is still in the object's
+# Name, which is never touched.
+#
+# ---------------------------------------------------------------------------
+# STRUCTURAL ASYMMETRIES PRESERVED IN THE LABELS (not errors, real gaps)
+# ---------------------------------------------------------------------------
+#   - DRG R has 3 shells (core / CSF / meningeal), DRG L has only 2 (no
+#     meningeal coating).
+#   - Dorsal root R has 3 layers, dorsal root L only 2 (no meningeal sheath).
+#   - Root branch source indices on the right are 1,3,4,5 (no 2); on the left
+#     1,2,3,4. Both still cover all four levels.
+#   - Radicular vessels: 4 per side, but the right ones (connection-6..9) have
+#     volume 282 mm^3 and reach across the midline to x=62, the left ones
+#     (connection_R-1..4) have volume 189 mm^3 and stay lateral of x=77.
+#   - Rootlet bundles: no Assem1SmallRoot-9; 12 bundles, 6 per side.
+#   - The three vertebrae are the SAME mesh instanced three times (identical
+#     volume 35242.2 mm^3), so their "levels" are placement, not distinct
+#     anatomy.
+#
+# ---------------------------------------------------------------------------
+# OPEN QUESTIONS FOR REVIEW (labels here are the best reading, not settled)
+# ---------------------------------------------------------------------------
+#   - Vertebra levels. The disc names (T_disk_9_10x .. T_disk_12_Lx) plus the
+#     Z ordering put the three vertebrae at T10, T11, T12 -- which contradicts
+#     the "T8-10" filename prefix used on every body. The disc names and the
+#     geometry agree with each other, so they win here, but confirm it.
+#   - The "Middle" layer of the roots. tissue_map.yaml already flags that it may
+#     be CSF rather than nerve. Its centroid also sits 8-9 mm MEDIAL of the
+#     "Inside" layer it supposedly wraps, so the two are not concentric. Labelled
+#     neutrally as "middle layer" until that is settled.
+#   - neuro_sympathetic_c and _d are two short branches per ganglion, plausibly
+#     the white and grey rami communicantes, but nothing in the geometry says
+#     which is which, so the source letter is kept in the label.
+#   - Per Mohamed: connection* bodies are radicular vessels running to the
+#     thoracic aorta (neural/vascular tissue, NOT hardware), and the old
+#     neuro_dorsal _roots_DRG_leads-1..4 / isolator-1 were the electrode and
+#     insulator. Those two legacy families are NOT in this STL export (the newer
+#     "SCS Lead ..." bodies replaced them); their rules are kept below so an
+#     older document still labels cleanly, and apply_labels.py reports rules
+#     that match nothing.
+
+rules:
+
+  # -- Hardware ------------------------------------------------------------
+  # WORTH KNOWING: this lead is not on the dorsal midline. The four contacts sit
+  # 11.2, 15.7, 20.3 and 25.4 mm LEFT of midline at z=93..97, i.e. out over the
+  # left DRG column, which is consistent with the legacy body name it replaced
+  # (neuro_dorsal _roots_DRG_leads). It is a DRG lead placement, not a dorsal
+  # column one. The labels stay side-neutral because the four contacts are one
+  # array; the placement is called out here instead.
+  - name: scs_contact
+    pattern: '^SCS Lead Electrode (\d+)$'
+    label: "SCS lead contact {1}"
+    note: "Source index kept: the contacts are not in spatial order (by x they run 3, 1, 2, 4)."
+
+  - name: scs_insulator
+    pattern: '^SCS Lead Insulator$'
+    label: "SCS lead insulator"
+
+  # Legacy hardware geometry, replaced by the two rules above. Absent from this
+  # STL export; kept so an older NBF_RADO-SCS document still labels cleanly.
+  - name: scs_contact_legacy
+    pattern: '^neuro_dorsal _roots_DRG_leads-(\d+)$'
+    label: "SCS lead contact {1} (legacy geometry)"
+
+  - name: scs_insulator_legacy
+    pattern: '^isolator-1$'
+    label: "SCS lead insulator (legacy geometry)"
+
+  # -- Dorsal root ganglia --------------------------------------------------
+  # Source "DGR" is a typo for DRG. AprilRootDGR-* is the RIGHT side (its _r
+  # part tags happen to be correct); AprilRootDGR_right-* is the LEFT side
+  # (its _right assembly tag is wrong, its _l part tag is right).
+  - name: drg_right_csf
+    pattern: '^AprilRootDGR-(\d+) neuro_dorsal _roots_football_csf_coating_r-\d+$'
+    label: "DRG R{level} — CSF coating"
+    side: R
+    level_map: "1:2, 2:4, 3:3, 4:1"
+
+  - name: drg_right_core
+    pattern: '^AprilRootDGR-(\d+) neuro_dorsal _roots_football_in_middle-\d+$'
+    label: "DRG R{level} — ganglion core"
+    side: R
+    level_map: "1:2, 2:4, 3:3, 4:1"
+
+  - name: drg_right_meninges
+    pattern: '^AprilRootDGR-(\d+) neuro_dorsal _roots_football_menging_coating_r-\d+$'
+    label: "DRG R{level} — meningeal coating"
+    side: R
+    level_map: "1:2, 2:4, 3:3, 4:1"
+
+  - name: drg_left_csf
+    pattern: '^AprilRootDGR_right-(\d+) neuro_dorsal _roots_football_csf_coating_l-\d+$'
+    label: "DRG L{level} — CSF coating"
+    side: L
+    level_map: "1:2, 2:4, 3:3, 4:1"
+
+  - name: drg_left_core
+    pattern: '^AprilRootDGR_right-(\d+) neuro_dorsal _roots_football_in_middle_R-\d+$'
+    label: "DRG L{level} — ganglion core"
+    side: L
+    level_map: "1:2, 2:4, 3:3, 4:1"
+    note: "No meningeal coating exists on this side; the DRG L shells stop at two."
+
+  # -- Main dorsal roots ----------------------------------------------------
+  # AprilRootMainRootL is on the RIGHT and AprilRootMainRootR on the LEFT.
+  - name: mainroot_right_inner
+    pattern: '^AprilRootMainRootL-(\d+) AprilDorsalRootsInsideL-\d+$'
+    label: "Dorsal root R{level} — inner core"
+    side: R
+    level_map: "1:2, 2:1, 3:4, 4:3"
+
+  - name: mainroot_right_middle
+    pattern: '^AprilRootMainRootL-(\d+) AprilDorsalRootsMiddleL-\d+$'
+    label: "Dorsal root R{level} — middle layer"
+    side: R
+    level_map: "1:2, 2:1, 3:4, 4:3"
+
+  - name: mainroot_right_meninges
+    pattern: '^AprilRootMainRootL-(\d+) AprilDorsalRootsOutsideMengingesL-\d+$'
+    label: "Dorsal root R{level} — meningeal sheath"
+    side: R
+    level_map: "1:2, 2:1, 3:4, 4:3"
+
+  - name: mainroot_left_inner
+    pattern: '^AprilRootMainRootR-(\d+) AprilDorsalRootsInsideR-\d+$'
+    label: "Dorsal root L{level} — inner core"
+    side: L
+    level_map: "1:2, 2:4, 3:3, 4:1"
+
+  - name: mainroot_left_middle
+    pattern: '^AprilRootMainRootR-(\d+) AprilDorsalRootsMiddleR-\d+$'
+    label: "Dorsal root L{level} — middle layer"
+    side: L
+    level_map: "1:2, 2:4, 3:3, 4:1"
+    note: "No OutsideMenginges body on this side; the left roots stop at two layers."
+
+  # -- Root branches --------------------------------------------------------
+  # AprilRootBranchRootL is on the RIGHT and AprilRootBranchRootR on the LEFT.
+  # Right-side source indices are 1,3,4,5 (2 is missing) but still cover L1..L4.
+  - name: branch_right_inner
+    pattern: '^AprilRootBranchRootL-(\d+) AprilDorsolBranchInsideL-\d+$'
+    label: "Root branch R{level} — inner core"
+    side: R
+    level_map: "1:2, 3:4, 4:3, 5:1"
+
+  - name: branch_right_middle
+    pattern: '^AprilRootBranchRootL-(\d+) AprilDorsolBranchMiddleL-\d+$'
+    label: "Root branch R{level} — middle layer"
+    side: R
+    level_map: "1:2, 3:4, 4:3, 5:1"
+
+  - name: branch_right_meninges
+    pattern: '^AprilRootBranchRootL-(\d+) AprilDorsolBranchOutsidMengingL-\d+$'
+    label: "Root branch R{level} — meningeal sheath"
+    side: R
+    level_map: "1:2, 3:4, 4:3, 5:1"
+
+  - name: branch_left_inner
+    pattern: '^AprilRootBranchRootR-(\d+) AprilDorsolBranchInsideR-\d+$'
+    label: "Root branch L{level} — inner core"
+    side: L
+    level_map: "1:4, 2:3, 3:2, 4:1"
+
+  - name: branch_left_middle
+    pattern: '^AprilRootBranchRootR-(\d+) AprilDorsolBranchMiddleR-\d+$'
+    label: "Root branch L{level} — middle layer"
+    side: L
+    level_map: "1:4, 2:3, 3:2, 4:1"
+
+  - name: branch_left_meninges
+    pattern: '^AprilRootBranchRootR-(\d+) AprilDorsolBranchOutsidMengingR-\d+$'
+    label: "Root branch L{level} — meningeal sheath"
+    side: L
+    level_map: "1:4, 2:3, 3:2, 4:1"
+
+  # -- Rootlets -------------------------------------------------------------
+  # 12 bundles of 7 filaments, 6 per side. There is no Assem1SmallRoot-9. Two
+  # bundles sit at each of three Z bands per side, so {level} here is a per-side
+  # rostro-caudal sequence 1..6, not a foraminal level. These bodies sit only
+  # 2.4-4.1 mm off the midline -- the smallest lateral margin in the model, but
+  # still 12x the +/-0.2 mm midline uncertainty.
+  - name: rootlet_filament0
+    pattern: '^Assem1SmallRoot-(\d+) smallRoot-\d+$'
+    label: "Rootlet bundle {side}{level} — filament 0"
+    side_map: "1:R, 2:R, 3:R, 4:R, 5:R, 6:R, 7:L, 8:L, 10:L, 11:L, 12:L, 13:L"
+    level_map: "6:1, 5:2, 4:3, 3:4, 2:5, 1:6, 11:1, 10:2, 7:3, 12:4, 8:5, 13:6"
+
+  - name: rootlet_filament_n
+    pattern: '^Assem1SmallRoot-(\d+) smallRoot(\d+)-\d+$'
+    label: "Rootlet bundle {side}{level} — filament {2}"
+    side_map: "1:R, 2:R, 3:R, 4:R, 5:R, 6:R, 7:L, 8:L, 10:L, 11:L, 12:L, 13:L"
+    level_map: "6:1, 5:2, 4:3, 3:4, 2:5, 1:6, 11:1, 10:2, 7:3, 12:4, 8:5, 13:6"
+
+  # Seven loose rootlet filaments at z=158..162, rostral to every assembled
+  # bundle, never wrapped in an Assem1SmallRoot container. Called bundle 0.
+  - name: rootlet_loose_a
+    pattern: '^smallRoot-(\d+)$'
+    label: "Rootlet bundle {side}0 — filament a{1}"
+    side_map: "1:L, 2:R, 4:L"
+    level: "0"
+
+  - name: rootlet_loose_b
+    pattern: '^smallRoot6-(\d+)$'
+    label: "Rootlet bundle {side}0 — filament b{1}"
+    side_map: "1:L, 2:R, 3:R, 4:L"
+    level: "0"
+
+  # -- Meningeal root sleeves ----------------------------------------------
+  - name: meningeal_sleeve
+    pattern: '^additional_menginges-(\d+)$'
+    label: "Meningeal sleeve {side}{level}"
+    side_map: "2:L, 3:L, 4:L, 5:L, 6:R, 7:R, 8:R, 9:R"
+    level_map: "2:2, 3:4, 4:1, 5:3, 6:3, 7:4, 8:1, 9:2"
+    note: "Numbering starts at 2; there is no additional_menginges-1."
+
+  # -- Spinal cord and its envelopes ---------------------------------------
+  - name: cord_white
+    pattern: '^neuro_whitemater-\d+$'
+    label: "Spinal cord — white matter"
+
+  - name: cord_grey
+    pattern: '^neuro_GreyMater-\d+$'
+    label: "Spinal cord — grey matter"
+
+  - name: csf
+    pattern: '^neuro_CSF-\d+$'
+    label: "CSF"
+
+  - name: meninges
+    pattern: '^neuro_Meninges-\d+$'
+    label: "Spinal meninges (dura)"
+
+  - name: epidural_space
+    pattern: '^neuro_EpiduralSpace-\d+$'
+    label: "Epidural space"
+
+  # -- Vasculature ----------------------------------------------------------
+  - name: aorta
+    pattern: '^Thoracic_aorta-\d+$'
+    label: "Thoracic aorta"
+
+  # Three bilateral pairs of segmental vessels off the aorta, one pair per level
+  # 2, 3 and 4 (nothing at level 1). The source index does NOT encode side
+  # consistently: newBloodAorta-1 is left, but newBloodAortaLonger-1 and
+  # newBloodAortaLongest-1 are right.
+  - name: aortic_branch_upper
+    pattern: '^newBloodAorta-(\d+)$'
+    label: "Aortic branch {side}{level}"
+    side_map: "1:L, 2:R"
+    level: "2"
+
+  - name: aortic_branch_mid
+    pattern: '^newBloodAortaLonger-(\d+)$'
+    label: "Aortic branch {side}{level}"
+    side_map: "1:R, 2:L"
+    level: "3"
+
+  - name: aortic_branch_lower
+    pattern: '^newBloodAortaLongest-(\d+)$'
+    label: "Aortic branch {side}{level}"
+    side_map: "1:R, 2:L"
+    level: "4"
+
+  # Radicular vessels to the aorta (Mohamed: neural/vascular tissue, not
+  # hardware, despite the name "connection"). connection_R-* is the LEFT set.
+  - name: radicular_vessel_left
+    pattern: '^connection_R-(\d+)$'
+    label: "Radicular vessel L{level}"
+    side: L
+    level_map: "1:1, 2:4, 3:2, 4:3"
+
+  - name: radicular_vessel_right
+    pattern: '^connection-(\d+)$'
+    label: "Radicular vessel R{level}"
+    side: R
+    level_map: "6:1, 7:2, 8:3, 9:4"
+    note: "Indices run 6..9; there is no connection-5, and the right set carries no L tag."
+
+  # Vessels running alongside the dorsal roots. These are the one tagged family
+  # whose L/R matches the geometry.
+  - name: root_vessel_left
+    pattern: '^AprilDorsalRootsBloodParallel_L-(\d+)$'
+    label: "Root vessel L{level}"
+    side: L
+    level_map: "1:2, 2:3, 3:4, 4:1"
+
+  - name: root_vessel_right
+    pattern: '^AprilDorsalRootsBloodParallel_R-(\d+)$'
+    label: "Root vessel R{level}"
+    side: R
+    level_map: "1:2, 2:4, 3:1, 4:3"
+
+  # Midline bodies: centroids sit 0.2-0.9 mm off the midline and their bounding
+  # boxes straddle it, so no side is asserted.
+  - name: epidural_fat_vessel
+    pattern: '^April4Blood_in_Fat_bri-(\d+)$'
+    label: "Epidural fat vessel {level} (midline)"
+    level_map: "1:1, 2:4, 3:3, 4:2"
+
+  - name: perimedullary_arch
+    pattern: '^neuro_0A_blood_bri_a-(\d+)$'
+    label: "Perimedullary arterial arch {level} (midline)"
+    level_map: "1:1, 2:2, 3:3, 4:4"
+
+  - name: epidural_fat_vasculature
+    pattern: '^neuro_blood_in_fat-\d+$'
+    label: "Epidural fat vasculature"
+
+  - name: perimedullary_vessel
+    pattern: '^neuro_blood_next_to_WM-\d+$'
+    label: "Perimedullary vessel (next to white matter)"
+
+  # -- Sympathetic chain ----------------------------------------------------
+  # Source indices 1-4 are the right chain and 5-8 the left, consistently across
+  # all four families -- but the Z order inside each run is not consistent
+  # (_d-1 and _d-2 are swapped relative to _a, _c and _ball), hence per-family
+  # level maps.
+  - name: sympathetic_trunk
+    pattern: '^neuro_sympathetic_a-(\d+)$'
+    label: "Sympathetic trunk {side}{level} — interganglionic segment"
+    side_map: "1:R, 2:R, 3:R, 4:R, 5:L, 6:L, 7:L, 8:L"
+    level_map: "1:1, 2:2, 3:3, 4:4, 5:4, 6:3, 7:2, 8:1"
+
+  - name: sympathetic_ganglion
+    pattern: '^neuro_sympathetic_ball-(\d+)$'
+    label: "Sympathetic ganglion {side}{level}"
+    side_map: "1:R, 2:R, 3:R, 4:R, 5:L, 6:L, 7:L, 8:L"
+    level_map: "1:1, 2:2, 3:3, 4:4, 5:4, 6:3, 7:2, 8:1"
+
+  - name: sympathetic_branch_c
+    pattern: '^neuro_sympathetic_c-(\d+)$'
+    label: "Sympathetic branch {side}{level} — c"
+    side_map: "1:R, 2:R, 3:R, 4:R, 5:L, 6:L, 7:L, 8:L"
+    level_map: "1:1, 2:2, 3:3, 4:4, 5:4, 6:3, 7:2, 8:1"
+
+  - name: sympathetic_branch_d
+    pattern: '^neuro_sympathetic_d-(\d+)$'
+    label: "Sympathetic branch {side}{level} — d"
+    side_map: "1:R, 2:R, 3:R, 4:R, 5:L, 6:L, 7:L, 8:L"
+    level_map: "1:2, 2:1, 3:3, 4:4, 5:4, 6:3, 7:2, 8:1"
+
+  # -- Bone and disc --------------------------------------------------------
+  # Level names come from the disc filenames, which the Z ordering confirms:
+  # T9/10 disc at z=153, then a vertebra, T10/11 at z=124, and so on down to the
+  # T12/L1 disc at z=66. Note this disagrees with the "T8-10" filename prefix.
+  - name: disc_t9_t10
+    pattern: '^T_disk_9_10x-\d+$'
+    label: "Disc T9-T10"
+
+  - name: disc_t10_t11
+    pattern: '^T_disk_10_11x-\d+$'
+    label: "Disc T10-T11"
+
+  - name: disc_t11_t12
+    pattern: '^T_disk_11_12x-\d+$'
+    label: "Disc T11-T12"
+
+  - name: disc_t12_l1
+    pattern: '^T_disk_12_Lx-\d+$'
+    label: "Disc T12-L1"
+
+  # V1-4 (z=137) sits between the T9/10 and T10/11 discs, V1-3 (z=107) between
+  # T10/11 and T11/12, V1-2 (z=76) between T11/12 and T12/L1, so they are T10,
+  # T11 and T12. The source index runs the other way, which is why these are
+  # three explicit rules rather than one with a map.
+  - name: vertebra_t10
+    pattern: '^V1-4$'
+    label: "Vertebra T10"
+
+  - name: vertebra_t11
+    pattern: '^V1-3$'
+    label: "Vertebra T11"
+
+  - name: vertebra_t12
+    pattern: '^V1-2$'
+    label: "Vertebra T12"
+
+# Anything not matched above is reported, never silently left alone.
+unmatched_policy: error

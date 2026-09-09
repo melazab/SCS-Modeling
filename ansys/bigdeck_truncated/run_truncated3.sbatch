@@ -27,9 +27,9 @@
 #   * re-inject +/-1 mA DISTRIBUTED over each contact's nodes
 #
 # Distributing the current is what makes dropping the CEs acceptable: the metal
-# is 1e-2 ohm*m against 0.588 ohm*m for CSF, ~60x more conductive, so each
-# contact is very nearly equipotential on its own merits rather than by
-# constraint. Loads (unlike constraints) are allowed on CP-dependent DOFs --
+# is 2.5e-7 ohm*m against 0.588 ohm*m for CSF -- over 2 million times more
+# conductive -- so each contact is equipotential on its own merits rather than
+# by constraint. Loads (unlike constraints) are allowed on CP-dependent DOFs --
 # MAPDL sums them onto the primary node.
 #
 # Contacts are identified by material (MAT 1 = Metal Electrode) intersected with
@@ -145,15 +145,13 @@ INJECT_SED=$(printf '%s' "$INJECT" | sed ':a;N;$!ba;s/\n/\\n/g')
 
 echo "--- patching deck ---"
 time sed -e 's/\r$//' \
-    -e 's/^MP,RSVX,1,2\.5e-13,/MP,RSVX,1,1.0e-08,/' \
-    -e 's/^MP,RSVX,5,0\.05,/MP,RSVX,5,1.0e-03,/' \
     -e 's|^/fclean|!/fclean  ! disabled|' \
     -e "0,/^solve\$/s||${INJECT_SED}\nsolve|" \
     "$SRC" > "$WORK/scs_model.dat"
 
 echo "--- verify patch ---"
 ok=1
-for pat in "^MP,RSVX,1,1\.0e-08," "^MP,RSVX,5,1\.0e-03," "^cedele,all" "^fdele,all,amps" \
+for pat in "^cedele,all" "^fdele,all,amps" \
            "^cpintf,volt,cptol" "^f,all,amps,1\.0e9" "^eqslv,pcg,1e-8"; do
   grep -q "$pat" "$WORK/scs_model.dat" || { echo "FAIL: $pat"; ok=0; }
 done
