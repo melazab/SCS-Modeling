@@ -1,0 +1,18 @@
+SCS lead: dorsal, 8 contacts x 3.00 mm, 1.00 mm gaps, 1.30 mm dia
+swept along the measured dorsal centreline; x = 56.60, z 88.93..131.93 (centre 110.43)
+channel thickness there: min 2.27 mm, median 2.31 mm
+
+centreline y: 79.82 at the caudal end -> 87.48 at the rostral end (7.66 mm rise, 10.1 deg)
+
+wrote 9 files to /home/mohamed/Projects/SCS-Modeling/ansys/generated_leads/dorsal_z110_8c
+   SCS Lead Electrode 1.stl       z0   94.93  len   3.00  y  81.27
+   SCS Lead Electrode 2.stl       z0   98.93  len   3.00  y  82.17
+   SCS Lead Electrode 3.stl       z0  102.93  len   3.00  y  83.02
+   SCS Lead Electrode 4.stl       z0  106.93  len   3.00  y  83.82
+   SCS Lead Electrode 5.stl       z0  110.93  len   3.00  y  84.56
+   SCS Lead Electrode 6.stl       z0  114.93  len   3.00  y  85.24
+   SCS Lead Electrode 7.stl       z0  118.93  len   3.00  y  85.86
+   SCS Lead Electrode 8.stl       z0  122.93  len   3.00  y  86.43
+   SCS Lead Insulator.stl         z0   88.93  len  43.00  y  79.82
+
+contact centres (z, y): (96.4, 81.62), (100.4, 82.50), (104.4, 83.33), (108.4, 84.10), (112.4, 84.82), (116.4, 85.48), (120.4, 86.08), (124.4, 86.62)

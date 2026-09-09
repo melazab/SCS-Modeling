@@ -1,57 +1,52 @@
-#!/usr/bin/env python3
-"""Generate a parametric percutaneous SCS lead as STL bodies.
+"""Generate a parametric percutaneous SCS lead that follows the epidural canal.
 
 Why this exists
 ---------------
-The lead that ships with RADO is not the one we want to study. Measured from the
-geometry (ansys/check_laterality.py), it sits 11-25 mm LEFT of midline at
-z = 93-97 mm, draped over the left DRG column -- a DRG lead, not a dorsal-column
-lead -- and it has only 4 contacts on a curved insulator. Khadka et al. Figure 1
-shows the clinical arrangement instead: a straight percutaneous lead with 8
-cylindrical contacts, placed in the posterior epidural space at midline.
+The lead RADO ships is not the one we want to study. Measured from the geometry
+(ansys/check_laterality.py) it sits 11-25 mm LEFT of midline at z = 93-97,
+draped over the left DRG column -- a DRG lead -- on a curved insulator with only
+4 contacts. Khadka et al. Figure 1 shows the clinical arrangement instead: a
+percutaneous lead with 8 cylindrical contacts in the epidural space at midline.
 
-This builds that lead, parametrically, so it can be dropped in at any
-rostro-caudal level and on either the dorsal or the ventral side -- which is
-exactly the sweep the dorsal-vs-ventral study needs.
+This builds that lead at any rostro-caudal level, on either the dorsal or the
+ventral side, which is the sweep the dorsal-vs-ventral study needs.
 
-Anatomical frame (derived from the geometry, NOT from Khadka's filename tags,
-which are inverted for most bodies -- see ansys/check_laterality.py):
+Following the canal matters
+---------------------------
+The T8-T10 spine here is kyphotic, so the epidural space migrates posteriorly
+with height: at midline the dorsal channel centre runs y ~= 81.3 at z = 95 to
+y ~= 88.4 at z = 145, about 7 mm over the length of an 8-contact lead. A
+straight lead at fixed y would walk out of the space and through the dura. So
+the lead is swept along the measured centreline y(z) from
+ansys/epidural_corridor.json (produced by ansys/measure_corridor.py, which ray
+casts the epidural mesh; cubic fit, 0.018 mm RMS over 98 mm).
 
-    +X  anatomical LEFT      midline at x = 56.60 mm
-    +Y  posterior / DORSAL   (-Y is anterior/ventral)
-    +Z  rostral
+Measured channel thickness at midline: dorsal 2.27-2.35 mm, ventral 1.67-1.74
+mm. A 1.3 mm clinical lead fits either side; the script warns if the requested
+diameter does not.
 
-Measured corridors at midline (from the RADO STLs):
+Frame (ansys/check_laterality.py): +X anatomical LEFT, midline x = 56.60 mm;
++Y posterior/DORSAL; +Z rostral. Millimetres throughout.
 
-    dural sac (meninges)      y = 59.0 .. 87.6
-    epidural space            y = 57.2 .. 89.9
-    => dorsal epidural gap    y = 87.6 .. 89.9   (2.3 mm)
-    => ventral epidural gap   y = 57.2 .. 59.0   (1.8 mm)
-    usable rostro-caudal span z = 59.4 .. 164.9  (105.5 mm)
+Construction: the lead is split along its length into alternating insulator and
+contact segments, each a cylinder placed along the local tangent of the
+centreline, so neighbours share a flat interface and never overlap -- which is
+what the mesher and bonded electric contact want, and matches how RADO models
+its own contacts (short full-diameter segments).
 
-The lead axis runs along Z. The body is split along its length into alternating
-insulator and contact segments, each a full-diameter cylinder, so the parts
-share flat interfaces and never overlap -- which is what the mesher and the
-bonded electric contact want. That also matches how the existing RADO contacts
-are modelled (short full-diameter segments, ~1.3 mm).
+Usage -- run headless with FreeCAD:
 
-Defaults follow a clinical percutaneous lead (8 contacts, 3 mm long, 1 mm gaps,
-1.3 mm diameter). Everything is overridable.
-
-Usage (needs FreeCAD; run headless):
-
-    freecadcmd ansys/make_scs_lead.py            # dorsal, centred, default 8 contacts
+    freecadcmd ansys/make_scs_lead.py
     MAKE_LEAD_ARGS="--side ventral --z-center 110" freecadcmd ansys/make_scs_lead.py
-    MAKE_LEAD_ARGS="--help" freecadcmd ansys/make_scs_lead.py
+    MAKE_LEAD_ARGS="--contacts 8 --z-center 120 --tag sweep_z120" freecadcmd ansys/make_scs_lead.py
 
-NOTE: freecadcmd *imports* this file rather than running it as __main__, so a
-`if __name__ == "__main__"` guard would never fire -- the work is done at import
-time. It also consumes its own argv, so options come from the environment
-variable MAKE_LEAD_ARGS instead of the command line. (Both traps are documented
-in docs/ansys_hpc_training_notes.md.) Output is written to a report file because
-freecadcmd swallows stdout.
+NOTE on freecadcmd: it *imports* this file rather than running it as __main__,
+so the work happens at import time and a __main__ guard would never fire. It
+also consumes its own argv, hence MAKE_LEAD_ARGS. And it swallows stdout, so
+results are written to a report file as well.
 """
-import argparse
+import json
+import math
 import os
 import shlex
 import sys
@@ -60,114 +55,120 @@ import FreeCAD as App
 import Part
 import Mesh
 
-# Frame constants measured from the RADO STL set (mm).
+HERE = os.path.dirname(os.path.abspath(__file__))
 MIDLINE_X = 56.60
-DORSAL_GAP = (87.6, 89.9)     # dura outer .. epidural outer, at midline
-VENTRAL_GAP = (57.2, 59.0)
-Z_SPAN = (59.4, 164.9)
 
 
-def parse_args():
-    ap = argparse.ArgumentParser(prog="make_scs_lead.py", description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--contacts", type=int, default=8, help="number of contacts (default 8)")
-    ap.add_argument("--contact-length", type=float, default=3.0, help="mm (default 3.0)")
-    ap.add_argument("--gap", type=float, default=1.0, help="mm between contacts (default 1.0)")
-    ap.add_argument("--diameter", type=float, default=1.3, help="mm (default 1.3)")
-    ap.add_argument("--tail", type=float, default=6.0,
-                    help="mm of plain insulator beyond the end contacts (default 6.0)")
-    ap.add_argument("--side", choices=("dorsal", "ventral"), default="dorsal")
-    ap.add_argument("--x", type=float, default=None, help="mm; default = midline")
-    ap.add_argument("--y", type=float, default=None,
-                    help="mm; default = centre of the chosen epidural gap")
-    ap.add_argument("--z-center", type=float, default=None,
-                    help="mm; default = centre of the usable span")
-    ap.add_argument("--outdir", default=None, help="default ansys/generated_leads/<tag>")
-    ap.add_argument("--tag", default=None, help="name for this configuration")
-    return ap.parse_args(shlex.split(os.environ.get("MAKE_LEAD_ARGS", "")))
+def polyval(coef, x):
+    v = 0.0
+    for c in coef:
+        v = v * x + c
+    return v
+
+
+def opt(argv, name, cast, default):
+    return cast(argv[argv.index(name) + 1]) if name in argv else default
 
 
 def main():
-    args = parse_args()
-    here = os.path.dirname(os.path.abspath(__file__))
+    argv = shlex.split(os.environ.get("MAKE_LEAD_ARGS", ""))
+    side = opt(argv, "--side", str, "dorsal")
+    n_contacts = opt(argv, "--contacts", int, 8)
+    c_len = opt(argv, "--contact-length", float, 3.0)
+    gap = opt(argv, "--gap", float, 1.0)
+    dia = opt(argv, "--diameter", float, 1.3)
+    tail = opt(argv, "--tail", float, 6.0)
+    x = opt(argv, "--x", float, MIDLINE_X)
+    z_center = opt(argv, "--z-center", float, None)
+    tag = opt(argv, "--tag", str, None)
 
-    gap_lo, gap_hi = DORSAL_GAP if args.side == "dorsal" else VENTRAL_GAP
-    x = MIDLINE_X if args.x is None else args.x
-    y = 0.5 * (gap_lo + gap_hi) if args.y is None else args.y
-    zc = 0.5 * (Z_SPAN[0] + Z_SPAN[1]) if args.z_center is None else args.z_center
+    corridor_path = os.path.join(HERE, "epidural_corridor.json")
+    corridor = json.load(open(corridor_path))
+    if side not in corridor["sides"]:
+        raise SystemExit("side must be dorsal or ventral")
+    s = corridor["sides"][side]
+    coef = s["centre_poly_coef_high_to_low"]
+    z_usable = s["usable_z"]
+    if z_center is None:
+        z_center = 0.5 * (z_usable[0] + z_usable[1])
 
-    pitch = args.contact_length + args.gap
-    active = args.contacts * args.contact_length + (args.contacts - 1) * args.gap
-    total = active + 2 * args.tail
-    z0 = zc - 0.5 * total
-    r = 0.5 * args.diameter
+    pitch_total = n_contacts * c_len + (n_contacts - 1) * gap
+    total = pitch_total + 2 * tail
+    z0 = z_center - 0.5 * total
+    r = 0.5 * dia
 
-    tag = args.tag or "%s_z%.0f_%dc" % (args.side, zc, args.contacts)
-    outdir = args.outdir or os.path.join(here, "generated_leads", tag)
+    tag = tag or "%s_z%.0f_%dc" % (side, z_center, n_contacts)
+    outdir = os.path.join(HERE, "generated_leads", tag)
     if not os.path.isdir(outdir):
         os.makedirs(outdir)
 
     lines = []
-    def log(m):
-        lines.append(str(m))
+    log = lines.append
+    log("SCS lead: %s, %d contacts x %.2f mm, %.2f mm gaps, %.2f mm dia"
+        % (side, n_contacts, c_len, gap, dia))
+    log("swept along the measured %s centreline; x = %.2f, z %.2f..%.2f (centre %.2f)"
+        % (side, x, z0, z0 + total, z_center))
+    log("channel thickness there: min %.2f mm, median %.2f mm"
+        % (s["thickness_min_mm"], s["thickness_median_mm"]))
+    if dia > s["thickness_min_mm"]:
+        log("WARNING: %.2f mm lead exceeds the %.2f mm minimum channel thickness -- it "
+            "will overlap dura or the canal wall somewhere along its length."
+            % (dia, s["thickness_min_mm"]))
+    if z0 < z_usable[0] or z0 + total > z_usable[1]:
+        log("WARNING: lead spans z %.1f..%.1f but the centreline is only measured "
+            "over %.1f..%.1f; ends are extrapolated."
+            % (z0, z0 + total, z_usable[0], z_usable[1]))
 
-    log("SCS lead: %s, %d contacts, %.2f mm long, %.2f mm gaps, %.2f mm dia"
-        % (args.side, args.contacts, args.contact_length, args.gap, args.diameter))
-    log("axis at x=%.2f y=%.2f (gap %.1f..%.1f), z %.2f..%.2f (centre %.2f)"
-        % (x, y, gap_lo, gap_hi, z0, z0 + total, zc))
-    if not (gap_lo <= y - r and y + r <= gap_hi):
-        log("WARNING: a %.2f mm lead does not fit the %.2f mm %s gap -- it will "
-            "overlap dura or the epidural boundary and need a boolean, or a "
-            "smaller --diameter." % (args.diameter, gap_hi - gap_lo, args.side))
-    if z0 < Z_SPAN[0] or z0 + total > Z_SPAN[1]:
-        log("WARNING: the lead runs outside the modelled span z=%.1f..%.1f"
-            % Z_SPAN)
-
-    # Alternating segments along Z: tail, [contact, gap] x N-1, contact, tail.
-    # Each is a full-diameter cylinder so neighbours share a flat interface.
-    segments = []            # (kind, index, z_start, length)
+    segments = []
     z = z0
-    segments.append(("insulator", 0, z, args.tail)); z += args.tail
-    for i in range(args.contacts):
-        segments.append(("contact", i + 1, z, args.contact_length))
-        z += args.contact_length
-        if i < args.contacts - 1:
-            segments.append(("insulator", i + 1, z, args.gap)); z += args.gap
-    segments.append(("insulator", args.contacts, z, args.tail)); z += args.tail
+    segments.append(("insulator", 0, z, tail)); z += tail
+    for i in range(n_contacts):
+        segments.append(("contact", i + 1, z, c_len)); z += c_len
+        if i < n_contacts - 1:
+            segments.append(("insulator", i + 1, z, gap)); z += gap
+    segments.append(("insulator", n_contacts, z, tail))
 
     doc = App.newDocument("scs_lead")
     insulator_parts, written = [], []
     for kind, idx, zs, ln in segments:
-        cyl = Part.makeCylinder(r, ln, App.Vector(x, y, zs), App.Vector(0, 0, 1))
+        # place each segment along the local tangent of the centreline
+        a = App.Vector(x, polyval(coef, zs), zs)
+        b = App.Vector(x, polyval(coef, zs + ln), zs + ln)
+        d = b.sub(a)
+        cyl = Part.makeCylinder(r, d.Length, a, d.normalize())
         if kind == "contact":
-            p = os.path.join(outdir, "SCS Lead Electrode %d.stl" % idx)
             obj = doc.addObject("Part::Feature", "contact%d" % idx)
             obj.Shape = cyl
+            p = os.path.join(outdir, "SCS Lead Electrode %d.stl" % idx)
             Mesh.export([obj], p)
-            written.append((p, ln, zs))
+            written.append((os.path.basename(p), zs, ln, a.y))
         else:
             insulator_parts.append(cyl)
 
     fused = insulator_parts[0]
-    for s in insulator_parts[1:]:
-        fused = fused.fuse(s)
+    for part in insulator_parts[1:]:
+        fused = fused.fuse(part)
     ins = doc.addObject("Part::Feature", "insulator")
     ins.Shape = fused
     pi = os.path.join(outdir, "SCS Lead Insulator.stl")
     Mesh.export([ins], pi)
-    written.append((pi, total - args.contacts * args.contact_length, z0))
+    written.append((os.path.basename(pi), z0, total, polyval(coef, z0)))
 
+    tilt = math.degrees(math.atan2(polyval(coef, z0 + total) - polyval(coef, z0), total))
+    log("")
+    log("centreline y: %.2f at the caudal end -> %.2f at the rostral end (%.2f mm rise, %.1f deg)"
+        % (polyval(coef, z0), polyval(coef, z0 + total),
+           polyval(coef, z0 + total) - polyval(coef, z0), tilt))
     log("")
     log("wrote %d files to %s" % (len(written), outdir))
-    for p, ln, zs in written:
-        log("   %-34s  len %6.2f mm  z0 %7.2f  (%d bytes)"
-            % (os.path.basename(p), ln, zs, os.path.getsize(p)))
+    for name, zs, ln, y in written:
+        log("   %-30s z0 %7.2f  len %6.2f  y %6.2f" % (name, zs, ln, y))
     log("")
-    log("contact centres (z, mm): " +
-        ", ".join("%.2f" % (s[2] + 0.5 * s[3]) for s in segments if s[0] == "contact"))
+    log("contact centres (z, y): " + ", ".join(
+        "(%.1f, %.2f)" % (sz + 0.5 * sl, polyval(coef, sz + 0.5 * sl))
+        for k, _, sz, sl in segments if k == "contact"))
 
-    rep = os.path.join(outdir, "lead_report.txt")
-    open(rep, "w").write("\n".join(lines) + "\n")
+    open(os.path.join(outdir, "lead_report.txt"), "w").write("\n".join(lines) + "\n")
     sys.stdout.write("\n".join(lines) + "\n")
 
 
