@@ -378,3 +378,31 @@ model.Mesh.GenerateMesh()
 4. The 16 non-watertight STL bodies (all three vertebrae among them) — how did
    the Windows Workbench import heal them? That matters for re-meshing from
    scratch when the lead moves.
+5. **Are the root "Middle" layers nerve or CSF?** `ansys/check_tissue_map.py`
+   maps all 245 bodies with no leftovers, but the root bundles come in
+   Inside / Middle / OutsideMeninges layers, mirroring the DRG's
+   `in_middle` / `csf_coating` / `menging_coating`. If that analogy holds, the
+   `...Middle...` bodies are CSF, not nerve. They are currently Nerve Root.
+   CSF is 1.7 S/m vs nerve 0.1432 S/m — a 12× difference in tissue immediately
+   around the electrodes, so this materially changes the answer.
+
+## Account limits on Pioneer (this bit us twice)
+
+`sacctmgr show assoc account=tlv` → **`GrpTRES cpu=24,gres/gpu=1`**. The whole
+`tlv` account shares 24 CPUs. Two consequences:
+
+- **SLURM bills CPUs in proportion to memory.** Asking for 450 GB on a 2 TB /
+  384-core node (`epyc2tb`, ~6 GB/core) implies **75 CPUs**, and the job sits in
+  `AssocGrpCpuLimit` forever with `START_TIME = N/A`. Memory-per-core by
+  partition: `batch` icosa 6.4, `batch` epyc2tb 6.0, `smp` smpt08/09 28.3,
+  `smp` smpt10-12 42.0 GB/core. That ratio — not raw node size — is what decides
+  whether a big-memory job fits the cap.
+- Interactive `srun` sessions eat the same 24 CPUs, so a background `srun` will
+  block your own queued batch job. Check with
+  `squeue -A tlv -h -t RUNNING -o "%C"` before blaming the scheduler.
+- `aisc` / `aiscii` (20.9 GB/core, 2 TB nodes) are **not** open to `tlv`:
+  "Invalid account or account/partition combination specified".
+
+Use `sbatch --test-only ... --wrap="true"` to get a predicted start time before
+committing to a submission — that is how the smp-vs-batch decision was made
+(smp: 4 days out; batch: same night).
