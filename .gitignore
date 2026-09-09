@@ -40,3 +40,9 @@ NBF_RADO-SCS_ventral/
 # Python bytecode from the src/ansys/ helper scripts
 __pycache__/
 *.pyc
+
+# NEURON's virtual environment and the mechanisms nrnivmodl compiles from the
+# .mod files -- both are rebuilt by the install steps in src/neuron/README.md
+src/neuron/.venv/
+src/neuron/x86_64/
+src/neuron/**/x86_64/

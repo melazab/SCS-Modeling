@@ -1,0 +1,34 @@
+# Dependencies for src/neuron/ -- cable modelling of axons in the field the
+# Ansys solve produces.
+#
+# This half deliberately lives in its own virtual environment rather than the
+# system interpreter the other two directories use. NEURON ships a compiled
+# extension and its own binaries (nrnivmodl, nrniv), and it wants to own the
+# environment it is installed into:
+#
+#   python3 -m venv src/neuron/.venv
+#   src/neuron/.venv/bin/pip install -r src/neuron/requirements.txt
+#   src/neuron/.venv/bin/python src/neuron/smoke_test.py
+#
+# Verified on Python 3.14.4 with NEURON 9.0.2. Wheels exist for 3.9-3.14 on
+# linux/macOS x86_64 and arm64; on anything older or more exotic you will be
+# building NEURON from source, which is a much longer afternoon.
+
+# The simulator. Provides both the `neuron` python package and the nrnivmodl /
+# nrniv binaries in the venv's bin/.
+neuron>=9.0
+
+# Threshold bisection, recruitment statistics, and reading the field grid the
+# Ansys side exports.
+numpy>=1.20
+
+# Strength-duration curves, activating-function plots, recruitment curves.
+matplotlib>=3.5
+
+# NOT REQUIRED
+# ------------
+# scipy: not needed yet. If the trajectory resampling in a later chunk wants
+#   spline interpolation, add it here rather than reaching for it implicitly.
+# The MRG axon model itself is not a pip package -- it is a set of .mod files
+#   plus a template, obtained from ModelDB #3810 and compiled with nrnivmodl.
+#   See README.md.
