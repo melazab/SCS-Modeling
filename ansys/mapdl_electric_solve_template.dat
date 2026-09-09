@@ -1,0 +1,110 @@
+! ---------------------------------------------------------------------------
+! MAPDL template: steady-state electric conduction (Laplace, div(sigma grad V)=0)
+! for a bipolar +/-1 mA stimulation on two SCS lead contacts.
+!
+! STATUS: UNTESTED DRAFT written offline (no cluster access at the time).
+! Treat every line as a starting point, not gospel. Run in batch:
+!   ansys<ver> -b -i mapdl_electric_solve_template.dat -o solve.out -np 4
+! ---------------------------------------------------------------------------
+! Assumes the mesh + named components already exist in a CDB written from
+! Mechanical (Mechanical: right-click Mesh > Export, or in the ds.dat of a
+! solved/pre-processed system). Named selections in Mechanical become MAPDL
+! components with the same (uppercased, underscored) names.
+! ---------------------------------------------------------------------------
+/BATCH
+/FILNAME,scs_bipolar
+/TITLE, NBF_RADO-SCS bipolar +/-1 mA electric conduction (draft)
+/PREP7
+
+! --- Mesh + components from Mechanical ---------------------------------------
+! CDREAD,DB,<basename>,cdb            ! e.g. CDREAD,DB,nbf_rado_mesh,cdb
+! After reading: verify component names with CMLIST
+
+! --- Element type: SOLID232 = 3-D 10-node tetrahedral electric solid (DOF VOLT)
+! If the mesh came in with a structural element type, convert:
+ET,1,SOLID232
+! (If the CDB has multiple element types, EMODIF/ET each id to SOLID232.)
+
+! --- Materials: resistivity RSV* = 1 / sigma (ohm*m). Values in tissue_map.yaml.
+! Isotropic example: vertebra sigma = 0.04 S/m -> 25 ohm*m
+MP,RSVX,10,25.0           ! vertebra
+! CSF sigma = 1.7 S/m
+MP,RSVX,11,1/1.7
+! White matter, ANISOTROPIC (this is the bit the Mechanical GUI can't do):
+! transverse 0.1432 S/m, longitudinal 0.6 S/m along the cord axis.
+! With the cord axis along global Z (check!), transverse = X,Y:
+MP,RSVX,12,1/0.1432
+MP,RSVY,12,1/0.1432
+MP,RSVZ,12,1/0.6
+! Electrode contacts (Pt/Ir): very conductive; keep finite to avoid conditioning
+! trouble, e.g. 1e6 S/m -> 1e-6 ohm*m
+MP,RSVX,20,1e-6
+! ... add the rest from engineering_data (do NOT invent numbers)
+
+! --- Assign materials to components (component names from Mechanical) ---------
+! CMSEL,S,VERTEBRA
+! EMODIF,ALL,MAT,10
+! CMSEL,S,CSF
+! EMODIF,ALL,MAT,11
+! CMSEL,S,WHITE_MATTER
+! EMODIF,ALL,MAT,12
+! CMSEL,S,ELECTRODE_CONTACT_1
+! EMODIF,ALL,MAT,20
+! ... etc.
+ALLSEL,ALL
+FINISH
+
+/SOLU
+ANTYPE,STATIC
+
+! --- Bipolar current injection --------------------------------------------------
+! Make each contact an equipotential body by coupling VOLT on its nodes, then
+! inject the total current at ONE node of the coupled set (MAPDL distributes it).
+! Contact A: +1 mA source
+CMSEL,S,ELECTRODE_CONTACT_1
+NSLE,S
+CP,NEXT,VOLT,ALL
+*GET,nA,NODE,0,NUM,MIN
+F,nA,AMPS,1.0e-3
+! Contact B: -1 mA sink
+CMSEL,S,ELECTRODE_CONTACT_2
+NSLE,S
+CP,NEXT,VOLT,ALL
+*GET,nB,NODE,0,NUM,MIN
+F,nB,AMPS,-1.0e-3
+ALLSEL,ALL
+
+! --- Reference potential ---------------------------------------------------------
+! A pure Neumann (current-only) problem is singular; pin V=0 somewhere far from
+! the electrodes. Preferred: a named selection on the outer boundary of the
+! outermost body (e.g. the thorax/soft-tissue shell if present, else the
+! vertebra outer surface). Placeholder: pick the node with the largest -Z.
+! CMSEL,S,OUTER_BOUNDARY
+! NSLE,S
+! D,ALL,VOLT,0
+ALLSEL,ALL
+
+! All other external boundaries are naturally insulating (no flux) in FEM.
+
+OUTRES,ALL,LAST
+SOLVE
+FINISH
+
+! --- Post: voltage spread figure --------------------------------------------------
+/POST1
+SET,LAST
+/SHOW,PNG                 ! writes scs_bipolar000.png
+/VIEW,1,1,1,1
+/AUTO,1
+PLNSOL,VOLT               ! nodal voltage contour
+! Cut plane through the cord for a cleaner "spread" figure:
+! /CPLANE,1
+! /TYPE,1,5
+! WPLANE,... (define a working plane through the lead axis)
+! PLNSOL,VOLT
+/SHOW,CLOSE
+! Export nodal voltages for NEURON coupling later:
+! /OUTPUT,voltages,txt
+! PRNSOL,VOLT
+! /OUTPUT
+FINISH
