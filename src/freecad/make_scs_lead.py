@@ -3,7 +3,7 @@
 Why this exists
 ---------------
 The lead RADO ships is not the one we want to study. Measured from the geometry
-(ansys/check_laterality.py) it sits 11-25 mm LEFT of midline at z = 93-97,
+(src/freecad/check_laterality.py) it sits 11-25 mm LEFT of midline at z = 93-97,
 draped over the left DRG column -- a DRG lead -- on a curved insulator with only
 4 contacts. Khadka et al. Figure 1 shows the clinical arrangement instead: a
 percutaneous lead with 8 cylindrical contacts in the epidural space at midline.
@@ -18,14 +18,14 @@ with height: at midline the dorsal channel centre runs y ~= 81.3 at z = 95 to
 y ~= 88.4 at z = 145, about 7 mm over the length of an 8-contact lead. A
 straight lead at fixed y would walk out of the space and through the dura. So
 the lead is swept along the measured centreline y(z) from
-ansys/epidural_corridor.json (produced by ansys/measure_corridor.py, which ray
+src/freecad/epidural_corridor.json (produced by src/freecad/measure_corridor.py, which ray
 casts the epidural mesh; cubic fit, 0.018 mm RMS over 98 mm).
 
 Measured channel thickness at midline: dorsal 2.27-2.35 mm, ventral 1.67-1.74
 mm. A 1.3 mm clinical lead fits either side; the script warns if the requested
 diameter does not.
 
-Frame (ansys/check_laterality.py): +X anatomical LEFT, midline x = 56.60 mm;
+Frame (src/freecad/check_laterality.py): +X anatomical LEFT, midline x = 56.60 mm;
 +Y posterior/DORSAL; +Z rostral. Millimetres throughout.
 
 Construction: the lead is split along its length into alternating insulator and
@@ -36,9 +36,9 @@ its own contacts (short full-diameter segments).
 
 Usage -- run headless with FreeCAD:
 
-    freecadcmd ansys/make_scs_lead.py
-    MAKE_LEAD_ARGS="--side ventral --z-center 110" freecadcmd ansys/make_scs_lead.py
-    MAKE_LEAD_ARGS="--contacts 8 --z-center 120 --tag sweep_z120" freecadcmd ansys/make_scs_lead.py
+    freecadcmd src/freecad/make_scs_lead.py
+    MAKE_LEAD_ARGS="--side ventral --z-center 110" freecadcmd src/freecad/make_scs_lead.py
+    MAKE_LEAD_ARGS="--contacts 8 --z-center 120 --tag sweep_z120" freecadcmd src/freecad/make_scs_lead.py
 
 NOTE on freecadcmd: it *imports* this file rather than running it as __main__,
 so the work happens at import time and a __main__ guard would never fire. It

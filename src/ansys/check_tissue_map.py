@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate ansys/tissue_map.yaml against the actual STL filenames.
+"""Validate src/ansys/tissue_map.yaml against the actual STL filenames.
 
 Every body must map to exactly one tissue. An unmatched body would silently get
 a default material in Ansys, and a body matching two patterns means the map is
@@ -8,7 +8,7 @@ ambiguous. Both are worth catching before a multi-hour solve, not after.
 No PyYAML dependency (not installed here) -- the file is a small, regular subset
 of YAML, so it is parsed directly.
 
-    python3 check_tissue_map.py [--stl-dir STL_files] [--map ansys/tissue_map.yaml]
+    python3 check_tissue_map.py [--stl-dir STL_files] [--map src/ansys/tissue_map.yaml]
 """
 import argparse
 import fnmatch
@@ -84,7 +84,7 @@ def matches(stem, pattern):
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stl-dir", default=os.path.join(here, "..", "STL_files"))
+    ap.add_argument("--stl-dir", default=os.path.join(here, "..", "..", "STL_files"))
     ap.add_argument("--map", default=os.path.join(here, "tissue_map.yaml"))
     args = ap.parse_args()
 

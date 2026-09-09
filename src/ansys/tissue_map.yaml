@@ -5,11 +5,18 @@
 # against the STL filename (without extension). First match wins, top to bottom,
 # so the more specific patterns come first.
 #
-# Material values come from Mohamed's Ansys Engineering Data export on Pioneer:
-#   ~/Documents/SCS-Modeling/ANSYS/SCS_Modeling_files/SCS_Modeling_engineering_data_all.xml
-# (identical values in SCS-Model/SCS_model_engineering_data.xml). They are stored
-# there as electrical RESISTIVITY in ohm*m at 37 C; sigma = 1/rho is derived here.
-# `ed_material` is the exact Engineering Data material name to assign in Mechanical.
+# Material values come from Mohamed's Ansys Engineering Data on Pioneer:
+#   ~/Documents/SCS-Modeling/ANSYS/SCS_Modeling_files/dp0/SYS/ENGD/EngineeringData.xml
+# They are stored there as electrical RESISTIVITY in ohm*m at 37 C; sigma = 1/rho
+# is derived here. `ed_material` is the exact Engineering Data material name to
+# assign in Mechanical.
+#
+# `color_rgb` is the 0-255 Appearance colour Mohamed assigned that same material
+# in Engineering Data, so a body is the same colour in FreeCAD as in Mechanical.
+# src/freecad/apply_colors.py reads these and paints the FreeCAD document.
+# CAUTION: the flat `SCS_Modeling_engineering_data_all.xml` export in the parent
+# directory reports 109,157,209 for EVERY material -- that is Workbench's default
+# appearance, not what is set in the project. Read the dp0/SYS/ENGD file instead.
 #
 # NOTE: white matter is ISOTROPIC in Engineering Data (0.1432 S/m = the paper's
 # transverse value). The paper's anisotropic white matter (0.1432 transverse /
@@ -20,6 +27,7 @@
 tissues:
   - name: electrode_contact
     ed_material: "Metal Electrode"
+    color_rgb: [192, 192, 192]
     patterns: ["SCS Lead Electrode *"]
     rho_ohm_m: 2.5e-7
     sigma_S_per_m: 4.0e6
@@ -27,24 +35,28 @@ tissues:
 
   - name: lead_insulation
     ed_material: "Lead Insulation"
+    color_rgb: [ 40,  40,  40]
     patterns: ["SCS Lead Insulator"]
     rho_ohm_m: 50000
     sigma_S_per_m: 2.0e-5
 
   - name: vertebra
     ed_material: "Vertebra"
+    color_rgb: [230, 220, 195]
     patterns: ["V1-2", "V1-3", "V1-4"]
     rho_ohm_m: 25
     sigma_S_per_m: 0.04
 
   - name: intervertebral_disc
     ed_material: "Intervertebral Disc"
+    color_rgb: [176, 196, 222]
     patterns: ["T_disk_*"]
     rho_ohm_m: 1.6667
     sigma_S_per_m: 0.6
 
   - name: white_matter
     ed_material: "White Matter"
+    color_rgb: [250, 249, 246]
     patterns: ["neuro_whitemater"]
     rho_ohm_m: 6.9832
     sigma_S_per_m: 0.1432
@@ -52,30 +64,35 @@ tissues:
 
   - name: grey_matter
     ed_material: "Gray Matter"
+    color_rgb: [128, 128, 128]
     patterns: ["neuro_GreyMater"]
     rho_ohm_m: 3.6232
     sigma_S_per_m: 0.276
 
   - name: csf
     ed_material: "CSF"
+    color_rgb: [189, 235, 249]
     patterns: ["neuro_CSF", "*csf_coating*"]
     rho_ohm_m: 0.5882
     sigma_S_per_m: 1.7
 
   - name: meninges_dura
     ed_material: "Dura Mater"
+    color_rgb: [245, 245, 220]
     patterns: ["neuro_Meninges", "additional_menginges*", "*menging_coating*", "*Menging*", "*Menginges*"]
     rho_ohm_m: 27.027
     sigma_S_per_m: 0.037
 
   - name: epidural_space
     ed_material: "Epidural Space"
+    color_rgb: [255, 250, 205]
     patterns: ["neuro_EpiduralSpace"]
     rho_ohm_m: 25
     sigma_S_per_m: 0.04
 
   - name: blood_vessel
     ed_material: "Vasculature"
+    color_rgb: [200,  30,  30]
     patterns:
       - "neuro_blood_in_fat"
       - "neuro_blood_next_to_WM"
@@ -89,6 +106,7 @@ tissues:
 
   - name: dorsal_root_ganglion
     ed_material: "DRG"
+    color_rgb: [218, 165,  32]
     patterns: ["*roots_football_in_middle*"]
     rho_ohm_m: 6.9832
     sigma_S_per_m: 0.1432
@@ -110,6 +128,7 @@ tissues:
   # so it should be settled before any production sweep.
   - name: nerve_root
     ed_material: "Nerve Root"
+    color_rgb: [255, 239, 179]
     patterns:
       - "AprilRootMainRoot*"
       - "AprilRootBranchRoot*"
@@ -121,6 +140,7 @@ tissues:
 
   - name: sympathetic_chain
     ed_material: "Sympathetic Chain"
+    color_rgb: [230, 168,  63]
     patterns: ["neuro_sympathetic_a-*", "neuro_sympathetic_c-*", "neuro_sympathetic_d-*", "neuro_sympathetic_ball-*"]
     rho_ohm_m: 6.9832
     sigma_S_per_m: 0.1432
@@ -130,6 +150,7 @@ tissues:
   # soft-tissue envelope isn't included in RADO's STL export):
   - name: soft_tissue
     ed_material: "Soft Tissue"
+    color_rgb: [255, 205, 178]
     patterns: []
     rho_ohm_m: 250
     sigma_S_per_m: 0.004

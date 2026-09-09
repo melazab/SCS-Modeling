@@ -25,7 +25,7 @@
 #      an electrically FLOATING region.
 #
 # WHICH bodies float -- answered from the geometry, not guessed
-# (ansys/find_floating_bodies.py builds a proximity graph over the 245 STL
+# (src/freecad/find_floating_bodies.py builds a proximity graph over the 245 STL
 # surfaces and finds its connected components):
 #
 #     gap tolerance      components   isolated bodies

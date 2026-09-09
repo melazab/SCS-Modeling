@@ -9,14 +9,14 @@ MAPDL deck, so they are never renamed. A FreeCAD object has an immutable Name
 Label, so it cannot break the Ansys chain: reverting it changes nothing but the
 strings in the tree.
 
-    python3 ansys/apply_labels.py --dry-run                     # no FreeCAD needed
-    freecadcmd ansys/apply_labels.py                            # writes the document
-    APPLY_LABELS_ARGS="--clean-core" freecadcmd ansys/apply_labels.py
+    python3 src/freecad/apply_labels.py --dry-run                     # no FreeCAD needed
+    freecadcmd src/freecad/apply_labels.py                            # writes the document
+    APPLY_LABELS_ARGS="--clean-core" freecadcmd src/freecad/apply_labels.py
 
 freecadcmd owns the command line: it consumes every flag itself, and passing
 flags after its --pass makes it skip the script entirely. So under freecadcmd
 the script's own options come from the APPLY_LABELS_ARGS environment variable.
-Bare `freecadcmd ansys/apply_labels.py` applies every default, which is the
+Bare `freecadcmd src/freecad/apply_labels.py` applies every default, which is the
 normal way to run it.
 
 Three things about freecadcmd that shape this script:
@@ -26,7 +26,7 @@ Three things about freecadcmd that shape this script:
     all, silently. See run_as_freecadcmd_script() at the bottom.
 
   - print() output is swallowed, so everything is written to a report file
-    (--report, default ansys/apply_labels_report.txt) which the caller cats.
+    (--report, default src/freecad/apply_labels_report.txt) which the caller cats.
   - freecadcmd segfaults on exit AFTER the script has finished and the document
     is safely saved. That is harmless but it means the exit code is meaningless:
     verify from the report file, which ends with a "RESULT:" line. The segfault
@@ -45,7 +45,7 @@ import shlex
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(HERE)
+REPO = os.path.dirname(os.path.dirname(HERE))   # src/freecad/ -> repo root
 DEFAULT_DOC = os.path.join(REPO, "NBF_RADO-SCS.FCStd")
 DEFAULT_STL = os.path.join(REPO, "STL_files")
 DEFAULT_MAP = os.path.join(HERE, "body_aliases.yaml")
@@ -327,7 +327,7 @@ def run_as_freecadcmd_script():
     freecadcmd does not exec a script, it imports it as a module, so __name__ is
     "apply_labels" and the usual __main__ guard never fires -- the script loads,
     defines everything, and silently does nothing. Comparing the path freecadcmd
-    was given against __file__ is what makes `freecadcmd ansys/apply_labels.py`
+    was given against __file__ is what makes `freecadcmd src/freecad/apply_labels.py`
     actually run, without also firing when check_laterality.py imports this
     module for its parser.
     """

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive true left/right from the STL geometry and validate ansys/body_aliases.yaml.
+"""Derive true left/right from the STL geometry and validate src/freecad/body_aliases.yaml.
 
 The L/R strings in Khadka's filenames cannot be trusted: AprilRootDGR_right-*
 contains files tagged `_l`, plain AprilRootDGR-* contains files tagged `_r`, and
@@ -26,8 +26,8 @@ What this does, in order:
 
 Pure numpy -- scipy and PyYAML are not installed here.
 
-    python3 ansys/check_laterality.py                 # full report
-    python3 ansys/check_laterality.py --quiet         # just the verdicts
+    python3 src/freecad/check_laterality.py                 # full report
+    python3 src/freecad/check_laterality.py --quiet         # just the verdicts
 """
 import argparse
 import os
@@ -113,7 +113,7 @@ def tags_of(stem):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stl-dir", default=os.path.join(HERE, "..", "STL_files"))
+    ap.add_argument("--stl-dir", default=os.path.join(HERE, "..", "..", "STL_files"))
     ap.add_argument("--map", default=os.path.join(HERE, "body_aliases.yaml"))
     ap.add_argument("--quiet", action="store_true", help="skip the per-body listing")
     args = ap.parse_args()

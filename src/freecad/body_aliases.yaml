@@ -5,7 +5,7 @@
 # MAPDL deck, so they must NOT be renamed. A FreeCAD object carries two strings:
 #   Name  -- immutable, auto-derived from the filename, what everything keys on
 #   Label -- free text, what the model tree shows, nothing depends on it
-# This file drives ansys/apply_labels.py, which sets Label only. Nothing here can
+# This file drives src/freecad/apply_labels.py, which sets Label only. Nothing here can
 # break the Ansys chain; delete the labels and the model is unchanged.
 #
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@
 # LATERALITY: WHY THE FILENAME TAGS ARE IGNORED
 # ---------------------------------------------------------------------------
 # Every L/R in this file comes from the STL geometry, not from the filename.
-# ansys/check_laterality.py re-derives it and validates this file against it.
+# src/freecad/check_laterality.py re-derives it and validates this file against it.
 #
 # The anatomical frame was established two independent ways, which agree:
 #   1. Frame construction. +Z is rostral (the T9/10 disc sits at z=153, the

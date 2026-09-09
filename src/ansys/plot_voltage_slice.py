@@ -2,7 +2,7 @@
 """Plot a voltage-spread figure from a MAPDL slice export.
 
 Input is the CSV written by the `*VWRITE` block in the decks
-(`ansys/testA_mapdl_cylinder/testA.dat`, `ansys/bigdeck_recondition/`):
+(`src/ansys/testA_mapdl_cylinder/testA.dat`, `src/ansys/bigdeck_recondition/`):
 three columns, no header -- in-plane coordinate 1, in-plane coordinate 2, VOLT.
 
 Uses matplotlib's own Delaunay triangulation (matplotlib.tri), so it needs only

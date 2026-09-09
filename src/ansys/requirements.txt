@@ -1,0 +1,35 @@
+# Dependencies for src/ansys/ -- solver-side work: the MAPDL decks, the SLURM
+# job trees, and post-processing of results.
+#
+# WHAT ACTUALLY NEEDS INSTALLING
+# ------------------------------
+# Most of this directory is not Python. The *.dat decks and the run_*.sbatch
+# scripts execute on the CWRU Pioneer cluster, where Ansys comes from a module:
+#
+#   module load ansys/25.1        # MAPDL is then `ansys251`
+#
+# Nothing in this file installs Ansys; it is licensed software on the cluster.
+# The Python here is only for checking inputs and plotting outputs, and runs on
+# your own machine.
+#
+#   python3 check_tissue_map.py       # stdlib only, no install needed
+#   python3 plot_voltage_slice.py     # needs the packages below
+#
+# Developed on Python 3.14.4 with numpy 2.3.5 and matplotlib 3.10.7.
+
+# Reading the CSV slice exports dumped from the .rst by /POST1.
+numpy>=1.20
+
+# plot_voltage_slice.py. Needs >=3.2 for TwoSlopeNorm (used to centre the colour
+# map on 0 V); matplotlib.tri does the unstructured triangulation of the slice.
+matplotlib>=3.5
+
+# DELIBERATELY NOT REQUIRED
+# -------------------------
+# PyYAML: check_tissue_map.py parses tissue_map.yaml with a small hand-rolled
+#   parser so it runs on a bare interpreter. Do not replace it with `import yaml`.
+# scipy: plot_voltage_slice.py interpolates with matplotlib.tri instead, so the
+#   plotting path has no compiled dependency beyond matplotlib's own.
+# PyMAPDL (ansys-mapdl-core): not used yet. The decks are driven by sbatch, not
+#   from Python. If the anisotropic white-matter sweep ends up scripted, add it
+#   here -- it is the intended route for MP,RSVX/RSVY/RSVZ per body.
