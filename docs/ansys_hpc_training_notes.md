@@ -443,6 +443,49 @@ model.Mesh.GenerateMesh()
    CSF is 1.7 S/m vs nerve 0.1432 S/m — a 12× difference in tissue immediately
    around the electrodes, so this materially changes the answer.
 
+## Model geometry: nested overlapping masks, and no real epidural channel
+
+Two things about how RADO is built that shape everything downstream.
+
+**The compartments are nested overlapping solids, not a partition.** Measured
+with FreeCAD:
+
+| body | volume mm³ | area mm² | note |
+|---|---|---|---|
+| epidural space | 11295.3 | 10933.4 | filled compartment |
+| dural sac (meninges) | 2150.7 | 8928.5 | **0.48 mm mean thickness — a shell** |
+| CSF | 8835.6 | 6711.9 | filled |
+| white matter | 2295.5 | 4468.5 | filled |
+| grey matter | 996.1 | 2189.1 | filled |
+
+CSF + dura = 10986 mm³ against an epidural volume of 11295 mm³. So each body is
+a *full solid that contains the ones inside it*, in the Simpleware mask style,
+and they overlap rather than tile. That is why measuring "the gap between the
+epidural surface and the dura surface" yields widths of 0.07–0.11 mm and even
+negative numbers — those surfaces are not the two sides of a channel.
+
+**Consequently there is essentially no dorsal epidural fat to put a lead in.**
+Subtracting the sac from the epidural compartment leaves roughly 308 mm³ spread
+over 8929 mm² of sac surface — about **0.03 mm** mean. Sampling near midline
+(`ansys/measure_corridor.py`) gives a dorsal channel of 0.07–0.11 mm through
+z = 80–140. A clinical 1.3 mm lead does not fit.
+
+This explains where RADO's own lead actually sits: 11–25 mm **left** of midline
+at z = 93–97, out at the intervertebral foramen beside the left DRG column,
+where there is room. It is a DRG lead, not a dorsal-column lead.
+
+**What this means for the dorsal-vs-ventral study.** Dropping a Khadka-style
+midline lead into this geometry requires *making* space — carving the lead
+volume out of the surrounding bodies (the boolean-subtract approach), or
+thickening the epidural compartment. It is not a matter of positioning alone.
+Worth settling before building the sweep.
+
+Related: the spine is kyphotic, so the canal is not straight. Near midline the
+dorsal corridor centre moves from y ≈ 81.5 at z = 95 to y ≈ 87.5 at z = 135 —
+~6 mm over the length of an 8-contact lead. Any generated lead has to follow
+that centreline (`ansys/epidural_corridor.json` holds the fitted polynomials),
+which is presumably why RADO's lead is curved rather than straight.
+
 ## Correction: the materials were never the problem (9 Sep)
 
 Two mistakes on my part, both now fixed. Recorded in full because the reasoning
