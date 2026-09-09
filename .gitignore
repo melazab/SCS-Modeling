@@ -6,3 +6,6 @@ NBF_RADO-SCS/
 # Kept locally for Claude Code / HPC operational notes, deliberately not published
 # (repo is public; CLAUDE.md was stripped from history — see git-filter-repo run)
 CLAUDE.md
+
+# Raw MAPDL slice exports are large and regenerable from the .rst on Pioneer
+ansys/**/results/*_slice.csv

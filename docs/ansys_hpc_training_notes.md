@@ -1,5 +1,64 @@
 # Ansys on CWRU HPC (Pioneer): training notes for the NBF_RADO-SCS model
 
+## Read this first (summary of the 2026-09-08/09 overnight session)
+
+**What you have now**
+
+- A **working, validated MAPDL bipolar-stimulation pipeline**, proven end to end
+  on a small model (`ansys/testA_mapdl_cylinder/`): 390k nodes, ±1 mA on two
+  contacts, solves clean, **V ∈ [−1.0366, +1.0380] V**, and the figure
+  (`results/testA_voltage_slice.png`) shows the dipole with the CSF column
+  visibly shunting the field. Every MAPDL construct the real model needs is
+  exercised there: SOLID232, anisotropic white matter, equipotential contacts,
+  current injection, grounding, slice export, external plotting.
+- **A full diagnosis of why your Aug 29 / Sep 1 runs failed** — and it is *not*
+  a meshing problem. Details below; the short version is three separate causes,
+  two of which I fixed and one of which is an institutional resource limit.
+- **Headless Mechanical working on Pioneer**, with the patch-independent
+  meshing recipe for faceted STL bodies worked out (`ansys/testM7_*`). This is
+  what you will need to re-mesh when the lead moves.
+- Supporting tooling: `ansys/tissue_map.yaml` (all 245 bodies → Engineering Data
+  materials, validated by `ansys/check_tissue_map.py`), `ansys/plot_voltage_slice.py`,
+  and sbatch scripts for each run.
+
+- **A converged solve on the real RADO anatomy** (truncated sub-model, job
+  3796854): `DISTRIBUTED PCG SOLVER SOLUTION CONVERGED, NUMBER OF ITERATIONS =
+  93`, 1,701,330 nodes / 1,128,810 elements, V ∈ [−0.0673, +0.1872] V for
+  ±1 mA. Figure: `ansys/bigdeck_truncated/results/rado_voltage_slice.png`.
+  **Read the caveats on this one before believing the numbers** — see
+  "The truncated sub-model result" below. It demonstrates the pipeline runs on
+  your real geometry; it is not yet a publication-grade field.
+
+**What you do NOT have: a trustworthy full-model voltage figure.** Honest reason: the `tlv`
+account is capped at **24 CPUs**, and because SLURM bills CPUs in proportion to
+memory, that caps us at ~140 GB on `batch`. The full 18.8M-DOF solve needs
+~320 GB. The `smp` partition has the memory but is booked out to ~Sep 13 by
+8-day jobs. **Job 3796783 is queued on `smp` (24 cores, 600 GB) and will run the
+full model unattended when a node frees.** That is the definitive run.
+
+**The three root causes of the original failure**
+
+1. **Material contrast ~2e11** — Metal Electrode 2.5e-13 vs Lead Insulation 0.05
+   Tohm·µm — which is what produced `minimum pivot = -347` and the "extremely
+   large pivot ratio" abort. Fixed by reconditioning both (contacts are held
+   equipotential by constraint equation anyway, so their bulk conductivity is
+   nearly irrelevant).
+2. **Floating, electrically isolated bodies.** Revealed by running PCG: it
+   diverged with *"out of balance force goes to infinity … check for rigid body
+   motions"*. The 245 bodies are joined by `CONTA174`/`TARGE170` pairs (correctly
+   set to *Pure Electric contact*, bonded), but bonded contact only bonds within
+   its pinball radius, and RADO ships **no surrounding soft-tissue envelope**, so
+   peripheral structures have nothing to conduct into. Only one component
+   (61,742 nodes) is grounded.
+3. **Memory ceiling** from the account CPU cap, above.
+
+**Decisions I made that you may want to revisit** — all flagged in
+"Open questions" at the bottom. The most important: whether reconditioning those
+two materials is acceptable to you physically, and whether the roots'
+`...Middle...` bodies should be CSF rather than nerve (a 12× conductivity
+difference right next to the electrodes).
+
+
 Working log from a first hands-on attempt at the geometry -> mesh -> material ->
 bipolar-stimulation -> solve pipeline for the NBF_RADO-SCS model, run autonomously
 overnight on 2026-09-08/09. Written so later sessions (human or agent) can skip
@@ -447,6 +506,51 @@ Ways forward, roughly in order of effort:
    epidural space (both 25 Ω·m → MAT 6).
 5. **Add the missing soft-tissue envelope**, which is the physically correct fix
    and matches the paper's 19-compartment description.
+
+## The truncated sub-model result (job 3796854) — and why to distrust it
+
+This is the first converged solve on the real anatomy, and it is genuinely
+useful as proof the pipeline works. It is **not** a result to quote.
+
+What it is: solid elements whose centroid lies within a ±15 mm box around
+contact A (node 786), coupled with `CPINTF,VOLT,300` (300 µm), V = 0 clamped on
+the six box faces, and ±1 mA distributed over each contact's nodes.
+1,701,330 nodes / 1,128,810 elements. PCG converged in 93 iterations.
+V ∈ [−0.0673, +0.1872] V.
+
+Why not to trust the numbers yet:
+
+1. **The domain is artificially truncated at 15 mm and clamped to 0 V there.**
+   A current dipole's potential falls as ~1/r², so the near field should be
+   roughly right, but the far field is imposed, not computed. Absolute
+   impedance and anything beyond ~1 cm is meaningless.
+2. **Inter-body conduction is `CPINTF` at 300 µm, not the model's own bonded
+   electric contact.** The contact elements survive in the database but are not
+   part of the solved element set, so every interface is coupled purely by
+   node-proximity. Interfaces whose non-conformal meshes are further apart than
+   300 µm are simply not connected. This is the single biggest source of doubt.
+3. **The two contacts are asymmetric**: +0.187 V vs −0.067 V, and the node
+   counts differ (935 vs 1396). A symmetric bipolar pair in homogeneous
+   surroundings should be near-antisymmetric. The likely cause is that the
+   ±2 mm box used to isolate each contact caught different amounts of metal
+   (possibly part of a neighbouring contact for B). Worth fixing by selecting
+   contacts properly — e.g. by element type, since each body has its own `et`.
+4. **The deck's 878 electrode constraint equations were deleted** (`CEDELE,ALL`)
+   and replaced by distributed current injection. That is defensible — the metal
+   is ~60× more conductive than CSF so each contact is nearly equipotential
+   anyway — but it is not what your Workbench model specifies.
+5. **`EDELE,ALL` silently did nothing**: `EDELE is not a recognized SOLUTION
+   command` — it needs `/PREP7`, and the injection point is inside `/SOLU`. So
+   the run did *not* delete the contact elements as the script intended. The
+   thing that actually unblocked the solve was `CEDELE,ALL` removing the
+   CE/CP conflict. Worth knowing before "fixing" the script.
+6. `*VGET` warns "Some entities requested in the *VGET were undefined" — the
+   POST1 slab selects nodes across the whole model, and those outside the solved
+   set come back as exactly 0. `plot_voltage_slice.py` is fed a filtered file
+   (`trunc_slice_solved.csv`, 46,194 of 665,360 points) for this reason.
+
+The queued `smp` job (3796783) avoids items 1–5 entirely by solving the model as
+Workbench built it, with enough memory for the direct solver.
 
 ## The deck has CRLF line endings — end-anchored regexes silently fail
 
