@@ -1,0 +1,246 @@
+label,facets,points,closed_solid,has_nonmanifold,has_nonuniform_orientation,has_invalid_points,components,volume_mm3,dx_mm,dy_mm,dz_mm
+T8-10 - April4Blood_in_Fat_bri-1,14252,7136,False,False,False,False,2,,6.565,5.908,2.55
+T8-10 - April4Blood_in_Fat_bri-2,14252,7132,False,False,False,False,2,,6.565,6.238,0.4
+T8-10 - April4Blood_in_Fat_bri-3,14252,7132,False,False,False,False,2,,6.607,6.147,1.822
+T8-10 - April4Blood_in_Fat_bri-4,14252,7132,False,False,False,False,2,,6.567,6.165,1.819
+T8-10 - AprilDorsalRootsBloodParallel_L-1,4422,2213,True,False,False,False,1,9.0104,41.326,1.168,15.421
+T8-10 - AprilDorsalRootsBloodParallel_L-2,4422,2213,True,False,False,False,1,8.8177,41.326,1.168,15.421
+T8-10 - AprilDorsalRootsBloodParallel_L-3,4422,2213,True,False,False,False,1,8.612,40.514,1.168,17.559
+T8-10 - AprilDorsalRootsBloodParallel_L-4,4422,2213,True,False,False,False,1,7.8542,40.514,0.726,17.571
+T8-10 - AprilDorsalRootsBloodParallel_R-1,5520,2762,True,False,False,False,1,5.5703,34.923,1.586,10.84
+T8-10 - AprilDorsalRootsBloodParallel_R-2,5520,2762,True,False,False,False,1,5.6302,34.923,1.586,10.84
+T8-10 - AprilDorsalRootsBloodParallel_R-3,5520,2762,True,False,False,False,1,5.3151,34.923,1.586,10.84
+T8-10 - AprilDorsalRootsBloodParallel_R-4,5520,2762,True,False,False,False,1,5.4648,34.923,1.586,10.84
+T8-10 - AprilRootBranchRootL-1 AprilDorsolBranchInsideL-1,3962,1983,True,False,False,False,1,17.6562,20.529,2.32,10.237
+T8-10 - AprilRootBranchRootL-1 AprilDorsolBranchMiddleL-1,7972,3986,True,False,False,False,1,20.776,20.693,2.818,10.7
+T8-10 - AprilRootBranchRootL-1 AprilDorsolBranchOutsidMengingL-1,8120,4060,True,False,False,False,1,30.6302,20.857,3.316,11.163
+T8-10 - AprilRootBranchRootL-3 AprilDorsolBranchInsideL-1,3962,1983,True,False,False,False,1,17.6562,19.511,1.792,12.183
+T8-10 - AprilRootBranchRootL-3 AprilDorsolBranchMiddleL-1,7972,3986,True,False,False,False,1,22.4714,19.67,2.292,12.635
+T8-10 - AprilRootBranchRootL-3 AprilDorsolBranchOutsidMengingL-1,8120,4060,True,False,False,False,1,31.0391,19.83,2.791,13.088
+T8-10 - AprilRootBranchRootL-4 AprilDorsolBranchInsideL-1,3962,1983,True,False,False,False,1,17.3177,19.34,1.024,12.489
+T8-10 - AprilRootBranchRootL-4 AprilDorsolBranchMiddleL-1,7972,3986,True,False,False,False,1,22.5469,19.498,1.524,12.941
+T8-10 - AprilRootBranchRootL-4 AprilDorsolBranchOutsidMengingL-1,8120,4060,True,False,False,False,1,30.5755,19.657,2.024,13.391
+T8-10 - AprilRootBranchRootL-5 AprilDorsolBranchInsideL-1,3962,1983,True,False,False,False,1,17.4062,20.527,2.362,10.236
+T8-10 - AprilRootBranchRootL-5 AprilDorsolBranchMiddleL-1,7972,3986,True,False,False,False,1,20.9479,20.691,2.861,10.698
+T8-10 - AprilRootBranchRootL-5 AprilDorsolBranchOutsidMengingL-1,8120,4060,True,False,False,False,1,31.026,20.855,3.359,11.162
+T8-10 - AprilRootBranchRootR-1 AprilDorsolBranchInsideR-1,4486,2245,True,False,False,False,1,20.8802,22.681,2.724,14.976
+T8-10 - AprilRootBranchRootR-1 AprilDorsolBranchMiddleR-1,9000,4500,True,False,False,False,1,26.2292,23.1,3.217,15.247
+T8-10 - AprilRootBranchRootR-1 AprilDorsolBranchOutsidMengingR-1,8960,4480,True,False,False,False,1,36.2396,23.52,3.71,15.518
+T8-10 - AprilRootBranchRootR-2 AprilDorsolBranchInsideR-1,4486,2245,True,False,False,False,1,20.8229,22.858,1.901,14.767
+T8-10 - AprilRootBranchRootR-2 AprilDorsolBranchMiddleR-1,9000,4500,True,False,False,False,1,25.8333,23.274,2.397,15.033
+T8-10 - AprilRootBranchRootR-2 AprilDorsolBranchOutsidMengingR-1,8960,4480,True,False,False,False,1,36.2396,23.691,2.893,15.298
+T8-10 - AprilRootBranchRootR-3 AprilDorsolBranchInsideR-1,4486,2245,True,False,False,False,1,19.2812,22.353,2.039,15.48
+T8-10 - AprilRootBranchRootR-3 AprilDorsolBranchMiddleR-1,9000,4500,True,False,False,False,1,27.7083,22.78,2.539,15.72
+T8-10 - AprilRootBranchRootR-3 AprilDorsolBranchOutsidMengingR-1,8960,4480,True,False,False,False,1,37.125,23.207,3.037,15.96
+T8-10 - AprilRootBranchRootR-4 AprilDorsolBranchInsideR-1,4486,2245,True,False,False,False,1,21.0,23.79,1.802,13.177
+T8-10 - AprilRootBranchRootR-4 AprilDorsolBranchMiddleR-1,9000,4500,True,False,False,False,1,26.0521,24.188,2.301,13.461
+T8-10 - AprilRootBranchRootR-4 AprilDorsolBranchOutsidMengingR-1,8960,4480,True,False,False,False,1,35.8438,24.588,2.8,13.743
+T8-10 - AprilRootDGR-1 neuro_dorsal _roots_football_csf_coating_r-1,11814,5911,True,False,False,False,2,28.4844,8.115,5.527,5.69
+T8-10 - AprilRootDGR-1 neuro_dorsal _roots_football_in_middle-1,6020,3012,True,False,False,False,1,100.6927,7.606,5.027,5.191
+T8-10 - AprilRootDGR-1 neuro_dorsal _roots_football_menging_coating_r-1,12018,6013,True,False,False,False,2,37.5208,8.713,6.414,6.569
+T8-10 - AprilRootDGR-2 neuro_dorsal _roots_football_csf_coating_r-1,11814,5911,True,False,False,False,2,29.3984,8.132,5.47,5.69
+T8-10 - AprilRootDGR-2 neuro_dorsal _roots_football_in_middle-1,6020,3012,True,False,False,False,1,101.1172,7.623,4.97,5.192
+T8-10 - AprilRootDGR-2 neuro_dorsal _roots_football_menging_coating_r-1,12018,6013,True,False,False,False,2,38.2396,8.724,6.356,6.569
+T8-10 - AprilRootDGR-3 neuro_dorsal _roots_football_csf_coating_r-1,11814,5911,True,False,False,False,2,29.8542,8.115,5.528,5.69
+T8-10 - AprilRootDGR-3 neuro_dorsal _roots_football_in_middle-1,6020,3012,True,False,False,False,1,101.5052,7.606,5.028,5.191
+T8-10 - AprilRootDGR-3 neuro_dorsal _roots_football_menging_coating_r-1,12018,6013,True,False,False,False,2,37.125,8.713,6.415,6.569
+T8-10 - AprilRootDGR-4 neuro_dorsal _roots_football_csf_coating_r-1,11814,5911,True,False,False,False,2,29.4115,8.083,5.443,5.784
+T8-10 - AprilRootDGR-4 neuro_dorsal _roots_football_in_middle-1,6020,3012,True,False,False,False,1,101.276,7.576,4.943,5.286
+T8-10 - AprilRootDGR-4 neuro_dorsal _roots_football_menging_coating_r-1,12018,6013,True,False,False,False,2,37.7917,8.691,6.33,6.659
+T8-10 - AprilRootDGR_right-1 neuro_dorsal _roots_football_csf_coating_l-1,11116,5562,True,False,False,False,2,29.9062,8.116,5.512,5.731
+T8-10 - AprilRootDGR_right-1 neuro_dorsal _roots_football_in_middle_R-1,5600,2802,True,False,False,False,1,100.2292,7.605,5.016,5.232
+T8-10 - AprilRootDGR_right-2 neuro_dorsal _roots_football_csf_coating_l-1,11116,5562,True,False,False,False,2,29.3958,8.098,5.534,5.734
+T8-10 - AprilRootDGR_right-2 neuro_dorsal _roots_football_in_middle_R-1,5600,2802,True,False,False,False,1,99.9323,7.588,5.036,5.239
+T8-10 - AprilRootDGR_right-3 neuro_dorsal _roots_football_in_middle_R-1,5600,2802,True,False,False,False,1,100.0312,7.652,5.016,5.155
+T8-10 - AprilRootDGR_right-4 neuro_dorsal _roots_football_csf_coating_l-1,11116,5562,True,False,False,False,2,29.5833,8.163,5.512,5.655
+T8-10 - AprilRootDGR_right-4 neuro_dorsal _roots_football_in_middle_R-1,5600,2802,True,False,False,False,1,99.7604,7.652,5.016,5.155
+T8-10 - AprilRootMainRootL-1 AprilDorsalRootsInsideL-1,4770,2387,True,False,False,False,1,50.9505,36.646,5.749,13.148
+T8-10 - AprilRootMainRootL-1 AprilDorsalRootsMiddleL-1,14072,7036,True,False,False,False,1,27.2865,19.289,4.276,11.322
+T8-10 - AprilRootMainRootL-1 AprilDorsalRootsOutsideMengingesL-1,20550,10275,True,False,False,False,1,65.9167,37.185,6.741,14.122
+T8-10 - AprilRootMainRootL-2 AprilDorsalRootsInsideL-1,4770,2387,True,False,False,False,1,51.0677,36.821,1.921,13.148
+T8-10 - AprilRootMainRootL-2 AprilDorsalRootsMiddleL-1,14072,7036,True,False,False,False,1,27.4427,19.417,2.299,11.322
+T8-10 - AprilRootMainRootL-2 AprilDorsalRootsOutsideMengingesL-1,20550,10275,True,False,False,False,1,64.2552,37.412,2.919,14.122
+T8-10 - AprilRootMainRootL-3 AprilDorsalRootsInsideL-1,4770,2387,True,False,False,False,1,50.4681,36.821,3.155,13.02
+T8-10 - AprilRootMainRootL-3 AprilDorsalRootsMiddleL-1,14072,7036,True,False,False,False,1,27.0964,19.417,3.293,11.22
+T8-10 - AprilRootMainRootL-3 AprilDorsalRootsOutsideMengingesL-1,20550,10275,True,False,False,False,1,64.1185,37.412,4.157,13.992
+T8-10 - AprilRootMainRootL-4 AprilDorsalRootsInsideL-1,4770,2387,True,False,False,False,1,50.4896,36.821,3.155,13.02
+T8-10 - AprilRootMainRootL-4 AprilDorsalRootsMiddleL-1,14072,7036,True,False,False,False,1,27.138,19.417,3.293,11.22
+T8-10 - AprilRootMainRootL-4 AprilDorsalRootsOutsideMengingesL-1,20550,10275,True,False,False,False,1,64.2201,37.412,4.157,13.992
+T8-10 - AprilRootMainRootR-1 AprilDorsalRootsInsideR-1,14032,7018,True,False,False,False,1,67.0729,43.864,3.942,17.978
+T8-10 - AprilRootMainRootR-1 AprilDorsalRootsMiddleR-1,25958,12979,True,False,False,False,1,35.6667,24.69,3.923,15.211
+T8-10 - AprilRootMainRootR-2 AprilDorsalRootsInsideR-1,14032,7018,True,False,False,False,1,66.2135,43.639,7.07,17.816
+T8-10 - AprilRootMainRootR-2 AprilDorsalRootsMiddleR-1,25958,12979,True,False,False,False,1,35.5885,24.518,5.868,15.082
+T8-10 - AprilRootMainRootR-3 AprilDorsalRootsInsideR-1,14032,7018,True,False,False,False,1,67.3906,43.864,4.814,17.816
+T8-10 - AprilRootMainRootR-3 AprilDorsalRootsMiddleR-1,25958,12979,True,False,False,False,1,36.2917,24.69,4.623,15.082
+T8-10 - AprilRootMainRootR-4 AprilDorsalRootsInsideR-1,14032,7018,True,False,False,False,1,65.75,43.864,3.064,18.09
+T8-10 - AprilRootMainRootR-4 AprilDorsalRootsMiddleR-1,25958,12979,True,False,False,False,1,36.4479,24.69,3.22,15.305
+T8-10 - Assem1SmallRoot-1 smallRoot-1,4686,2345,True,False,False,False,1,1.9974,4.216,1.604,3.658
+T8-10 - Assem1SmallRoot-1 smallRoot1-1,3072,1538,True,False,False,False,1,11.9453,4.392,6.678,22.744
+T8-10 - Assem1SmallRoot-1 smallRoot2-1,3160,1582,True,False,False,False,1,10.7604,4.441,5.928,19.939
+T8-10 - Assem1SmallRoot-1 smallRoot3-1,2834,1419,True,False,False,False,1,6.638,3.497,3.918,12.299
+T8-10 - Assem1SmallRoot-1 smallRoot4-1,4420,2212,True,False,False,False,1,5.2812,3.792,3.304,9.999
+T8-10 - Assem1SmallRoot-1 smallRoot5-1,3236,1620,True,False,False,False,1,8.6849,4.23,5.275,17.371
+T8-10 - Assem1SmallRoot-1 smallRoot6-1,3648,1826,True,False,False,False,1,2.7396,3.165,2.097,5.405
+T8-10 - Assem1SmallRoot-10 smallRoot-1,4686,2345,True,False,False,False,1,1.6146,4.374,1.305,3.484
+T8-10 - Assem1SmallRoot-10 smallRoot1-1,3072,1538,True,False,False,False,1,11.8542,5.661,3.471,23.055
+T8-10 - Assem1SmallRoot-10 smallRoot2-1,3160,1582,True,False,False,False,1,10.0521,5.501,3.154,20.172
+T8-10 - Assem1SmallRoot-10 smallRoot3-1,2834,1419,True,False,False,False,1,6.7917,4.169,2.256,12.392
+T8-10 - Assem1SmallRoot-10 smallRoot4-1,4420,2212,True,False,False,False,1,5.6146,4.328,2.009,10.011
+T8-10 - Assem1SmallRoot-10 smallRoot5-1,3236,1620,True,False,False,False,1,9.3229,5.168,2.862,17.558
+T8-10 - Assem1SmallRoot-10 smallRoot6-1,3648,1826,True,False,False,False,1,2.8646,3.443,1.468,5.334
+T8-10 - Assem1SmallRoot-11 smallRoot-1,4686,2345,True,False,False,False,1,2.3021,3.91,2.392,3.682
+T8-10 - Assem1SmallRoot-11 smallRoot1-1,3072,1538,True,False,False,False,1,11.4688,4.02,3.543,23.399
+T8-10 - Assem1SmallRoot-11 smallRoot2-1,3160,1582,True,False,False,False,1,10.7083,3.892,3.391,20.501
+T8-10 - Assem1SmallRoot-11 smallRoot3-1,2834,1419,True,False,False,False,1,6.5312,3.168,2.571,12.614
+T8-10 - Assem1SmallRoot-11 smallRoot4-1,4420,2212,True,False,False,False,1,5.2396,3.403,2.555,10.233
+T8-10 - Assem1SmallRoot-11 smallRoot5-1,3236,1620,True,False,False,False,1,8.9688,3.734,3.129,17.844
+T8-10 - Assem1SmallRoot-11 smallRoot6-1,3648,1826,True,False,False,False,1,2.7604,2.89,2.039,5.488
+T8-10 - Assem1SmallRoot-12 smallRoot-1,4686,2345,True,False,False,False,1,1.6771,4.226,1.63,3.625
+T8-10 - Assem1SmallRoot-12 smallRoot1-1,3072,1538,True,False,False,False,1,12.1823,4.484,5.837,22.92
+T8-10 - Assem1SmallRoot-12 smallRoot2-1,3160,1582,True,False,False,False,1,10.4844,4.509,5.22,20.083
+T8-10 - Assem1SmallRoot-12 smallRoot3-1,2834,1419,True,False,False,False,1,6.1562,3.545,3.513,12.373
+T8-10 - Assem1SmallRoot-12 smallRoot4-1,4420,2212,True,False,False,False,1,5.0052,3.828,3.021,10.041
+T8-10 - Assem1SmallRoot-12 smallRoot5-1,3236,1620,True,False,False,False,1,9.0573,4.289,4.664,17.491
+T8-10 - Assem1SmallRoot-12 smallRoot6-1,3648,1826,True,False,False,False,1,2.6719,3.184,1.993,5.405
+T8-10 - Assem1SmallRoot-13 smallRoot-1,4686,2345,True,False,False,False,1,2.0469,4.455,1.856,3.274
+T8-10 - Assem1SmallRoot-13 smallRoot1-1,3072,1538,True,False,False,False,1,11.7031,6.418,6.804,22.252
+T8-10 - Assem1SmallRoot-13 smallRoot2-1,3160,1582,True,False,False,False,1,10.5417,6.158,6.08,19.449
+T8-10 - Assem1SmallRoot-13 smallRoot3-1,2834,1419,True,False,False,False,1,6.4635,4.565,4.05,11.952
+T8-10 - Assem1SmallRoot-13 smallRoot4-1,4420,2212,True,False,False,False,1,5.2969,4.642,3.479,9.625
+T8-10 - Assem1SmallRoot-13 smallRoot5-1,3236,1620,True,False,False,False,1,9.3438,5.743,5.418,16.941
+T8-10 - Assem1SmallRoot-13 smallRoot6-1,3648,1826,True,False,False,False,1,2.5,3.601,2.255,5.121
+T8-10 - Assem1SmallRoot-2 smallRoot-1,4686,2345,True,False,False,False,1,1.7839,1.993,4.533,3.079
+T8-10 - Assem1SmallRoot-2 smallRoot1-1,3072,1538,True,False,False,False,1,11.9818,2.067,8.311,22.39
+T8-10 - Assem1SmallRoot-2 smallRoot2-1,3160,1582,True,False,False,False,1,10.349,2.083,7.787,19.53
+T8-10 - Assem1SmallRoot-2 smallRoot3-1,2834,1419,True,False,False,False,1,6.2083,1.735,5.512,11.949
+T8-10 - Assem1SmallRoot-2 smallRoot4-1,4420,2212,True,False,False,False,1,5.0312,1.829,5.351,9.559
+T8-10 - Assem1SmallRoot-2 smallRoot5-1,3236,1620,True,False,False,False,1,8.7396,1.971,7.133,16.997
+T8-10 - Assem1SmallRoot-2 smallRoot6-1,3648,1826,True,False,False,False,1,2.526,1.605,3.916,5.004
+T8-10 - Assem1SmallRoot-3 smallRoot-1,4686,2345,True,False,False,False,1,2.1823,4.223,1.372,3.686
+T8-10 - Assem1SmallRoot-3 smallRoot1-1,3072,1538,True,False,False,False,1,12.1094,4.458,5.399,23.018
+T8-10 - Assem1SmallRoot-3 smallRoot2-1,3160,1582,True,False,False,False,1,10.4427,4.49,4.8,20.177
+T8-10 - Assem1SmallRoot-3 smallRoot3-1,2834,1419,True,False,False,False,1,6.349,3.532,3.223,12.437
+T8-10 - Assem1SmallRoot-3 smallRoot4-1,4420,2212,True,False,False,False,1,4.9219,3.818,2.727,10.106
+T8-10 - Assem1SmallRoot-3 smallRoot5-1,3236,1620,True,False,False,False,1,9.0573,4.272,4.289,17.573
+T8-10 - Assem1SmallRoot-3 smallRoot6-1,3648,1826,True,False,False,False,1,3.0625,3.179,1.781,5.451
+T8-10 - Assem1SmallRoot-4 smallRoot-1,4686,2345,True,False,False,False,1,1.9844,3.259,3.579,3.468
+T8-10 - Assem1SmallRoot-4 smallRoot1-1,3072,1538,True,False,False,False,1,11.8333,3.314,6.075,23.036
+T8-10 - Assem1SmallRoot-4 smallRoot2-1,3160,1582,True,False,False,False,1,10.5365,3.118,5.735,20.153
+T8-10 - Assem1SmallRoot-4 smallRoot3-1,2834,1419,True,False,False,False,1,6.3385,2.629,4.138,12.379
+T8-10 - Assem1SmallRoot-4 smallRoot4-1,4420,2212,True,False,False,False,1,5.1875,2.78,4.052,9.996
+T8-10 - Assem1SmallRoot-4 smallRoot5-1,3236,1620,True,False,False,False,1,8.7448,3.005,5.244,17.542
+T8-10 - Assem1SmallRoot-4 smallRoot6-1,3648,1826,True,False,False,False,1,2.4635,2.406,3.048,5.322
+T8-10 - Assem1SmallRoot-5 smallRoot-1,4686,2345,True,False,False,False,1,0.5312,4.369,0.904,3.521
+T8-10 - Assem1SmallRoot-5 smallRoot1-1,3072,1538,True,False,False,False,1,11.5938,5.595,1.871,23.193
+T8-10 - Assem1SmallRoot-5 smallRoot2-1,3160,1582,True,False,False,False,1,11.1354,5.444,1.725,20.297
+T8-10 - Assem1SmallRoot-5 smallRoot3-1,2834,1419,True,False,False,False,1,6.2396,4.135,1.352,12.468
+T8-10 - Assem1SmallRoot-5 smallRoot4-1,4420,2212,True,False,False,False,1,5.5312,4.302,1.227,10.078
+T8-10 - Assem1SmallRoot-5 smallRoot5-1,3236,1620,True,False,False,False,1,8.1875,5.118,1.603,17.665
+T8-10 - Assem1SmallRoot-5 smallRoot6-1,3648,1826,True,False,False,False,1,2.4062,3.431,1.006,5.37
+T8-10 - Assem1SmallRoot-6 smallRoot-1,4686,2345,True,False,False,False,1,1.9062,3.448,2.966,3.789
+T8-10 - Assem1SmallRoot-6 smallRoot1-1,3072,1538,True,False,False,False,1,12.875,3.469,3.395,23.534
+T8-10 - Assem1SmallRoot-6 smallRoot2-1,3160,1582,True,False,False,False,1,10.6042,3.138,3.359,20.635
+T8-10 - Assem1SmallRoot-6 smallRoot3-1,2834,1419,True,False,False,False,1,6.1979,2.734,2.649,12.708
+T8-10 - Assem1SmallRoot-6 smallRoot4-1,4420,2212,True,False,False,False,1,5.4792,2.844,2.783,10.334
+T8-10 - Assem1SmallRoot-6 smallRoot5-1,3236,1620,True,False,False,False,1,9.5521,3.052,3.144,17.961
+T8-10 - Assem1SmallRoot-6 smallRoot6-1,3648,1826,True,False,False,False,1,2.6771,2.484,2.32,5.565
+T8-10 - Assem1SmallRoot-7 smallRoot-1,4686,2345,True,False,False,False,1,1.7552,3.19,3.489,3.604
+T8-10 - Assem1SmallRoot-7 smallRoot1-1,3072,1538,True,False,False,False,1,12.4167,3.185,5.418,23.237
+T8-10 - Assem1SmallRoot-7 smallRoot2-1,3160,1582,True,False,False,False,1,10.0156,2.842,5.161,20.349
+T8-10 - Assem1SmallRoot-7 smallRoot3-1,2834,1419,True,False,False,False,1,6.2344,2.526,3.789,12.514
+T8-10 - Assem1SmallRoot-7 smallRoot4-1,4420,2212,True,False,False,False,1,5.0469,2.589,3.771,10.137
+T8-10 - Assem1SmallRoot-7 smallRoot5-1,3236,1620,True,False,False,False,1,9.5,2.752,4.742,17.713
+T8-10 - Assem1SmallRoot-7 smallRoot6-1,3648,1826,True,False,False,False,1,2.8542,2.283,2.902,5.425
+T8-10 - Assem1SmallRoot-8 smallRoot-1,4686,2345,True,False,False,False,1,1.8073,3.11,4.0,3.161
+T8-10 - Assem1SmallRoot-8 smallRoot1-1,3072,1538,True,False,False,False,1,11.8333,3.189,8.349,22.363
+T8-10 - Assem1SmallRoot-8 smallRoot2-1,3160,1582,True,False,False,False,1,10.8281,3.099,7.739,19.522
+T8-10 - Assem1SmallRoot-8 smallRoot3-1,2834,1419,True,False,False,False,1,6.7396,2.547,5.372,11.967
+T8-10 - Assem1SmallRoot-8 smallRoot4-1,4420,2212,True,False,False,False,1,5.7656,2.716,5.077,9.598
+T8-10 - Assem1SmallRoot-8 smallRoot5-1,3236,1620,True,False,False,False,1,9.0521,2.951,7.004,16.997
+T8-10 - Assem1SmallRoot-8 smallRoot6-1,3648,1826,True,False,False,False,1,2.9479,2.335,3.613,5.059
+T8-10 - T_disk_10_11x-1,6512,3258,True,False,False,False,1,6675.4453,42.489,28.262,10.605
+T8-10 - T_disk_11_12x-1,6464,3234,True,False,False,False,1,7857.0288,42.489,28.511,14.686
+T8-10 - T_disk_12_Lx-1,6534,3270,False,False,False,False,1,,42.489,28.218,14.325
+T8-10 - T_disk_9_10x-1,6534,3271,False,False,False,False,1,,42.489,28.029,7.727
+T8-10 - Thoracic_aorta-1,2366,1185,True,False,False,False,1,52487.7461,25.0,44.552,116.32
+T8-10 - V1-2,30292,15144,False,False,False,False,1,,76.0,66.348,46.91
+T8-10 - V1-3,30292,15144,False,False,False,False,1,,76.0,66.911,42.364
+T8-10 - V1-4,30292,15143,False,False,False,False,1,,76.0,67.1,40.452
+T8-10 - additional_menginges-2,12420,6212,True,False,False,False,1,1762.2709,25.079,10.185,18.041
+T8-10 - additional_menginges-3,12420,6212,True,False,False,False,1,1761.6641,25.033,10.466,18.226
+T8-10 - additional_menginges-4,12420,6212,True,False,False,False,1,1759.8438,25.235,10.38,17.571
+T8-10 - additional_menginges-5,12420,6212,True,False,False,False,1,1761.224,25.056,10.257,18.128
+T8-10 - additional_menginges-6,12420,6212,True,False,False,False,1,1761.25,25.414,10.429,16.883
+T8-10 - additional_menginges-7,12420,6212,True,False,False,False,1,1761.5443,25.345,10.251,17.119
+T8-10 - additional_menginges-8,12420,6212,True,False,False,False,1,1761.0104,25.462,10.462,16.383
+T8-10 - additional_menginges-9,12420,6212,True,False,False,False,1,1761.526,25.344,10.694,16.872
+T8-10 - connection-6,8000,4002,True,False,False,False,1,281.7005,48.42,44.72,15.801
+T8-10 - connection-7,8000,4002,True,False,False,False,1,281.9857,45.833,44.957,21.973
+T8-10 - connection-8,8000,4002,True,False,False,False,1,281.9779,47.271,43.947,21.134
+T8-10 - connection-9,8000,4002,True,False,False,False,1,281.9134,47.801,43.907,19.927
+T8-10 - connection_R-1,6408,3207,False,False,False,False,1,,20.927,42.115,12.811
+T8-10 - connection_R-2,6408,3207,False,False,False,False,1,,20.927,42.115,12.811
+T8-10 - connection_R-3,6408,3206,True,False,False,False,1,189.3698,20.927,42.115,12.811
+T8-10 - connection_R-4,6408,3208,False,False,False,False,1,,20.927,42.115,12.811
+T8-10 - neuro_0A_blood_bri_a-1,16944,8479,False,False,False,False,3,,18.81,11.885,6.678
+T8-10 - neuro_0A_blood_bri_a-2,16944,8482,False,False,False,False,3,,18.808,12.482,3.634
+T8-10 - neuro_0A_blood_bri_a-3,16944,8480,False,False,False,False,3,,18.808,12.834,3.352
+T8-10 - neuro_0A_blood_bri_a-4,16944,8479,False,False,False,False,3,,18.808,12.745,3.11
+T8-10 - neuro_CSF-1,4276,2138,True,False,False,False,1,8835.6455,15.751,27.619,104.604
+T8-10 - neuro_EpiduralSpace-1,3512,1756,True,False,False,False,1,11295.333,22.242,32.691,105.506
+T8-10 - neuro_GreyMater-1,8354,4179,True,False,False,False,1,996.1198,6.63,21.037,103.445
+T8-10 - neuro_Meninges-1,3560,1780,True,False,False,False,1,2150.7239,16.75,28.59,104.761
+T8-10 - neuro_blood_in_fat-1,16382,8205,True,False,False,False,7,166.3203,18.783,29.824,104.923
+T8-10 - neuro_blood_next_to_WM-1,14196,7110,True,False,False,False,6,142.1094,6.714,23.408,103.873
+T8-10 - neuro_sympathetic_a-1,2696,1350,True,False,False,False,1,46.8073,2.412,4.452,29.024
+T8-10 - neuro_sympathetic_a-2,2696,1350,True,False,False,False,1,46.7344,2.412,7.357,28.587
+T8-10 - neuro_sympathetic_a-3,2696,1350,True,False,False,False,1,46.8151,2.975,8.787,28.213
+T8-10 - neuro_sympathetic_a-4,2696,1350,True,False,False,False,1,46.6654,2.905,9.947,27.965
+T8-10 - neuro_sympathetic_a-5,2696,1350,True,False,False,False,1,46.4062,2.412,10.195,27.863
+T8-10 - neuro_sympathetic_a-6,2696,1350,True,False,False,False,1,46.6302,2.412,7.357,28.587
+T8-10 - neuro_sympathetic_a-7,2696,1350,True,False,False,False,1,46.6198,2.412,5.912,28.84
+T8-10 - neuro_sympathetic_a-8,2696,1350,True,False,False,False,1,47.0417,3.579,4.443,28.998
+T8-10 - neuro_sympathetic_ball-1,3774,1889,True,False,False,False,1,144.7865,4.38,4.571,15.897
+T8-10 - neuro_sympathetic_ball-2,3774,1889,True,False,False,False,1,145.0312,4.38,5.701,15.44
+T8-10 - neuro_sympathetic_ball-3,3774,1889,True,False,False,False,1,145.1771,4.311,6.313,15.224
+T8-10 - neuro_sympathetic_ball-4,3774,1889,True,False,False,False,1,145.1693,4.376,5.89,15.359
+T8-10 - neuro_sympathetic_ball-5,3774,1889,True,False,False,False,1,144.9401,4.359,6.961,14.945
+T8-10 - neuro_sympathetic_ball-6,3774,1889,True,False,False,False,1,144.8802,4.311,5.249,15.657
+T8-10 - neuro_sympathetic_ball-7,3774,1889,True,False,False,False,1,145.1667,4.377,5.314,15.608
+T8-10 - neuro_sympathetic_ball-8,3774,1889,True,False,False,False,1,145.1979,4.376,4.87,15.788
+T8-10 - neuro_sympathetic_c-1,9426,4715,True,False,False,False,1,22.1198,8.754,15.429,11.255
+T8-10 - neuro_sympathetic_c-2,9426,4715,True,False,False,False,1,21.8203,8.754,16.807,8.966
+T8-10 - neuro_sympathetic_c-3,9426,4715,True,False,False,False,1,21.9089,8.754,17.498,7.322
+T8-10 - neuro_sympathetic_c-4,9426,4715,True,False,False,False,1,21.6771,8.754,18.33,4.072
+T8-10 - neuro_sympathetic_c-5,9426,4715,True,False,False,False,1,21.5312,4.463,19.516,5.04
+T8-10 - neuro_sympathetic_c-6,9426,4715,True,False,False,False,1,22.0156,3.433,19.636,5.11
+T8-10 - neuro_sympathetic_c-7,9426,4715,True,False,False,False,1,21.3854,3.38,19.7,4.794
+T8-10 - neuro_sympathetic_c-8,9426,4715,True,False,False,False,1,21.2188,2.313,18.342,9.345
+T8-10 - neuro_sympathetic_d-1,2892,1448,True,False,False,False,1,19.6979,3.777,17.403,8.105
+T8-10 - neuro_sympathetic_d-2,2892,1448,True,False,False,False,1,19.8333,3.777,14.699,12.855
+T8-10 - neuro_sympathetic_d-3,2892,1448,True,False,False,False,1,19.5599,2.957,17.28,8.964
+T8-10 - neuro_sympathetic_d-4,2892,1448,True,False,False,False,1,19.5651,3.777,18.627,2.14
+T8-10 - neuro_sympathetic_d-5,2892,1448,True,False,False,False,1,19.7083,3.777,18.421,3.609
+T8-10 - neuro_sympathetic_d-6,2892,1448,True,False,False,False,1,19.625,3.777,18.421,3.609
+T8-10 - neuro_sympathetic_d-7,2892,1448,True,False,False,False,1,18.1146,3.777,17.949,6.321
+T8-10 - neuro_sympathetic_d-8,2892,1448,True,False,False,False,1,19.5,3.777,17.403,8.105
+T8-10 - neuro_whitemater-1,10770,5385,True,False,False,False,1,2295.4949,8.254,22.813,103.72
+T8-10 - newBloodAorta-1,10162,5083,True,False,False,False,1,32.25,4.893,3.849,32.804
+T8-10 - newBloodAorta-2,10162,5083,True,False,False,False,1,32.0521,4.087,5.455,32.583
+T8-10 - newBloodAortaLonger-1,13800,6902,True,False,False,False,1,39.0443,5.07,5.966,32.0
+T8-10 - newBloodAortaLonger-2,13800,6902,True,False,False,False,1,39.6875,4.518,8.781,31.38
+T8-10 - newBloodAortaLongest-1,15540,7772,True,False,False,False,1,42.4531,6.081,11.85,33.379
+T8-10 - newBloodAortaLongest-2,15540,7772,True,False,False,False,1,41.6667,5.513,13.617,32.904
+T8-10 - smallRoot-1,4686,2345,True,False,False,False,1,0.75,4.742,2.52,2.273
+T8-10 - smallRoot-2,4686,2345,True,False,False,False,1,1.875,5.034,1.705,2.485
+T8-10 - smallRoot-4,4686,2345,True,False,False,False,1,2.2292,4.506,2.398,3.004
+T8-10 - smallRoot6-1,3648,1826,True,False,False,False,1,2.9792,4.911,1.907,4.313
+T8-10 - smallRoot6-2,3648,1826,True,False,False,False,1,2.6146,5.472,1.719,3.459
+T8-10 - smallRoot6-3,3648,1826,True,False,False,False,1,2.3542,5.398,1.814,3.633
+T8-10 - smallRoot6-4,3648,1826,True,False,False,False,1,3.4271,4.785,1.998,4.39
+SCS Lead Electrode 1,1272,638,True,False,False,False,1,1.0885,1.321,1.122,1.188
+SCS Lead Electrode 2,1272,638,True,False,False,False,1,1.1979,1.441,1.193,1.367
+SCS Lead Electrode 3,1272,638,True,False,False,False,1,1.1823,1.418,1.359,1.451
+SCS Lead Electrode 4,1272,638,True,False,False,False,1,1.1562,1.364,1.108,1.249
+SCS Lead Insulator,32582,16293,True,False,False,False,1,11.7865,14.767,2.252,4.453
+T8-10 - AprilRootDGR_right-3 neuro_dorsal _roots_football_csf_coating_l-1,11116,5562,True,False,False,False,2,29.3281,8.163,5.512,5.655

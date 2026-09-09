@@ -1,0 +1,178 @@
+! ============================================================================
+! Test A: small, well-conditioned bipolar SCS electric conduction problem in
+! pure MAPDL (no Mechanical). Purpose: prove the electric solve + PNG output on
+! Pioneer, and exercise the exact BC/material patterns the real model needs:
+!   * SOLID232 (10-node tet, DOF VOLT), free tet mesh
+!   * anisotropic white matter via MP,RSVX/RSVY/RSVZ (cord axis = global Z)
+!   * equipotential contacts via CP coupling, current via F,AMPS at one node
+!   * reference potential D,VOLT,0 on the far boundary
+!   * moderated electrode conductivity (1e4 S/m instead of 4e6) and NO modeled
+!     insulator body -> avoids the 1e11 material contrast that produced the
+!     negative-pivot failure in the 20.8M-node runs (see notes)
+! Units: SI (m, S/m, A, V). Resistivity in ohm*m from Engineering Data.
+! Geometry (all along Z, length L): cord r=4mm (white matter, aniso) inside
+! CSF r=6mm inside epidural/fat tissue r=20mm; a lead of radius 0.625mm at
+! x=+7.5mm (1.5mm outside the CSF) with two 3mm contacts separated by 1mm.
+! ============================================================================
+/BATCH
+/FILNAME,testA
+/TITLE,Test A: coaxial cord model, bipolar +/-1 mA on two contacts
+/PREP7
+ET,1,SOLID232
+
+! --- materials: resistivity = 1/sigma (ohm*m) ------------------------------
+MP,RSVX,1,25.0          ! 1: epidural space / fat  (0.04 S/m)
+MP,RSVX,2,0.5882        ! 2: CSF                   (1.7 S/m)
+MP,RSVX,3,6.9832        ! 3: white matter transverse (0.1432 S/m) ...
+MP,RSVY,3,6.9832
+MP,RSVZ,3,1.6667        !    ... longitudinal along Z (0.6 S/m)
+MP,RSVX,4,1.0e-4        ! 4: contacts, moderated to 1e4 S/m
+
+! --- geometry (meters) -------------------------------------------------------
+L    = 0.040
+RCRD = 0.004
+RCSF = 0.006
+ROUT = 0.020
+XLD  = 0.0075           ! lead axis x-position
+RLD  = 0.000625         ! lead radius (1.25 mm dia)
+CLEN = 0.003            ! contact length
+GAP  = 0.001
+Z1   = 0.5*L - GAP/2 - CLEN     ! contact 1 spans Z1..Z1+CLEN
+Z2   = 0.5*L + GAP/2            ! contact 2 spans Z2..Z2+CLEN
+
+CYL4,0,0,ROUT,,,,L      ! v1 outer tissue
+CYL4,0,0,RCSF,,,,L      ! v2 CSF
+CYL4,0,0,RCRD,,,,L      ! v3 cord
+WPOFFS,XLD,0,Z1
+CYL4,0,0,RLD,,,,CLEN    ! contact 1
+WPOFFS,0,0,CLEN+GAP
+CYL4,0,0,RLD,,,,CLEN    ! contact 2
+WPOFFS,-XLD,0,-(Z1+CLEN+GAP)   ! restore working plane
+VOVLAP,ALL              ! nested cylinders -> non-overlapping, shared boundaries
+NUMMRG,KP               ! merge coincident keypoints/lines/areas
+NUMCMP,ALL
+
+! --- mesh: contacts fine, tissue coarser; free tets --------------------------
+MSHAPE,1,3D
+MSHKEY,0
+SMRTSIZE,3
+! contacts: volumes whose centroid is near the lead axis
+VSEL,S,LOC,X,XLD-RLD,XLD+RLD
+VSEL,R,LOC,Y,-RLD,RLD
+CM,VCONT,VOLU
+ESIZE,0.0003
+VMESH,ALL
+CMSEL,U,VCONT
+ALLSEL,BELOW,VOLU
+VSEL,ALL
+CMSEL,U,VCONT
+ESIZE,0.0012
+VMESH,ALL
+ALLSEL,ALL
+
+! --- assign materials by element location ------------------------------------
+! everything defaults to MAT 1 (outer tissue) at mesh time; override by radius
+CSYS,1                  ! cylindrical about Z: X = radius
+NSEL,S,LOC,X,0,RCRD*1.0001
+ESLN,S,1
+EMODIF,ALL,MAT,3
+CM,CORD,ELEM
+ALLSEL,ALL
+NSEL,S,LOC,X,RCRD*0.9999,RCSF*1.0001
+ESLN,S,1
+CMSEL,U,CORD
+EMODIF,ALL,MAT,2
+CM,CSF,ELEM
+ALLSEL,ALL
+CSYS,0
+! contacts (box select around the lead axis, z-range of each contact)
+NSEL,S,LOC,X,XLD-RLD*1.01,XLD+RLD*1.01
+NSEL,R,LOC,Y,-RLD*1.01,RLD*1.01
+NSEL,R,LOC,Z,Z1-1e-6,Z1+CLEN+1e-6
+ESLN,S,1
+EMODIF,ALL,MAT,4
+CM,CONTACT1,ELEM
+ALLSEL,ALL
+NSEL,S,LOC,X,XLD-RLD*1.01,XLD+RLD*1.01
+NSEL,R,LOC,Y,-RLD*1.01,RLD*1.01
+NSEL,R,LOC,Z,Z2-1e-6,Z2+CLEN+1e-6
+ESLN,S,1
+EMODIF,ALL,MAT,4
+CM,CONTACT2,ELEM
+ALLSEL,ALL
+*GET,NEL,ELEM,0,COUNT
+*GET,NND,NODE,0,COUNT
+CMSEL,S,CONTACT1
+*GET,NC1,ELEM,0,COUNT
+CMSEL,S,CONTACT2
+*GET,NC2,ELEM,0,COUNT
+ALLSEL,ALL
+/COM, ==== MESH: %NND% nodes, %NEL% elements; contact1 %NC1% el, contact2 %NC2% el ====
+FINISH
+
+/SOLU
+ANTYPE,STATIC
+! contact 1: equipotential, +1 mA
+CMSEL,S,CONTACT1
+NSLE,S
+CP,NEXT,VOLT,ALL
+*GET,NA,NODE,0,NUM,MIN
+F,NA,AMPS,1.0e-3
+ALLSEL,ALL
+! contact 2: equipotential, -1 mA
+CMSEL,S,CONTACT2
+NSLE,S
+CP,NEXT,VOLT,ALL
+*GET,NB,NODE,0,NUM,MIN
+F,NB,AMPS,-1.0e-3
+ALLSEL,ALL
+! reference: outer lateral surface at V = 0
+CSYS,1
+NSEL,S,LOC,X,ROUT*0.9995,ROUT*1.0005
+D,ALL,VOLT,0
+CSYS,0
+ALLSEL,ALL
+OUTRES,ALL,LAST
+SOLVE
+FINISH
+
+/POST1
+SET,LAST
+*GET,VMAX,NODE,0,MXV,VOLT   ! placeholder; robust extraction via NSORT below
+NSORT,VOLT
+*GET,VMX,SORT,0,MAX
+*GET,VMN,SORT,0,MIN
+/COM, ==== VOLT range: min %VMN% V, max %VMX% V ====
+! contact potentials
+CMSEL,S,CONTACT1
+NSLE,S
+*GET,VC1,NODE,NA,VOLT
+CMSEL,S,CONTACT2
+NSLE,S
+*GET,VC2,NODE,NB,VOLT
+ALLSEL,ALL
+/COM, ==== contact1 V=%VC1%  contact2 V=%VC2%  bipolar |dV|=%VC1-VC2% ====
+! figures (PNG driver works in batch; files testA000.png, testA001.png ...)
+/SHOW,PNG
+/GFILE,900
+/VIEW,1,1,1,1
+/AUTO,1
+/EDGE,1,0
+PLNSOL,VOLT
+! section through the lead axis: XZ plane at y=0
+/VIEW,1,0,-1,0
+WPROTA,,-90
+/CPLANE,1
+/TYPE,1,5
+PLNSOL,VOLT
+/SHOW,CLOSE
+! nodal voltages along the cord axis for a 1-D spread profile
+CSYS,1
+NSEL,S,LOC,X,0,0.0004
+CSYS,0
+/OUTPUT,testA_cord_axis_volt,txt
+PRNSOL,VOLT
+/OUTPUT
+ALLSEL,ALL
+FINISH
+/EXIT,NOSAVE

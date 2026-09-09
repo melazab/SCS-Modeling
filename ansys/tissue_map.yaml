@@ -1,0 +1,125 @@
+# Filename-pattern -> tissue mapping for the NBF_RADO-SCS STL set (STL_files/).
+#
+# Purpose: drive Ansys Mechanical name selections (one per tissue class) and
+# material assignment. Patterns are case-insensitive substrings/globs matched
+# against the STL filename (without extension). First match wins, top to bottom,
+# so the more specific patterns come first.
+#
+# Material values come from Mohamed's Ansys Engineering Data export on Pioneer:
+#   ~/Documents/SCS-Modeling/ANSYS/SCS_Modeling_files/SCS_Modeling_engineering_data_all.xml
+# (identical values in SCS-Model/SCS_model_engineering_data.xml). They are stored
+# there as electrical RESISTIVITY in ohm*m at 37 C; sigma = 1/rho is derived here.
+# `ed_material` is the exact Engineering Data material name to assign in Mechanical.
+#
+# NOTE: white matter is ISOTROPIC in Engineering Data (0.1432 S/m = the paper's
+# transverse value). The paper's anisotropic white matter (0.1432 transverse /
+# 0.6 longitudinal S/m) can't be entered in the Mechanical Electric GUI; it needs
+# an APDL command snippet (MP,RSVX/RSVY/RSVZ) or PyMAPDL. See
+# mapdl_electric_solve_template.dat. Cord axis is global Z in this STL set.
+
+tissues:
+  - name: electrode_contact
+    ed_material: "Metal Electrode"
+    patterns: ["SCS Lead Electrode *"]
+    rho_ohm_m: 2.5e-7
+    sigma_S_per_m: 4.0e6
+    note: "4 contacts. Bipolar test uses two of these as +/-1 mA source/sink."
+
+  - name: lead_insulation
+    ed_material: "Lead Insulation"
+    patterns: ["SCS Lead Insulator"]
+    rho_ohm_m: 50000
+    sigma_S_per_m: 2.0e-5
+
+  - name: vertebra
+    ed_material: "Vertebra"
+    patterns: ["V1-2", "V1-3", "V1-4"]
+    rho_ohm_m: 25
+    sigma_S_per_m: 0.04
+
+  - name: intervertebral_disc
+    ed_material: "Intervertebral Disc"
+    patterns: ["T_disk_*"]
+    rho_ohm_m: 1.6667
+    sigma_S_per_m: 0.6
+
+  - name: white_matter
+    ed_material: "White Matter"
+    patterns: ["neuro_whitemater"]
+    rho_ohm_m: 6.9832
+    sigma_S_per_m: 0.1432
+    paper_anisotropic_S_per_m: [0.1432, 0.6]   # transverse, longitudinal (needs APDL)
+
+  - name: grey_matter
+    ed_material: "Gray Matter"
+    patterns: ["neuro_GreyMater"]
+    rho_ohm_m: 3.6232
+    sigma_S_per_m: 0.276
+
+  - name: csf
+    ed_material: "CSF"
+    patterns: ["neuro_CSF", "*csf_coating*"]
+    rho_ohm_m: 0.5882
+    sigma_S_per_m: 1.7
+
+  - name: meninges_dura
+    ed_material: "Dura Mater"
+    patterns: ["neuro_Meninges", "additional_menginges*", "*menging_coating*", "*Menging*", "*Menginges*"]
+    rho_ohm_m: 27.027
+    sigma_S_per_m: 0.037
+
+  - name: epidural_space
+    ed_material: "Epidural Space"
+    patterns: ["neuro_EpiduralSpace"]
+    rho_ohm_m: 25
+    sigma_S_per_m: 0.04
+
+  - name: blood_vessel
+    ed_material: "Vasculature"
+    patterns:
+      - "neuro_blood_in_fat"
+      - "neuro_blood_next_to_WM"
+      - "neuro_0A_blood_bri_a*"
+      - "April4Blood_in_Fat_bri*"
+      - "AprilDorsalRootsBloodParallel_*"
+      - "newBloodAorta*"
+      - "Thoracic_aorta"
+    rho_ohm_m: 1.5152
+    sigma_S_per_m: 0.66
+
+  - name: dorsal_root_ganglion
+    ed_material: "DRG"
+    patterns: ["*roots_football_in_middle*"]
+    rho_ohm_m: 6.9832
+    sigma_S_per_m: 0.1432
+    note: "The DRG 'football' core. Its csf_coating/menging_coating shells match CSF/dura above."
+
+  - name: nerve_root
+    ed_material: "Nerve Root"
+    patterns:
+      - "AprilRootMainRoot*"
+      - "AprilRootBranchRoot*"
+      - "Assem1SmallRoot*"
+      - "smallRoot*"
+      - "connection*"           # per Mohamed: 'connection' bodies are neural tissue, NOT hardware
+    rho_ohm_m: 6.9832
+    sigma_S_per_m: 0.1432
+
+  - name: sympathetic_chain
+    ed_material: "Sympathetic Chain"
+    patterns: ["neuro_sympathetic_a-*", "neuro_sympathetic_c-*", "neuro_sympathetic_d-*", "neuro_sympathetic_ball-*"]
+    rho_ohm_m: 6.9832
+    sigma_S_per_m: 0.1432
+    note: "Engineering Data has one 'Sympathetic Chain' material; the _ball bodies (ganglia) get it too."
+
+  # Present in Engineering Data but with no body in this STL set (the thorax /
+  # soft-tissue envelope isn't included in RADO's STL export):
+  - name: soft_tissue
+    ed_material: "Soft Tissue"
+    patterns: []
+    rho_ohm_m: 250
+    sigma_S_per_m: 0.004
+    note: "Candidate outer boundary body if an envelope is added later (also the natural place to pin V=0)."
+
+# Anything not matched above should be reported, not silently defaulted.
+unmatched_policy: error
