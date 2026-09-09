@@ -50,9 +50,13 @@ echo "=== $(date) on $(hostname); work=$WORK; ranks=$NRANK ==="
 df -h "$WORK" | tail -1; free -g | head -2
 
 # NOTE the '\n' below are sed replacement escapes, NOT shell newlines. Passing a
-# real newline inside the -e expression is what produced
-# "sed: -e expression #5, char 26: unterminated `s' command" last time.
-INJECT='eqslv,sparse\nbcsoption,,outofcore\n/config,noeldb,1'
+# real newline inside the -e expression produced
+# "sed: -e expression #5, char 26: unterminated `s' command".
+# And do NOT put a '/' in here: the s/// delimiter is '/', so an injected
+# "/config,noeldb,1" ends the replacement early and sed reports
+# "unknown option to `s'". (/config,noeldb,1 is already set at the top of the
+# deck anyway.)
+INJECT='eqslv,sparse\nbcsoption,,outofcore'
 
 echo "--- patching deck ---"
 time sed -e 's/\r$//' \
