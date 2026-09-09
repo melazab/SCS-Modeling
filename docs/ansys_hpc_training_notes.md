@@ -265,8 +265,116 @@ of ~1e16 once assembled. The recondition run changes only those two lines
 `/fclean` so the `.rst` survives. Everything else — mesh, BCs, currents — is
 byte-identical to what Mohamed already built.
 
+## Headless Mechanical scripting: the traps, in order
+
+Mechanical *does* run headless on Pioneer — no X, no `xvfb-run`, no OnDemand
+Desktop:
+
+```
+/usr/local/ansys_inc/v251/aisol/.workbench -DSApplet -AppModeMech -b -script /abs/path/script.py
+```
+
+Five traps cost an iteration each. In order of how much time they waste:
+
+1. **The scripting engine is IronPython 2.7.4 on Mono, not CPython 3.** Any
+   py3-only syntax is a *compile* error, and the process then produces
+   **zero output and exit code 0** — indistinguishable from "ran and printed
+   nothing". If a script prints nothing at all, suspect syntax before logic.
+   (Ansys does ship CPython 3.10 at
+   `commonfiles/CPython/3_10/linx64/Release/python`, but that is not what
+   `-script` uses.)
+2. `ExtAPI.DataModel.Project.Messages` does not exist. Messages live at
+   **`ExtAPI.Application.Messages`** (`.Count`, then `[i].Severity` /
+   `[i].DisplayString`). Without them, mesh failures are completely silent.
+3. `Project.Save` is deprecated in 2025 R1 → use `Project.SaveAs(path, True)`.
+4. `Ansys.Mechanical.DataModel.Enums.MethodType` has **no `Tetrahedrons`** —
+   the tet value is **`AllTriAllTet`**. And the patch-independent switch is NOT
+   on `AlgorithmType` (that enum is CMFD/MFD/ProgramControlled/SCPIP —
+   optimisation algorithms); it is
+   **`MeshMethodAlgorithm.PatchIndependent`**.
+5. The sizing properties on `AutomaticMethod` are **not** `ElementSize` /
+   `MaxElementSize` / `MinElementSize` (all `AttributeError`). The real names,
+   found by dumping the object's 377-entry `Properties` collection, are
+   **`MaximumElementSize`**, `MinimumSizeLimit`, `DefeaturingTolerance`,
+   `CurvatureNormalAngle`, `FeatureAngle`, `MeshBasedDefeaturing`,
+   `ApproximativeNumberOfElementsPerPart`. `MaximumElementSize` defaults to
+   `0 [m]`, which is the "required input not defined" the mesher complains
+   about.
+
+**Why the default mesher fails on these STLs.** The import produces a genuine
+solid (`BodyType = GeoBodySolid`, `Volume = 8835.85 mm³`,
+`Area = 6711.95 mm²`) but with **`faces=1, edges=0, vertices=0`** — a
+tessellated body with no feature topology. The default patch-*conforming*
+mesher has to respect every face patch and simply reports
+`The mesh generation did not complete. Try meshing with another mesh method`.
+Patch-independent tets ignore the patch structure and mesh the enclosed volume,
+which is the standard remedy for faceted geometry — and is what Mohamed
+suggested at the outset.
+
+Working recipe (see `ansys/testM7_patchindep_sized/mech_pi_sized.py`):
+
+```python
+meth = model.Mesh.AddAutomaticMethod()
+meth.Location  = sel                                   # GeometryEntities selection of body ids
+meth.Method    = E.MethodType.AllTriAllTet
+meth.Algorithm = E.MeshMethodAlgorithm.PatchIndependent
+meth.MaximumElementSize   = Quantity("2 [mm]")         # REQUIRED, defaults to 0
+meth.MinimumSizeLimit     = Quantity("0.4 [mm]")
+meth.DefeaturingTolerance = Quantity("0.05 [mm]")
+model.Mesh.GenerateMesh()
+```
+
 ## What worked
+
+- Headless Mechanical on a compute node: import STL → solid body → save
+  `.mechdat`, entirely batch, no display.
+- MAPDL electric conduction end to end on the **Test A** validation model:
+  390,181 nodes / 284,520 elements, sparse solver, `RUN COMPLETED`, exit 0.
+  Voltage range **−1.0366 V … +1.0380 V** for ±1 mA — symmetric, as a bipolar
+  pair should be. The figure shows the expected dipole and, satisfyingly, the
+  CSF column (σ = 1.7 S/m) visibly shunting the field, which is the effect the
+  RADO paper stresses.
+- The MAPDL patterns the real model needs, all validated in Test A: `SOLID232`,
+  anisotropic white matter via `MP,RSVX/RSVY/RSVZ`, equipotential contacts via
+  `CP,NEXT,VOLT,ALL`, current injection with `F,node,AMPS`, reference potential
+  with `D,ALL,VOLT,0`, and a `*VGET`/`*VWRITE` slab export to CSV.
+- Plotting outside Ansys: `ansys/plot_voltage_slice.py` renders the CSV with
+  matplotlib (`matplotlib.tri`, since **scipy is not installed** on the laptop).
+  Far better than MAPDL's renderer, and reusable for the full model.
 
 ## What did not work
 
+- `ansys251 -b -np N` (with or without N=1) — see the launch table above; use
+  `-smp` or `-dis -mpi intelmpi`.
+- `*GET,par,NODE,0,MXV,VOLT` is not valid ("Unknown label in field 5") and it
+  aborts the remainder of /POST1 in batch, silently costing you every plot after
+  it. Use `NSORT,VOLT` + `*GET,par,SORT,0,MAX|MIN`.
+- MAPDL's own `/SHOW,PNG` + `/CPLANE` section plot produced a uniform green
+  outer-cylinder view — technically a plot, practically useless. Export
+  coordinates+VOLT and plot externally instead.
+- FreeCAD's `Mesh.difference()` is a **complete no-op** in this build
+  (subtracting a 15 mm sphere centred on the epidural-space centroid changed
+  neither volume nor facet count), so the "boolean-subtract the lead from the
+  epidural space" idea cannot be done with FreeCAD mesh booleans. It would need
+  BREP/OCCT conversion or an external library.
+- `quota -s` on Pioneer errors out with NFS permission failures.
+
 ## Open questions for Mohamed
+
+1. **Is reconditioning the materials acceptable physically?** I changed only the
+   metal contacts (2.5e-7 → 1e-2 Ω·m) and lead insulation (5e4 → 1e3 Ω·m) to
+   kill the 2e11 contrast. The contacts are equipotential by constraint
+   equation regardless, and 1e3 Ω·m is still ~37× dura, so I believe current
+   flow is essentially unchanged — but you should sanity-check the resulting
+   contact voltages against your expectations before trusting any numbers.
+2. **Anisotropic white matter.** Engineering Data has white matter isotropic at
+   0.1432 S/m; the paper uses 0.1432 transverse / 0.6 longitudinal. The deck
+   therefore solves the isotropic case. Adding anisotropy needs an APDL snippet
+   (`MP,RSVZ`) and depends on the cord axis being global Z — worth confirming
+   for the real geometry.
+3. **Which two contacts** should be the bipolar pair for the dorsal-vs-ventral
+   sweeps? The existing deck uses nodes 786 and 3149; I don't yet know which
+   physical contacts those correspond to.
+4. The 16 non-watertight STL bodies (all three vertebrae among them) — how did
+   the Windows Workbench import heal them? That matters for re-meshing from
+   scratch when the lead moves.
