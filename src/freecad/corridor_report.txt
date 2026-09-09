@@ -61,4 +61,4 @@ ventral: centreline y(z) deg 3, rms 0.021 mm, max 0.058 mm
    fat thickness min 1.67 mm, median 1.72 mm
    widest lead that fits: 1.67 mm
 
-wrote ansys/epidural_corridor.json
+wrote src/freecad/epidural_corridor.json

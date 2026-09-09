@@ -112,7 +112,7 @@ def components(names, boxes, pts, tol):
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stl-dir", default=os.path.join(here, "..", "STL_files"))
+    ap.add_argument("--stl-dir", default=os.path.join(here, "..", "..", "STL_files"))
     ap.add_argument("--tol", type=float, default=0.3, help="contact gap, mm")
     ap.add_argument("--points", type=int, default=1500, help="vertices sampled per body")
     ap.add_argument("--sweep", action="store_true", help="try a range of tolerances")

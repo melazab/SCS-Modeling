@@ -8,15 +8,15 @@ NBF_RADO-SCS/
 CLAUDE.md
 
 # Raw MAPDL slice exports are large and regenerable from the .rst on Pioneer
-ansys/**/results/*_slice.csv
+src/ansys/**/results/*_slice.csv
 
-# Pre-label snapshot of the FreeCAD document taken by ansys/apply_labels.py
+# Pre-label snapshot of the FreeCAD document taken by src/freecad/apply_labels.py
 # before it rewrites any Label (25 MB, and the .FCStd itself is tracked)
 *.prelabel*.bak
 
-# Regenerable run report from ansys/apply_labels.py
-ansys/apply_labels_report.txt
+# Regenerable run report from src/freecad/apply_labels.py
+src/freecad/apply_labels_report.txt
 
-# Python bytecode from the ansys/ helper scripts
+# Python bytecode from the src/ansys/ helper scripts
 __pycache__/
 *.pyc

@@ -1,0 +1,47 @@
+# Dependencies for src/freecad/ -- geometry-side scripts that read the STL set
+# and the NBF_RADO-SCS FreeCAD document.
+#
+# HOW THESE SCRIPTS RUN
+# ---------------------
+# Two different interpreters are involved, and which one you need depends on the
+# script:
+#
+#   needs FreeCAD  ->  run with `freecadcmd <script>` (headless FreeCAD)
+#       apply_labels.py      apply_colors.py
+#       make_scs_lead.py     measure_corridor.py
+#
+#   plain python   ->  run with `python3 <script>`
+#       check_laterality.py  find_floating_bodies.py
+#
+# FreeCAD is NOT installable from this file. `pip install freecad` does not give
+# you the application. Install it one of these ways, then `freecadcmd` is on PATH:
+#
+#   conda install -c conda-forge freecad     # easiest, gives a usable freecadcmd
+#   apt install freecad                      # Debian/Ubuntu, may lag upstream
+#   flatpak / AppImage / build from source   # see wiki.freecad.org
+#
+# Developed against FreeCAD 26.3.0 (built from source) on Python 3.14.4. FreeCAD
+# 1.0 or newer should work; older releases predate the ShapeAppearance API that
+# apply_colors.py uses and will need the ShapeColor fallback path.
+#
+# If your FreeCAD bundles its own Python (conda and AppImage builds do), install
+# the packages below into THAT interpreter, not your system one:
+#
+#   freecadcmd -c "import subprocess,sys; subprocess.run([sys.executable,'-m','pip','install','-r','requirements.txt'])"
+#
+# On this machine freecadcmd shares the system site-packages, so a plain
+# `pip install -r requirements.txt` covers both.
+
+# Vertex arrays and the proximity graph in find_floating_bodies.py, and the
+# laterality statistics in check_laterality.py. FreeCAD bundles numpy already,
+# so this only matters for the plain-python scripts.
+numpy>=1.20
+
+# DELIBERATELY NOT REQUIRED
+# -------------------------
+# PyYAML: body_aliases.yaml and ../ansys/tissue_map.yaml are read by a small
+#   hand-rolled parser instead, so these scripts run on a bare interpreter with
+#   nothing installed. Do not "simplify" that by importing yaml.
+# scipy: measure_corridor.py fits its centreline polynomials with its own
+#   Gaussian elimination for the same reason -- and because scripts run under
+#   freecadcmd cannot rely on scipy being present.

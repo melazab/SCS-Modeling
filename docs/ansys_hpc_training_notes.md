@@ -5,7 +5,7 @@
 **What you have now**
 
 - A **working, validated MAPDL bipolar-stimulation pipeline**, proven end to end
-  on a small model (`ansys/testA_mapdl_cylinder/`): 390k nodes, ±1 mA on two
+  on a small model (`src/ansys/testA_mapdl_cylinder/`): 390k nodes, ±1 mA on two
   contacts, solves clean, **V ∈ [−1.0366, +1.0380] V**, and the figure
   (`results/testA_voltage_slice.png`) shows the dipole with the CSF column
   visibly shunting the field. Every MAPDL construct the real model needs is
@@ -15,16 +15,16 @@
   a meshing problem. Details below; the short version is three separate causes,
   two of which I fixed and one of which is an institutional resource limit.
 - **Headless Mechanical working on Pioneer**, with the patch-independent
-  meshing recipe for faceted STL bodies worked out (`ansys/testM7_*`). This is
+  meshing recipe for faceted STL bodies worked out (`src/ansys/testM7_*`). This is
   what you will need to re-mesh when the lead moves.
-- Supporting tooling: `ansys/tissue_map.yaml` (all 245 bodies → Engineering Data
-  materials, validated by `ansys/check_tissue_map.py`), `ansys/plot_voltage_slice.py`,
+- Supporting tooling: `src/ansys/tissue_map.yaml` (all 245 bodies → Engineering Data
+  materials, validated by `src/ansys/check_tissue_map.py`), `src/ansys/plot_voltage_slice.py`,
   and sbatch scripts for each run.
 
 - **A converged solve on the real RADO anatomy** (truncated sub-model, job
   3796854): `DISTRIBUTED PCG SOLVER SOLUTION CONVERGED, NUMBER OF ITERATIONS =
   93`, 1,701,330 nodes / 1,128,810 elements, V ∈ [−0.0673, +0.1872] V for
-  ±1 mA. Figure: `ansys/bigdeck_truncated/results/rado_voltage_slice.png`.
+  ±1 mA. Figure: `src/ansys/bigdeck_truncated/results/rado_voltage_slice.png`.
   **Read the caveats on this one before believing the numbers** — see
   "The truncated sub-model result" below. It demonstrates the pipeline runs on
   your real geometry; it is not yet a publication-grade field.
@@ -154,9 +154,9 @@ the deck to `$PFSDIR` (parallel scratch) and copying `*.rst *.out` back.
 | Nerve Root / DRG / Sympathetic Chain | 6.9832 | 0.1432 |
 | Soft Tissue         | 250      | 0.004   |
 
-Full pattern→material mapping: `ansys/tissue_map.yaml`.
+Full pattern→material mapping: `src/ansys/tissue_map.yaml`.
 
-## STL geometry audit (FreeCAD, headless `freecadcmd`; script in session scratch, CSV in `ansys/stl_mesh_quality_audit.csv`)
+## STL geometry audit (FreeCAD, headless `freecadcmd`; script in session scratch, CSV in `src/freecad/stl_mesh_quality_audit.csv`)
 
 245 bodies, 1,771,980 facets total. No non-manifold edges, no inconsistent facet
 orientation. But:
@@ -259,14 +259,14 @@ execution — check line numbers, or grep for the substituted values).
 
 *(chronological; keep the failures — they're the useful part)*
 
-- **Test A** (`ansys/testA_mapdl_cylinder/`): pure MAPDL, coaxial cord/CSF/fat
+- **Test A** (`src/ansys/testA_mapdl_cylinder/`): pure MAPDL, coaxial cord/CSF/fat
   cylinders + two 3 mm contacts (1 mm gap), SOLID232, anisotropic white matter
   via `MP,RSVZ`, CP-coupled contacts, ±1 mA, V=0 on the outer surface, moderated
   metal conductivity, no insulator body.
   - job 3796629 (`-np 4`): FAILED, MPI rank killed (see table above).
   - job 3796666 (`-np 1`): FAILED, MPI bootstrap + SLURM env conflict.
   - job 3796672 (`-smp`, env unset): *(pending)*
-- **Test M** (`ansys/testM_mechanical_smoke/`, job 3796630): **headless
+- **Test M** (`src/ansys/testM_mechanical_smoke/`, job 3796630): **headless
   Mechanical works.** `/usr/local/ansys_inc/v251/aisol/.workbench -DSApplet
   -AppModeMech -b -script foo.py` exited 0 without needing X or `xvfb-run`.
   It reported `ProductVersion 2025 R1`, imported
@@ -274,11 +274,11 @@ execution — check line numbers, or grep for the substituted values).
   and saved a 6 MB `.mechdat`. **But `GenerateMesh()` produced 0 nodes /
   0 elements** — investigated in Test M2. Note `Project.Save` is deprecated in
   2025 R1; use `SaveAs(path, True)`.
-- **Test M2** (`ansys/testM2_mechanical_mesh/`, job 3796670): dumps body
+- **Test M2** (`src/ansys/testM2_mechanical_mesh/`, job 3796670): dumps body
   type/dimension/volume and the Mechanical message log, then adds an explicit
   `MethodType.Tetrahedrons` + `AlgorithmType.PatchIndependent` method scoped to
   the imported bodies. Result: *(pending)*
-- **Big deck recondition** (`ansys/bigdeck_recondition/`, job 3796667): re-run of
+- **Big deck recondition** (`src/ansys/bigdeck_recondition/`, job 3796667): re-run of
   Mohamed's existing 20.8 M-node deck with **only two material lines changed**.
   Rationale below. Result: *(pending)*
 
@@ -368,7 +368,7 @@ Patch-independent tets ignore the patch structure and mesh the enclosed volume,
 which is the standard remedy for faceted geometry — and is what Mohamed
 suggested at the outset.
 
-Working recipe (see `ansys/testM7_patchindep_sized/mech_pi_sized.py`):
+Working recipe (see `src/ansys/testM7_patchindep_sized/mech_pi_sized.py`):
 
 ```python
 meth = model.Mesh.AddAutomaticMethod()
@@ -395,7 +395,7 @@ model.Mesh.GenerateMesh()
   anisotropic white matter via `MP,RSVX/RSVY/RSVZ`, equipotential contacts via
   `CP,NEXT,VOLT,ALL`, current injection with `F,node,AMPS`, reference potential
   with `D,ALL,VOLT,0`, and a `*VGET`/`*VWRITE` slab export to CSV.
-- Plotting outside Ansys: `ansys/plot_voltage_slice.py` renders the CSV with
+- Plotting outside Ansys: `src/ansys/plot_voltage_slice.py` renders the CSV with
   matplotlib (`matplotlib.tri`, since **scipy is not installed** on the laptop).
   Far better than MAPDL's renderer, and reusable for the full model.
 
@@ -435,7 +435,7 @@ model.Mesh.GenerateMesh()
 4. The 16 non-watertight STL bodies (all three vertebrae among them) — how did
    the Windows Workbench import heal them? That matters for re-meshing from
    scratch when the lead moves.
-5. **Are the root "Middle" layers nerve or CSF?** `ansys/check_tissue_map.py`
+5. **Are the root "Middle" layers nerve or CSF?** `src/ansys/check_tissue_map.py`
    maps all 245 bodies with no leftovers, but the root bundles come in
    Inside / Middle / OutsideMeninges layers, mirroring the DRG's
    `in_middle` / `csf_coating` / `menging_coating`. If that analogy holds, the
@@ -481,8 +481,8 @@ carve space. Verified end-to-end: 100% of sampled vertices of a generated
 dorsal centreline runs y ≈ 79.8 at z = 89 to y ≈ 87.5 at z = 132 — a 7.7 mm
 rise, about 10°, over the length of an 8-contact lead. A straight lead at fixed
 y walks out through the dura, which is presumably why RADO's own lead is curved.
-`ansys/measure_corridor.py` fits that centreline (cubic, 0.018 mm RMS) into
-`ansys/epidural_corridor.json`, and `ansys/make_scs_lead.py` sweeps the lead
+`src/freecad/measure_corridor.py` fits that centreline (cubic, 0.018 mm RMS) into
+`src/freecad/epidural_corridor.json`, and `src/freecad/make_scs_lead.py` sweeps the lead
 along it.
 
 For reference, RADO's own lead sits 11–25 mm **left** of midline at z = 93–97,
@@ -536,7 +536,7 @@ With memory ruled out (331 GB used, no OOM) the remaining error is explicit:
 *"There is at least 1 small equation solver pivot term ... Please check for an
 insufficiently constrained model"* — an electrically isolated region.
 
-`ansys/find_floating_bodies.py` settles which ones, without needing the cluster:
+`src/freecad/find_floating_bodies.py` settles which ones, without needing the cluster:
 it parses the 245 STLs, builds a proximity graph over their surfaces, and finds
 the connected components as a function of contact gap.
 
@@ -563,7 +563,7 @@ rmod,cid,6,0.       ! PINB
 rmod,tid,6,0.       ! PINB
 ```
 
-`ansys/bigdeck_pinball/run_pinball.sbatch` sets it to an absolute 500 µm
+`src/ansys/bigdeck_pinball/run_pinball.sbatch` sets it to an absolute 500 µm
 (negative PINB = absolute distance; the deck is in µm) and changes **nothing
 else** — it asserts the materials are still `2.5e-13` / `0.05` and aborts if
 not. Widening pinball cannot short unrelated structures: it only lets an
@@ -617,7 +617,7 @@ to those 61,742 nodes is constrained.
 Ways forward, roughly in order of effort:
 
 1. **Direct solver, forced out-of-core** (`bcsoption,,outofcore`) —
-   `ansys/bigdeck_recondition/run_bigdeck2.sbatch`. A direct factorisation can
+   `src/ansys/bigdeck_recondition/run_bigdeck2.sbatch`. A direct factorisation can
    be regularised where an iterative solver cannot: with the contrast fixed,
    islands give *zero* pivots, which MAPDL constrains with a warning instead of
    aborting. Fits 140 GB by streaming to /scratch (52 TB free).

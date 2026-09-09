@@ -1,10 +1,10 @@
 """Measure the dorsal and ventral epidural corridors by ray casting.
 
 Run with FreeCAD (stdout is swallowed by freecadcmd, so results also go to a
-report file and to ansys/epidural_corridor.json):
+report file and to src/freecad/epidural_corridor.json):
 
-    freecadcmd ansys/measure_corridor.py
-    MEASURE_CORRIDOR_ARGS="--step 2" freecadcmd ansys/measure_corridor.py
+    freecadcmd src/freecad/measure_corridor.py
+    MEASURE_CORRIDOR_ARGS="--step 2" freecadcmd src/freecad/measure_corridor.py
 
 Why ray casting and not surface arithmetic
 ------------------------------------------
@@ -29,9 +29,9 @@ the two -- and means a 1.3 mm clinical lead fits on either side.
 The canal also migrates posteriorly with height (kyphosis): the dorsal centre
 runs y ~= 81.3 at z = 95 to y ~= 88.4 at z = 145, about 7 mm over the length of
 an 8-contact lead. A lead has to follow that, which is why RADO's own lead is
-curved. The fitted polynomials here are what ansys/make_scs_lead.py sweeps along.
+curved. The fitted polynomials here are what src/freecad/make_scs_lead.py sweeps along.
 
-Frame (see ansys/check_laterality.py): +X anatomical left, midline x = 56.60;
+Frame (see src/freecad/check_laterality.py): +X anatomical left, midline x = 56.60;
 +Y posterior/dorsal; +Z rostral. Millimetres throughout.
 """
 import json
@@ -44,7 +44,7 @@ import Mesh
 
 MIDLINE_X = 56.60
 HERE = os.path.dirname(os.path.abspath(__file__))
-STL_DIR = os.path.join(HERE, "..", "STL_files")
+STL_DIR = os.path.join(HERE, "..", "..", "STL_files")
 
 
 def polyfit(xs, ys, deg):
@@ -148,7 +148,7 @@ def main():
                   "   widest lead that fits: %.2f mm" % s["thickness_min_mm"]]
 
     json.dump(out, open(os.path.join(HERE, "epidural_corridor.json"), "w"), indent=2)
-    lines += ["", "wrote ansys/epidural_corridor.json"]
+    lines += ["", "wrote src/freecad/epidural_corridor.json"]
     open(os.path.join(HERE, "corridor_report.txt"), "w").write("\n".join(lines) + "\n")
     sys.stdout.write("\n".join(lines) + "\n")
 
