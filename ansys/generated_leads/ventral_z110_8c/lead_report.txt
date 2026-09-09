@@ -1,0 +1,18 @@
+SCS lead: ventral, 8 contacts x 3.00 mm, 1.00 mm gaps, 1.30 mm dia
+swept along the measured ventral centreline; x = 56.60, z 88.93..131.93 (centre 110.43)
+channel thickness there: min 1.67 mm, median 1.72 mm
+
+centreline y: 66.95 at the caudal end -> 74.90 at the rostral end (7.96 mm rise, 10.5 deg)
+
+wrote 9 files to /home/mohamed/Projects/SCS-Modeling/ansys/generated_leads/ventral_z110_8c
+   SCS Lead Electrode 1.stl       z0   94.93  len   3.00  y  68.45
+   SCS Lead Electrode 2.stl       z0   98.93  len   3.00  y  69.38
+   SCS Lead Electrode 3.stl       z0  102.93  len   3.00  y  70.26
+   SCS Lead Electrode 4.stl       z0  106.93  len   3.00  y  71.09
+   SCS Lead Electrode 5.stl       z0  110.93  len   3.00  y  71.85
+   SCS Lead Electrode 6.stl       z0  114.93  len   3.00  y  72.57
+   SCS Lead Electrode 7.stl       z0  118.93  len   3.00  y  73.22
+   SCS Lead Electrode 8.stl       z0  122.93  len   3.00  y  73.81
+   SCS Lead Insulator.stl         z0   88.93  len  43.00  y  66.95
+
+contact centres (z, y): (96.4, 68.80), (100.4, 69.72), (104.4, 70.58), (108.4, 71.38), (112.4, 72.13), (116.4, 72.82), (120.4, 73.44), (124.4, 74.01)
