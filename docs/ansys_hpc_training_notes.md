@@ -386,6 +386,68 @@ model.Mesh.GenerateMesh()
    CSF is 1.7 S/m vs nerve 0.1432 S/m — a 12× difference in tissue immediately
    around the electrodes, so this materially changes the answer.
 
+## Revised diagnosis: the model has floating (electrically isolated) regions
+
+The material-contrast theory was right about the *negative* pivot but is not the
+whole story. Running the reconditioned deck with the **PCG** solver (job
+3796753) got through all element matrix formation (CP 2627 s, 18,830,747
+equations) and then:
+
+```
+*** WARNING ***  The PCG solver detects that the out of balance force goes to
+                 infinity. The solution has not converged. Please check for
+                 rigid body motions in your model.
+*** NOTE ***     The PCG solver failed to converge ... automatically switched
+                 to the sparse solver (EQSLV,SPARSE)
+```
+
+"Rigid body motion" is the structural wording; in a conduction problem it means
+a **floating region — a body with no conduction path to the grounded nodes**.
+An iterative solver cannot converge on a singular system, so PCG is the wrong
+tool if islands exist. (MAPDL then auto-switched to the direct solver and the
+process died at once, almost certainly out of memory: 140 GB available here
+versus the ~320 GB the earlier direct runs used.)
+
+**How the bodies are connected.** The 245 bodies are *not* conformally meshed.
+Workbench generated `CONTA174`/`TARGE170` contact pairs, and they are correctly
+configured for this physics:
+
+```
+keyo,cid,1,6      ! Pure Electric contact      <- VOLT DOF, so contacts do conduct
+keyo,cid,12,5     ! bonded always
+keyo,cid,9,1      ! ignore initial gaps/penetration
+```
+
+So conduction across interfaces is intended. But bonded contact only bonds
+within its **pinball radius** — any body whose neighbours are further away than
+that is electrically isolated regardless. With 245 separate STL bodies and
+auto-generated contact, some islands are very plausible. Note also that RADO's
+STL set has **no surrounding soft-tissue/thorax envelope** (`soft_tissue`
+matches zero bodies in `tissue_map.yaml`), so peripheral structures — the
+sympathetic chain, isolated vessel segments — have nothing to conduct into.
+
+There is exactly **one** grounded component in the whole deck,
+`CMBLOCK,_CM9093,NODE,61742` → `d,_CM9093,volt,0.`, so only the region connected
+to those 61,742 nodes is constrained.
+
+Ways forward, roughly in order of effort:
+
+1. **Direct solver, forced out-of-core** (`bcsoption,,outofcore`) —
+   `ansys/bigdeck_recondition/run_bigdeck2.sbatch`. A direct factorisation can
+   be regularised where an iterative solver cannot: with the contrast fixed,
+   islands give *zero* pivots, which MAPDL constrains with a warning instead of
+   aborting. Fits 140 GB by streaming to /scratch (52 TB free).
+2. **Ground each island.** Requires a connectivity analysis to find them.
+3. **Enlarge the contact pinball radius** so near-touching bodies bond
+   (`rmodif` on the contact real constants).
+4. **Solve a connected sub-model** — the concentric core (epidural space, dura,
+   CSF, grey/white matter, contacts) is certainly mutually in contact. Note
+   materials are shared across bodies (14 `MP` definitions for 245 bodies), so
+   `ESEL,S,MAT` selects tissue classes but cannot separate, say, vertebra from
+   epidural space (both 25 Ω·m → MAT 6).
+5. **Add the missing soft-tissue envelope**, which is the physically correct fix
+   and matches the paper's 19-compartment description.
+
 ## The deck has CRLF line endings — end-anchored regexes silently fail
 
 `scs_model_bipolar_current.dat` was written by Workbench on Windows:
