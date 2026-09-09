@@ -94,6 +94,20 @@ tissues:
     sigma_S_per_m: 0.1432
     note: "The DRG 'football' core. Its csf_coating/menging_coating shells match CSF/dura above."
 
+  # ORDER MATTERS: meninges_dura is listed ABOVE nerve_root on purpose. The root
+  # bundles are modelled in layers, and 12 files match both entries, e.g.
+  #   "AprilRootBranchRootL-1 AprilDorsolBranchOutsidMengingL-1"
+  # matches nerve_root (AprilRootBranchRoot*) and meninges_dura (*Menging*).
+  # "OutsidMenging" means the outer meningeal sheath, so meninges_dura winning is
+  # correct. Verify with `python3 check_tissue_map.py`, which reports every
+  # ambiguous name.
+  #
+  # OPEN QUESTION for Mohamed: the roots come in Inside / Middle / OutsideMeninges
+  # layers, mirroring the DRG's in_middle / csf_coating / menging_coating triple.
+  # If that analogy holds, the "...Middle..." bodies are probably CSF, not nerve.
+  # They are currently assigned Nerve Root. This changes the physics (CSF is
+  # 1.7 S/m vs nerve 0.1432 S/m -- a 12x difference right next to the electrodes),
+  # so it should be settled before any production sweep.
   - name: nerve_root
     ed_material: "Nerve Root"
     patterns:
