@@ -101,6 +101,20 @@ tissues:
       - "AprilDorsalRootsBloodParallel_*"
       - "newBloodAorta*"
       - "Thoracic_aorta"
+      # The 8 "connection" bodies are the RADICULAR ARTERIES -- segmental
+      # branches running from the aorta out to the nerve roots. Measured: every
+      # one sits within 0.3 mm of an aorta body, and most bridge directly from
+      # an aorta to a root, e.g. connection-7 is 0.026 mm from
+      # newBloodAortaLonger-1 and 0.014 mm from AprilRootMainRootL-1.
+      #
+      # They were briefly classed as nerve_root on the strength of the name.
+      # That was wrong, and it was not only a colour error: it put sigma at
+      # 0.1432 instead of 0.66 S/m, a 4.6x difference in bodies that sit right
+      # beside the electrodes. They are also the chain that
+      # src/freecad/find_floating_bodies.py keeps reporting as an electrically
+      # isolated island -- consistent with a vessel network that merely abuts
+      # what it feeds.
+      - "connection*"
     rho_ohm_m: 1.5152
     sigma_S_per_m: 0.66
 
@@ -134,7 +148,6 @@ tissues:
       - "AprilRootBranchRoot*"
       - "Assem1SmallRoot*"
       - "smallRoot*"
-      - "connection*"           # per Mohamed: 'connection' bodies are neural tissue, NOT hardware
     rho_ohm_m: 6.9832
     sigma_S_per_m: 0.1432
 
