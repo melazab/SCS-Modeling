@@ -5,8 +5,8 @@ Every body must map to exactly one tissue. An unmatched body would silently get
 a default material in Ansys, and a body matching two patterns means the map is
 ambiguous. Both are worth catching before a multi-hour solve, not after.
 
-No PyYAML dependency (not installed here) -- the file is a small, regular subset
-of YAML, so it is parsed directly.
+Parsed without PyYAML so the script runs on a bare interpreter -- the file is a
+small, regular subset of YAML, so it is parsed directly.
 
     python3 check_tissue_map.py [--stl-dir STL_files] [--map src/ansys/tissue_map.yaml]
 """
@@ -18,7 +18,12 @@ import sys
 
 
 def parse_tissue_map(path):
-    """Return [(name, ed_material, [patterns]), ...] in file order."""
+    """Return [{name, ed_material, color_rgb, patterns}, ...] in file order.
+
+    color_rgb is read for src/freecad/apply_colors.py, which imports this
+    parser so the two scripts can never disagree about which body is which
+    tissue. It is [r, g, b] 0-255, or None when the entry has no colour.
+    """
     tissues, cur = [], None
     in_patterns = False
     for raw in open(path):
@@ -28,7 +33,8 @@ def parse_tissue_map(path):
             continue
         m = re.match(r"^\s*-\s+name:\s*(\S+)", line)
         if m:
-            cur = {"name": m.group(1), "ed_material": None, "patterns": []}
+            cur = {"name": m.group(1), "ed_material": None,
+                   "color_rgb": None, "patterns": []}
             tissues.append(cur)
             in_patterns = False
             continue
@@ -37,6 +43,11 @@ def parse_tissue_map(path):
         m = re.match(r'^\s*ed_material:\s*"?([^"]*)"?\s*$', line)
         if m:
             cur["ed_material"] = m.group(1).strip()
+            in_patterns = False
+            continue
+        m = re.match(r"^\s*color_rgb:\s*\[(.*)\]\s*$", line)
+        if m:
+            cur["color_rgb"] = [int(v) for v in m.group(1).split(",")]
             in_patterns = False
             continue
         m = re.match(r"^\s*patterns:\s*\[(.*)\]\s*$", line)

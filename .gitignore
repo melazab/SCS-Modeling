@@ -14,8 +14,28 @@ src/ansys/**/results/*_slice.csv
 # before it rewrites any Label (25 MB, and the .FCStd itself is tracked)
 *.prelabel*.bak
 
-# Regenerable run report from src/freecad/apply_labels.py
+# Same idea for the other two document-rewriting scripts: apply_colors.py takes
+# a .precolor.bak before it repaints, make_lead_variants.py a .prelead.bak
+# before it rebuilds a variant on top of an existing one
+*.precolor*.bak
+*.prelead*.bak
+
+# Regenerable run reports from the src/freecad/ document scripts
 src/freecad/apply_labels_report.txt
+src/freecad/apply_colors_report*.txt
+src/freecad/make_lead_variants_report.txt
+
+# The dorsal/ventral lead variants are DERIVED: base document + the STLs in
+# src/freecad/generated_leads/, assembled by make_lead_variants.py in seconds.
+# At 25 MB each, and binary (so git stores a whole new copy on every change),
+# tracking them would add ~50 MB per revision to a public repo for something one
+# command rebuilds. The base NBF_RADO-SCS.FCStd IS tracked -- it is the
+# irreplaceable input, hand-built from the STL set and carrying the labels.
+#   freecadcmd src/freecad/make_lead_variants.py
+NBF_RADO-SCS_dorsal.FCStd
+NBF_RADO-SCS_ventral.FCStd
+NBF_RADO-SCS_dorsal/
+NBF_RADO-SCS_ventral/
 
 # Python bytecode from the src/ansys/ helper scripts
 __pycache__/
