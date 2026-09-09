@@ -512,11 +512,23 @@ Ways forward, roughly in order of effort:
 This is the first converged solve on the real anatomy, and it is genuinely
 useful as proof the pipeline works. It is **not** a result to quote.
 
-What it is: solid elements whose centroid lies within a ±15 mm box around
-contact A (node 786), coupled with `CPINTF,VOLT,300` (300 µm), V = 0 clamped on
-the six box faces, and ±1 mA distributed over each contact's nodes.
-1,701,330 nodes / 1,128,810 elements. PCG converged in 93 iterations.
-V ∈ [−0.0673, +0.1872] V.
+What it is (final version, job 3796865, `run_truncated4.sbatch`): solid elements
+whose centroid lies within a ±15 mm box centred on the **midpoint of the two
+contacts**, coupled with `CPINTF,VOLT,300` (300 µm), V = 0 clamped on the six
+box faces, and ±1 mA distributed over each contact's nodes (contacts selected by
+element centroid within ±2 mm of nodes 786 / 3149).
+**1,952,166 nodes / 1,297,630 elements, PCG converged in 89 iterations,
+V ∈ [−0.0679, +0.1728] V.** (The earlier job 3796854, box centred on contact A:
+1,701,330 nodes, 93 iterations, V ∈ [−0.0673, +0.1872] V.)
+
+One asymmetry that is **not** an artifact: contact A has 543 elements / 935
+nodes and contact B has 837 / 1396. Selecting by element centroid instead of by
+node location produced identical counts, so the two contacts really are meshed
+differently, and they sit ~4.3 mm apart in different tissue. A bipolar pair in
+heterogeneous anatomy should *not* give an antisymmetric field, so
++0.173 / −0.068 V is plausible rather than suspicious. Current injection is
+per-node (`f,all,amps,±1e9/N`), so the *total* current is ±1 mA regardless of
+the node-count difference.
 
 Why not to trust the numbers yet:
 
@@ -529,12 +541,9 @@ Why not to trust the numbers yet:
    part of the solved element set, so every interface is coupled purely by
    node-proximity. Interfaces whose non-conformal meshes are further apart than
    300 µm are simply not connected. This is the single biggest source of doubt.
-3. **The two contacts are asymmetric**: +0.187 V vs −0.067 V, and the node
-   counts differ (935 vs 1396). A symmetric bipolar pair in homogeneous
-   surroundings should be near-antisymmetric. The likely cause is that the
-   ±2 mm box used to isolate each contact caught different amounts of metal
-   (possibly part of a neighbouring contact for B). Worth fixing by selecting
-   contacts properly — e.g. by element type, since each body has its own `et`.
+3. ~~The two contacts are asymmetric~~ — investigated and **explained**, see
+   above: the mesh densities genuinely differ and the contacts sit in different
+   tissue. Not a bug.
 4. **The deck's 878 electrode constraint equations were deleted** (`CEDELE,ALL`)
    and replaced by distributed current injection. That is defensible — the metal
    is ~60× more conductive than CSF so each contact is nearly equipotential
