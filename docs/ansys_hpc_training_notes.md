@@ -38,11 +38,9 @@ full model unattended when a node frees.** That is the definitive run.
 
 **The three root causes of the original failure**
 
-1. **Material contrast ~2e11** — Metal Electrode 2.5e-13 vs Lead Insulation 0.05
-   Tohm·µm — which is what produced `minimum pivot = -347` and the "extremely
-   large pivot ratio" abort. Fixed by reconditioning both (contacts are held
-   equipotential by constraint equation anyway, so their bulk conductivity is
-   nearly irrelevant).
+1. ~~**Material contrast ~2e11**~~ — **WRONG, retracted 9 Sep.** See
+   "Correction: the materials were never the problem" below. All reconditioning
+   has been removed from every script; the decks use Khadka's original values.
 2. **Floating, electrically isolated bodies.** Revealed by running PCG: it
    diverged with *"out of balance force goes to infinity … check for rigid body
    motions"*. The 245 bodies are joined by `CONTA174`/`TARGE170` pairs (correctly
@@ -444,6 +442,88 @@ model.Mesh.GenerateMesh()
    `...Middle...` bodies are CSF, not nerve. They are currently Nerve Root.
    CSF is 1.7 S/m vs nerve 0.1432 S/m — a 12× difference in tissue immediately
    around the electrodes, so this materially changes the answer.
+
+## Correction: the materials were never the problem (9 Sep)
+
+Two mistakes on my part, both now fixed. Recorded in full because the reasoning
+is the useful bit.
+
+**Mistake 1 — I misread a unit and "fixed" a correct number.** The deck is
+`/units,uMKS`, so resistivity is in **Tohm·µm**, which Workbench annotates on
+every line (`! Tohm um`). 1 Tohm·µm = 10⁶ Ω·m, so the deck's
+
+```
+MP,RSVX,1,2.5e-13,	! Tohm um     ->  2.5e-7 ohm*m  =  4e6 S/m
+MP,RSVX,5,0.05,		! Tohm um     ->  5e4   ohm*m
+```
+
+are **exactly** the Engineering Data values (platinum-like contacts at 4e6 S/m).
+Every material converts correctly: CSF 1.7000, white matter 0.1432, disc 0.600,
+gray 0.276 S/m. Nothing was ever mismatched — I quoted the raw µMKS figure
+without converting and concluded there was a contrast problem. Mohamed caught
+it. **Never change a material to fix a solver problem; the values are matched to
+the paper on purpose.**
+
+**Mistake 2 — the reconditioning did nothing anyway.** Comparing the two runs:
+
+| | Aug 29 (original) | 9 Sep (reconditioned, 331 GB) |
+|---|---|---|
+| max pivot | 1.92280267e16 | 1.92307552e16 |
+| min pivot | −347.22 @ node 786 | −77.33 @ node 7192526 |
+| min abs pivot | — | 1.94e-07 @ node 8711510 |
+| error | large negative pivot | **"insufficiently constrained model"** |
+
+The max pivot is identical to five significant figures across an eleven-order
+material change. It never came from the materials. It comes from the deck's own
+contact conductance:
+
+```
+*set,_maxCond,4.e+016
+rmod,cid,19,_maxCond/_ASMDIAG      ! ECC
+```
+
+That is Workbench's standard way of emulating perfectly bonded electric contact,
+and 4e16 is where the pivot ratio originates. Leave it alone.
+
+## Which bodies actually float — answered from the geometry
+
+With memory ruled out (331 GB used, no OOM) the remaining error is explicit:
+*"There is at least 1 small equation solver pivot term ... Please check for an
+insufficiently constrained model"* — an electrically isolated region.
+
+`ansys/find_floating_bodies.py` settles which ones, without needing the cluster:
+it parses the 245 STLs, builds a proximity graph over their surfaces, and finds
+the connected components as a function of contact gap.
+
+| gap tolerance | components | isolated bodies |
+|---|---|---|
+| 0.05 mm | 38 | 79 |
+| 0.10 mm | 9 | 8 |
+| 0.20 mm | 3 | 2 |
+| **0.30 mm** | **1** | **0** |
+
+So the geometry *is* fully connected, but only once contact can bridge ~0.3 mm.
+The last bodies to join are the vascular chain — `Thoracic_aorta-1` and
+`connection_R-2` at 0.2 mm, then `connection_R-1`, the four
+`AprilDorsalRootsBloodParallel_*` segments and `T_disk_11_12x-1` at 0.1 mm.
+These are the "connection" radicular vessels running to the thoracic aorta:
+separate STL bodies that merely abut. Blood is electrically continuous through
+them, so bonding them is the physically correct reading rather than a numerical
+dodge.
+
+And the deck leaves the pinball radius at the default on all 1116 pairs:
+
+```
+rmod,cid,6,0.       ! PINB
+rmod,tid,6,0.       ! PINB
+```
+
+`ansys/bigdeck_pinball/run_pinball.sbatch` sets it to an absolute 500 µm
+(negative PINB = absolute distance; the deck is in µm) and changes **nothing
+else** — it asserts the materials are still `2.5e-13` / `0.05` and aborts if
+not. Widening pinball cannot short unrelated structures: it only lets an
+*existing* pair close a larger gap, and Workbench never created a pair across,
+say, the dura wall.
 
 ## Revised diagnosis: the model has floating (electrically isolated) regions
 

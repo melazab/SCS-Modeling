@@ -106,16 +106,12 @@ INJECT_SED=$(printf '%s' "$INJECT" | sed ':a;N;$!ba;s/\n/\\n/g')
 
 echo "--- patching deck ---"
 time sed -e 's/\r$//' \
-    -e 's/^MP,RSVX,1,2\.5e-13,/MP,RSVX,1,1.0e-08,/' \
-    -e 's/^MP,RSVX,5,0\.05,/MP,RSVX,5,1.0e-03,/' \
     -e 's|^/fclean|!/fclean  ! disabled|' \
     -e "0,/^solve\$/s||${INJECT_SED}\nsolve|" \
     "$SRC" > "$WORK/scs_model.dat"
 
 echo "--- verify patch ---"
 ok=1
-grep -q "^MP,RSVX,1,1\.0e-08," "$WORK/scs_model.dat" || { echo "FAIL metal"; ok=0; }
-grep -q "^MP,RSVX,5,1\.0e-03," "$WORK/scs_model.dat" || { echo "FAIL insulation"; ok=0; }
 grep -q "^cpintf,volt,cptol"   "$WORK/scs_model.dat" || { echo "FAIL cpintf"; ok=0; }
 grep -q "^edele,all"           "$WORK/scs_model.dat" || { echo "FAIL edele"; ok=0; }
 grep -q "^eqslv,pcg,1e-8"      "$WORK/scs_model.dat" || { echo "FAIL solver"; ok=0; }

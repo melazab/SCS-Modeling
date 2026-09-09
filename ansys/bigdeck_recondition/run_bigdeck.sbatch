@@ -66,9 +66,7 @@ free -g | head -2
 # look successful. Strip the CR first (MAPDL is happy with LF on Linux).
 patch_deck () {   # $1 = solver block to inject before the first bare `solve`
   sed -e 's/\r$//' \
-      -e 's/^MP,RSVX,1,2\.5e-13,/MP,RSVX,1,1.0e-08,/' \
-      -e 's/^MP,RSVX,5,0\.05,/MP,RSVX,5,1.0e-03,/' \
-      -e 's|^/fclean|!/fclean  ! disabled: keep the .rst|' \
+          -e 's|^/fclean|!/fclean  ! disabled: keep the .rst|' \
       -e "0,/^solve$/s//$1\nsolve/" \
       "$SRC" > "$WORK/scs_model.dat"
   cat >> "$WORK/scs_model.dat" <<'POST'
@@ -135,7 +133,6 @@ time patch_deck 'eqslv,pcg,1e-8'
 # Verify every edit actually landed, and abort if not. A silently-missed
 # injection wastes the whole allocation running the wrong configuration.
 echo "--- verify patch ---"
-grep -nE "^MP,RSVX,(1|5)," "$WORK/scs_model.dat" | head
 ok=1
 grep -q "^MP,RSVX,1,1\.0e-08," "$WORK/scs_model.dat" || { echo "FAIL: metal not reconditioned"; ok=0; }
 grep -q "^MP,RSVX,5,1\.0e-03," "$WORK/scs_model.dat" || { echo "FAIL: insulation not reconditioned"; ok=0; }
