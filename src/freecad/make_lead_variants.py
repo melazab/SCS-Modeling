@@ -35,6 +35,13 @@ Name, where "SCS Lead Electrode" survives the uniquifier intact.
     python3 src/freecad/make_lead_variants.py --dry-run       # no FreeCAD needed
     freecadcmd src/freecad/make_lead_variants.py              # writes both variants
 
+WARNING: that freecadcmd line is only safe on an UNCOLOURED base document. A
+document saved by freecadcmd is written without GuiDocument.xml, so every
+ShapeAppearance blob -- every tissue colour and transparency -- is dropped
+silently (verified on FreeCAD 26.3.0, git 48502). The base document now has 245
+of them and each variant 254, so rebuilding a variant this way costs a full
+apply_colors.py pass in the GUI afterwards. See apply_labels.py's docstring.
+
 This one does NOT need the Gui layer -- Visibility is an App-level property and
 mesh import is App-level too -- so unlike apply_colors.py it runs fine under
 plain freecadcmd. Colour the results afterwards with apply_colors.py, which does
@@ -86,11 +93,23 @@ def lead_files(lead_dir):
 
 
 def label_for(prefix, filename):
-    """Readable Label for one imported lead body, in apply_labels.py's house style."""
+    """Readable Label for one imported lead body, in apply_labels.py's house style.
+
+    The contact number is ZERO-PADDED ("contact 01".."08") on purpose. FreeCAD's
+    tree can be sorted alphabetically, and the eight contacts share the group
+    with RADO's four, so an unpadded "contact 1".."8" would sort 1, 2, ... 8 only
+    by luck and would interleave with anything else in the group. Padded, the
+    eight sort as one contiguous block in physical order (contact 01 is the
+    caudal end, z~96 mm; contact 08 the rostral end, z~124 mm). RADO's own four
+    keep single digits and are labelled "RADO DRG lead contact 1 (original,
+    hidden in variants)" by body_aliases.yaml, so the two leads can no longer be
+    confused in the tree -- which is exactly what happened when both were called
+    "SCS lead contact N".
+    """
     stem = os.path.splitext(filename)[0]
     if "Insulator" in stem:
         return "%s lead insulator" % prefix
-    return "%s lead contact %s" % (prefix, stem.rsplit(" ", 1)[-1])
+    return "%s lead contact %02d" % (prefix, int(stem.rsplit(" ", 1)[-1]))
 
 
 def build(variant, args, say):

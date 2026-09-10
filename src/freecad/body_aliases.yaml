@@ -115,30 +115,46 @@
 rules:
 
   # -- Hardware ------------------------------------------------------------
-  # WORTH KNOWING: this lead is not on the dorsal midline. The four contacts sit
-  # 11.2, 15.7, 20.3 and 25.4 mm LEFT of midline at z=93..97, i.e. out over the
-  # left DRG column, which is consistent with the legacy body name it replaced
-  # (neuro_dorsal _roots_DRG_leads). It is a DRG lead placement, not a dorsal
-  # column one. The labels stay side-neutral because the four contacts are one
-  # array; the placement is called out here instead.
+  # THESE RULES LABEL RADO'S OWN LEAD ONLY -- not the 8-contact study lead.
+  #
+  # WORTH KNOWING: RADO's lead is not on the dorsal midline. Its four contacts
+  # sit 11.2, 15.7, 20.3 and 25.4 mm LEFT of midline at z=93..97, i.e. out over
+  # the left DRG column, which is consistent with the legacy body name it
+  # replaced (neuro_dorsal _roots_DRG_leads). It is a DRG lead placement, not a
+  # dorsal column one -- hence "DRG lead" in the labels. They stay side-neutral
+  # because the four contacts are one array; the placement is called out here.
+  #
+  # WHY THE LABELS SAY "RADO ... (original, hidden in variants)":
+  # NBF_RADO-SCS_dorsal.FCStd and _ventral.FCStd contain BOTH leads -- RADO's
+  # four contacts (kept, Visibility=False) and the eight generated study
+  # contacts make_lead_variants.py imports. The generated STLs have the same
+  # filenames as RADO's, so FreeCAD's uniquifier lands them as
+  # SCS_Lead_Electrode_001..004 and _5..8, which alphabetise *between* RADO's
+  # _1..4 -- and with the old neutral label "SCS lead contact 1" the four hidden
+  # RADO bodies read as four greyed-out contacts of the study lead. They are
+  # not. The label now names the model they came from, says which lead they are,
+  # and says the hiding is deliberate. Do not shorten it back to "SCS lead ...".
+  # The study lead's own labels are set by make_lead_variants.py (zero-padded
+  # "SCS 8c dorsal lead contact 01".."08"), not from this file: its bodies are
+  # generated, not part of the RADO STL export this file maps.
   - name: scs_contact
     pattern: '^SCS Lead Electrode (\d+)$'
-    label: "SCS lead contact {1}"
+    label: "RADO DRG lead contact {1} (original, hidden in variants)"
     note: "Source index kept: the contacts are not in spatial order (by x they run 3, 1, 2, 4)."
 
   - name: scs_insulator
     pattern: '^SCS Lead Insulator$'
-    label: "SCS lead insulator"
+    label: "RADO DRG lead insulator (original, hidden in variants)"
 
   # Legacy hardware geometry, replaced by the two rules above. Absent from this
   # STL export; kept so an older NBF_RADO-SCS document still labels cleanly.
   - name: scs_contact_legacy
     pattern: '^neuro_dorsal _roots_DRG_leads-(\d+)$'
-    label: "SCS lead contact {1} (legacy geometry)"
+    label: "RADO DRG lead contact {1} (original, legacy geometry)"
 
   - name: scs_insulator_legacy
     pattern: '^isolator-1$'
-    label: "SCS lead insulator (legacy geometry)"
+    label: "RADO DRG lead insulator (original, legacy geometry)"
 
   # -- Dorsal root ganglia --------------------------------------------------
   # Source "DGR" is a typo for DRG. AprilRootDGR-* is the RIGHT side (its _r
