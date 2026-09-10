@@ -24,6 +24,7 @@ src/ansys/**/results/*_slice.csv
 src/freecad/apply_labels_report.txt
 src/freecad/apply_colors_report*.txt
 src/freecad/make_lead_variants_report.txt
+src/freecad/build_lead_config_report.txt
 
 # The dorsal/ventral lead variants ARE tracked, per Mohamed. They are
 # reproducible from the base document plus src/freecad/generated_leads/ via

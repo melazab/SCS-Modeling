@@ -9,6 +9,7 @@
 #   needs FreeCAD  ->  run with `freecadcmd <script>` (headless FreeCAD)
 #       apply_labels.py      apply_colors.py
 #       make_scs_lead.py     measure_corridor.py
+#       build_lead_config.py     (its --list/--show run on plain python too)
 #
 #   plain python   ->  run with `python3 <script>`
 #       check_laterality.py  find_floating_bodies.py
