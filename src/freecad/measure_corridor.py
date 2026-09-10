@@ -33,6 +33,15 @@ curved. The fitted polynomials here are what src/freecad/make_scs_lead.py sweeps
 
 Frame (see src/freecad/check_laterality.py): +X anatomical left, midline x = 56.60;
 +Y posterior/dorsal; +Z rostral. Millimetres throughout.
+
+IMPORTING THIS MODULE IS SAFE
+-----------------------------
+src/freecad/build_lead_config.py imports intervals(), polyfit() and polyval()
+from here, so that ray casting the epidural mesh and fitting a centreline have
+one implementation each. Until the guard at the bottom existed, importing this
+file re-ran the whole measurement and REWROTE epidural_corridor.json as a side
+effect -- freecadcmd imports a script rather than exec'ing it, so the usual
+__main__ guard never fires and main() had to be called at module level.
 """
 import json
 import os
@@ -153,4 +162,21 @@ def main():
     sys.stdout.write("\n".join(lines) + "\n")
 
 
-main()
+def run_as_freecadcmd_script():
+    """True when a FreeCAD interpreter was handed THIS file to run.
+
+    Same guard as apply_colors.py. Without it, `from measure_corridor import
+    intervals` would re-measure the corridor and overwrite
+    epidural_corridor.json -- see the module docstring.
+    """
+    if len(sys.argv) < 2:
+        return False
+    if not os.path.basename(sys.argv[0]).lower().startswith("freecad"):
+        return False
+    return os.path.abspath(sys.argv[1]) == os.path.abspath(__file__)
+
+
+if __name__ == "__main__":
+    main()
+elif run_as_freecadcmd_script():
+    main()

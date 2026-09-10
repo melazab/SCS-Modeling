@@ -41,9 +41,20 @@ Usage -- run headless with FreeCAD:
     MAKE_LEAD_ARGS="--contacts 8 --z-center 120 --tag sweep_z120" freecadcmd src/freecad/make_scs_lead.py
 
 NOTE on freecadcmd: it *imports* this file rather than running it as __main__,
-so the work happens at import time and a __main__ guard would never fire. It
-also consumes its own argv, hence MAKE_LEAD_ARGS. And it swallows stdout, so
-results are written to a report file as well.
+so a plain __main__ guard would never fire -- run_as_freecadcmd_script() at the
+bottom is what makes the CLI work, and it is also what stops main() from firing
+when something merely IMPORTS this module. That matters now:
+src/freecad/build_lead_config.py imports segment_plan() and sweep_segments()
+from here so that "sweep a lead along the measured canal centreline" has exactly
+ONE implementation in the repo. Before the guard existed, importing this file
+built a lead and wrote STLs as a side effect.
+
+freecadcmd also consumes its own argv, hence MAKE_LEAD_ARGS. And it swallows
+stdout, so results are written to a report file as well.
+
+For anything beyond a one-off lead -- named configurations, vertebral levels,
+lateral offsets, fit validation -- use src/freecad/build_lead_config.py and
+src/freecad/lead_configs.yaml, which drive this module.
 """
 import json
 import math
@@ -70,6 +81,74 @@ def opt(argv, name, cast, default):
     return cast(argv[argv.index(name) + 1]) if name in argv else default
 
 
+def segment_plan(n_contacts, c_len, gap, tail, z_center):
+    """Split a lead into alternating insulator and contact runs along z.
+
+    Returns ([(kind, index, z_start, length), ...], z0, total_length), caudal to
+    rostral, where kind is "contact" or "insulator" and index numbers the
+    contacts from 1. The two tails are symmetric, so z_center is both the centre
+    of the contact array and the centre of the whole lead.
+
+    Segments abut exactly rather than overlapping: neighbours share a flat
+    interface, which is what the mesher and a bonded electric contact want, and
+    it is how RADO models its own contacts (short full-diameter segments).
+    """
+    total = n_contacts * c_len + (n_contacts - 1) * gap + 2 * tail
+    z0 = z_center - 0.5 * total
+
+    segments = []
+    z = z0
+    segments.append(("insulator", 0, z, tail)); z += tail
+    for i in range(n_contacts):
+        segments.append(("contact", i + 1, z, c_len)); z += c_len
+        if i < n_contacts - 1:
+            segments.append(("insulator", i + 1, z, gap)); z += gap
+    segments.append(("insulator", n_contacts, z, tail))
+    return segments, z0, total
+
+
+def sweep_segments(segments, x, y_of_z, radius):
+    """THE one implementation of "sweep a lead along the measured centreline".
+
+    Each segment becomes a cylinder placed along the LOCAL TANGENT of the
+    centreline: from (x, y(z0), z0) to (x, y(z0+len), z0+len). The spine here is
+    kyphotic, so the epidural channel migrates about 7 mm posteriorly over the
+    length of an 8-contact lead; a lead built at fixed y would walk out of the
+    space and through the dura. See the module docstring.
+
+    y_of_z is a callable, deliberately: main() passes the midline polynomial
+    from epidural_corridor.json, while build_lead_config.py passes a centreline
+    re-measured at the requested lateral offset, where the midline polynomial is
+    the wrong curve. Both get identical geometry code.
+
+    Returns [(kind, index, Part.Shape), ...] parallel to `segments`. It builds
+    shapes and nothing else -- no document, no files -- so the caller decides
+    whether they become a preview in a live document or STLs on disk.
+    """
+    shapes = []
+    for kind, idx, zs, ln in segments:
+        a = App.Vector(x, y_of_z(zs), zs)
+        b = App.Vector(x, y_of_z(zs + ln), zs + ln)
+        d = b.sub(a)
+        shapes.append((kind, idx, Part.makeCylinder(radius, d.Length, a, d.normalize())))
+    return shapes
+
+
+def fuse_insulator(shapes):
+    """Fuse the insulator segments of sweep_segments() output into one shape.
+
+    The contacts stay separate -- each is its own electrode and its own boundary
+    condition in the FEM solve -- but the insulator is one physical body, and
+    exporting it as six or ten disconnected cylinders would give the mesher
+    coincident faces to argue about.
+    """
+    parts = [s for kind, _idx, s in shapes if kind == "insulator"]
+    fused = parts[0]
+    for part in parts[1:]:
+        fused = fused.fuse(part)
+    return fused
+
+
 def main():
     argv = shlex.split(os.environ.get("MAKE_LEAD_ARGS", ""))
     side = opt(argv, "--side", str, "dorsal")
@@ -92,9 +171,7 @@ def main():
     if z_center is None:
         z_center = 0.5 * (z_usable[0] + z_usable[1])
 
-    pitch_total = n_contacts * c_len + (n_contacts - 1) * gap
-    total = pitch_total + 2 * tail
-    z0 = z_center - 0.5 * total
+    segments, z0, total = segment_plan(n_contacts, c_len, gap, tail, z_center)
     r = 0.5 * dia
 
     tag = tag or "%s_z%.0f_%dc" % (side, z_center, n_contacts)
@@ -119,37 +196,21 @@ def main():
             "over %.1f..%.1f; ends are extrapolated."
             % (z0, z0 + total, z_usable[0], z_usable[1]))
 
-    segments = []
-    z = z0
-    segments.append(("insulator", 0, z, tail)); z += tail
-    for i in range(n_contacts):
-        segments.append(("contact", i + 1, z, c_len)); z += c_len
-        if i < n_contacts - 1:
-            segments.append(("insulator", i + 1, z, gap)); z += gap
-    segments.append(("insulator", n_contacts, z, tail))
+    shapes = sweep_segments(segments, x, lambda z: polyval(coef, z), r)
 
     doc = App.newDocument("scs_lead")
-    insulator_parts, written = [], []
-    for kind, idx, zs, ln in segments:
-        # place each segment along the local tangent of the centreline
-        a = App.Vector(x, polyval(coef, zs), zs)
-        b = App.Vector(x, polyval(coef, zs + ln), zs + ln)
-        d = b.sub(a)
-        cyl = Part.makeCylinder(r, d.Length, a, d.normalize())
-        if kind == "contact":
-            obj = doc.addObject("Part::Feature", "contact%d" % idx)
-            obj.Shape = cyl
-            p = os.path.join(outdir, "SCS Lead Electrode %d.stl" % idx)
-            Mesh.export([obj], p)
-            written.append((os.path.basename(p), zs, ln, a.y))
-        else:
-            insulator_parts.append(cyl)
+    written = []
+    for (kind, idx, shape), (_k, _i, zs, ln) in zip(shapes, segments):
+        if kind != "contact":
+            continue
+        obj = doc.addObject("Part::Feature", "contact%d" % idx)
+        obj.Shape = shape
+        p = os.path.join(outdir, "SCS Lead Electrode %d.stl" % idx)
+        Mesh.export([obj], p)
+        written.append((os.path.basename(p), zs, ln, polyval(coef, zs)))
 
-    fused = insulator_parts[0]
-    for part in insulator_parts[1:]:
-        fused = fused.fuse(part)
     ins = doc.addObject("Part::Feature", "insulator")
-    ins.Shape = fused
+    ins.Shape = fuse_insulator(shapes)
     pi = os.path.join(outdir, "SCS Lead Insulator.stl")
     Mesh.export([ins], pi)
     written.append((os.path.basename(pi), z0, total, polyval(coef, z0)))
@@ -172,4 +233,21 @@ def main():
     sys.stdout.write("\n".join(lines) + "\n")
 
 
-main()
+def run_as_freecadcmd_script():
+    """True when a FreeCAD interpreter was handed THIS file to run.
+
+    Same guard as apply_colors.py and make_lead_variants.py. It exists here so
+    that `from make_scs_lead import sweep_segments` does not build a lead and
+    write STLs as an import side effect -- see the module docstring.
+    """
+    if len(sys.argv) < 2:
+        return False
+    if not os.path.basename(sys.argv[0]).lower().startswith("freecad"):
+        return False
+    return os.path.abspath(sys.argv[1]) == os.path.abspath(__file__)
+
+
+if __name__ == "__main__":
+    main()
+elif run_as_freecadcmd_script():
+    main()

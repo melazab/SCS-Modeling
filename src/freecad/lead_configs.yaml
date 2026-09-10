@@ -1,0 +1,156 @@
+# Named SCS lead configurations for RADO-SCS 3.0.
+#
+# WHAT THIS FILE IS FOR
+# ---------------------
+# One .FCStd per lead configuration does not scale: the document is 25 MB, so
+# ten configurations is 250 MB of near-identical binary and a merge conflict
+# waiting to happen. This file plus src/freecad/generated_leads/<name>/ is the
+# durable artefact instead. A configuration here is a dozen numbers; the STLs it
+# produces are a few hundred kB; the .FCStd variants are disposable previews you
+# rebuild on demand with src/freecad/build_lead_config.py or the
+# src/freecad/lead_designer.FCMacro panel.
+#
+# Every entry states only what it CHANGES from `defaults` below.
+#
+# THE FRAME (src/freecad/check_laterality.py, src/freecad/epidural_corridor.json)
+# ------------------------------------------------------------------------------
+#   +X  anatomical LEFT      midline is x = 56.60 mm
+#   +Y  posterior / DORSAL
+#   +Z  rostral (towards the head)
+# Millimetres throughout, in the model's own coordinates -- these are absolute
+# positions in NBF_RADO-SCS.FCStd, not offsets from anything the user picks.
+#
+# x_offset is SIGNED and is measured from the midline:
+#
+#       x_offset = +1.0   ->  1 mm to the patient's LEFT   (x = 57.60)
+#       x_offset =  0.0   ->  on the midline               (x = 56.60)
+#       x_offset = -1.0   ->  1 mm to the patient's RIGHT  (x = 55.60)
+#
+# The epidural corridor was re-measured at ±4 mm off the midline and is still a
+# single clean channel there (dorsal 2.29-2.32 mm, ventral 1.74-1.76 mm), but
+# the channel CENTRE moves as you go lateral -- about 1.1 mm of y at 4 mm off --
+# so build_lead_config.py re-measures the centreline at the requested x rather
+# than reusing the midline polynomial in epidural_corridor.json. Do not assume a
+# lateral variant can be had by shifting a midline lead sideways.
+#
+# LEAD DIAMETER: 1.25 OR 1.30 mm?
+# -------------------------------
+# Khadka et al. 2020 specify a 1.25 mm lead (8 contacts, 3 mm long, 1 mm apart).
+# The default here is 1.30 mm, which is the common clinical percutaneous
+# diameter and what make_scs_lead.py has used since the first lead was built --
+# the existing dorsal_z110_8c / ventral_z110_8c STLs and both .FCStd variants
+# are 1.30 mm. Neither number is wrong and the difference is 0.05 mm, about 2%
+# of the dorsal channel; both clear the fit check on both sides. They are kept
+# apart rather than reconciled: `khadka_clinical_T10` reproduces the paper's
+# lead exactly for comparison against published results, and everything else
+# uses the 1.30 mm house default. If you need to match the paper numerically,
+# use the khadka entry; do not "fix" the default, or the existing generated
+# STLs and the .FCStd variants silently stop matching their own config.
+#
+# VERTEBRAL LEVELS -- READ THE CAVEAT
+# -----------------------------------
+# `levels` below is DERIVED FROM THE GEOMETRY, not invented. RADO names its four
+# intervertebral discs for the levels they separate -- T_disk_9_10x, T_disk_10_11x,
+# T_disk_11_12x, T_disk_12_Lx -- and their z positions come out in exactly the
+# order +Z-is-rostral demands (9/10 highest at z = 152.5, 12/L1 lowest at
+# z = 66.3), which is independent evidence that those names mean what they say.
+# A vertebral body is then the gap between two consecutive discs, and its centre
+# is the level's z. Cross-checked a second way: taking only the anterior mass of
+# each vertebra STL (y < 58, i.e. the body, not the posterior arch) gives centres
+# of 80.6 / 110.8 / 139.2 against the inter-disc 80.4 / 110.3 / 138.8 -- two
+# independent derivations agreeing to 0.6 mm.
+#
+# THE CAVEAT: those disc names imply the three vertebral bodies here are T10,
+# T11 and T12. The paper and CLAUDE.md describe the model as T9-T11, and RADO's
+# own filename prefix is "T8-10". All three disagree, and nothing in the geometry
+# can settle it -- there is no C2 to count down from. So the level names below
+# are RADO's disc names taken at face value, and if you are comparing against a
+# clinical target level, check which convention your collaborator means before
+# trusting the label. The z coordinates are solid; only the names are in doubt.
+#
+# Use a level by naming it instead of z_center:
+#
+#     level: T10          # instead of  z_center: 138.83
+#
+# z_center is the centre of the contact array (the tails are symmetric, so it is
+# also the centre of the whole lead).
+
+defaults:
+  side: dorsal            # dorsal | ventral -- which epidural channel
+  contacts: 8             # number of cylindrical contacts
+  contact_length: 3.0     # mm, along the lead
+  gap: 1.0                # mm of insulator between adjacent contacts
+  diameter: 1.3           # mm, see the note above about 1.25 vs 1.30
+  x_offset: 0.0           # mm from midline, + is anatomical LEFT
+  z_center: 110.0         # mm, centre of the contact array
+  tail: 6.0               # mm of plain insulator beyond the end contacts
+
+# Vertebral level -> z of the body centre, mm. Derived above; see the caveat.
+levels:
+  T10: 138.83             # body spans z 129.02 .. 148.63 (19.6 mm)
+  T11: 110.26             # body spans z 102.11 .. 118.41 (16.3 mm)
+  T12: 80.44              # body spans z  73.45 ..  87.42 (14.0 mm)
+  T9-T10_disc: 152.49
+  T10-T11_disc: 123.71
+  T11-T12_disc: 94.76
+  T12-L1_disc: 66.28
+
+configs:
+
+  # Khadka et al. 2020's own arrangement, for reproducing the published model:
+  # 8 contacts, 1.25 mm diameter, 3 mm contacts, 1 mm gaps, dorsal, at T10,
+  # 1 mm lateral to the dorsal column midline. The paper does not say which
+  # side of the midline, so LEFT is used -- it matches the side RADO's own
+  # 4-contact DRG lead sits on, and the model is close to symmetric here.
+  khadka_clinical_T10:
+    diameter: 1.25
+    level: T10
+    x_offset: 1.0
+    note: "Khadka et al. 2020 J Neural Eng 17:026033, section 2.1 and figure 1."
+
+  # The current pair -- the leads already generated under generated_leads/ and
+  # imported into NBF_RADO-SCS_dorsal.FCStd / _ventral.FCStd.
+  #
+  # z_center is 110.43203353881836 and NOT the round 110.0 the directory name
+  # suggests. Those STLs were built before this file existed, by make_scs_lead.py
+  # with no --z-center at all, and its default is the midpoint of the measured
+  # corridor: 0.5 * (61.43203353881836 + 159.43203353881836). The "z110" in the
+  # tag is that number through "%.0f". Spelled out to every digit deliberately --
+  # with 110.0 here the configuration rebuilds the lead 0.43 mm caudal of the
+  # committed STLs and of the leads inside both .FCStd variants, which is the
+  # exact silent divergence this catalogue exists to prevent. Verified: exporting
+  # this entry reproduces all nine committed STLs byte for byte.
+  #
+  # It also lands 0.17 mm rostral of the derived T11 body centre, which is
+  # coincidence rather than intent.
+  dorsal_z110_8c:
+    z_center: 110.43203353881836
+    note: "House default. Verified 100% of vertices in epidural fat, 0% in dura."
+
+  ventral_z110_8c:
+    side: ventral
+    z_center: 110.43203353881836
+    note: "Ventral counterpart of dorsal_z110_8c, for the dorsal-vs-ventral study."
+
+  # Lateral offsets. The dorsal columns are the target of SCS, so a 1-2 mm
+  # lateral lead is the standard way to ask "how much does laterality cost?" --
+  # both of these are re-measured at their own x, not shifted from midline.
+  dorsal_T11_left1:
+    level: T11
+    x_offset: 1.0
+    note: "1 mm to the patient's left of midline, at T11."
+
+  dorsal_T11_right2:
+    level: T11
+    x_offset: -2.0
+    note: "2 mm to the patient's right of midline, at T11."
+
+  # Kept deliberately: a worked example of a configuration that FAILS. The
+  # ventral epidural fat is only about 1.7 mm thick, so a 2 mm lead cannot be
+  # there without pressing through the dura. build_lead_config.py should report
+  # this in those words and refuse to export it, rather than carving anatomy.
+  ventral_z110_2mm_FAILS:
+    side: ventral
+    diameter: 2.0
+    z_center: 110.43203353881836
+    note: "Expected to FAIL the fit check -- this entry exists to demonstrate it."
