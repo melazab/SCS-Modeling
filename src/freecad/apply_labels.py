@@ -37,6 +37,25 @@ Three things about freecadcmd that shape this script:
 The script is idempotent. It matches on Name (via the STL filename it was
 derived from), never on the current Label, so re-running after a successful run
 is a no-op and re-running after a partial run finishes the job.
+
+WARNING -- SAVING UNDER freecadcmd DESTROYS THE TISSUE COLOURS
+--------------------------------------------------------------
+Since apply_colors.py ran, all three documents carry a GuiDocument.xml holding
+one ShapeAppearance blob per body (245 / 254 / 254). freecadcmd has no Gui
+layer, so a document it saves is written WITHOUT GuiDocument.xml and without the
+appearance entries -- every colour and transparency is gone, silently, and the
+exit code still looks fine. Verified on this build (FreeCAD 26.3.0, git 48502)
+with a throwaway document: GUI save -> Document.xml, GuiDocument.xml,
+ShapeAppearance; reopen and save under freecadcmd -> Document.xml only.
+
+So on a COLOURED document, run this script from a running FreeCAD GUI (the same
+way apply_colors.py documents), not under freecadcmd. `--dry-run` is always
+safe. A label-only change can also be spliced in at the zip level -- rewrite
+Document.xml inside the .FCStd and copy every other entry byte-for-byte -- which
+is how the RADO-lead relabel of 2026-09-10 was applied with FreeCAD closed.
+
+The 8-contact study lead is protected from this script; see
+PROTECTED_LABEL_PREFIXES below.
 """
 import argparse
 import os
@@ -52,6 +71,20 @@ DEFAULT_MAP = os.path.join(HERE, "body_aliases.yaml")
 DEFAULT_REPORT = os.path.join(HERE, "apply_labels_report.txt")
 
 PREFIX = "T8-10 - "          # stripped before matching; every RADO body has it
+
+# Labels this script must never overwrite.
+#
+# The rules in body_aliases.yaml describe RADO's STL export, and the object Name
+# is the key. In the two variant documents that key is no longer unique to RADO:
+# make_lead_variants.py imports eight generated contacts whose STLs are named
+# exactly like RADO's, so FreeCAD uniquifies them to SCS_Lead_Electrode_001..004
+# and _5..8. Today only "SCS Lead Electrode 1..4.stl" exist in STL_files/, so
+# _5..8 match no rule and are left alone by luck rather than by design -- drop
+# the generated lead's STLs into STL_files/ and the scs_contact rule would
+# happily relabel study contacts 5-8 as RADO DRG contacts. This guard makes that
+# impossible: a body already labelled by make_lead_variants.py is skipped and
+# reported, whatever its Name.
+PROTECTED_LABEL_PREFIXES = ("SCS 8c ",)
 
 
 # --------------------------------------------------------------------------
@@ -272,8 +305,11 @@ def main():
     say("opened:    %s, %d objects", doc.Name, len(doc.Objects))
     say("")
 
-    changed, already, missing_rule, samples = 0, 0, [], []
+    changed, already, missing_rule, samples, protected = 0, 0, [], [], []
     for obj in doc.Objects:
+        if obj.Label.startswith(PROTECTED_LABEL_PREFIXES):
+            protected.append((obj.Name, obj.Label))
+            continue
         entry = index.get(obj.Name)
         if entry is None:
             missing_rule.append((obj.Name, obj.Label))
@@ -289,6 +325,11 @@ def main():
 
     say("changed:   %d", changed)
     say("unchanged: %d (already correct)", already)
+    if protected:
+        say("")
+        say("PROTECTED (%d) -- generated study-lead bodies, Label left alone:", len(protected))
+        for name, label in protected:
+            say("   %-30s Label=%r", name[:30], label)
     if missing_rule:
         say("")
         say("OBJECTS WITH NO RULE (%d) -- Label left alone:", len(missing_rule))
@@ -310,8 +351,9 @@ def main():
     FreeCAD.closeDocument(doc.Name)
 
     say("")
-    say("RESULT: %d changed, %d already correct, %d objects without a rule, "
-        "%d STL stems unmatched", changed, already, len(missing_rule), len(unmatched))
+    say("RESULT: %d changed, %d already correct, %d protected, %d objects without "
+        "a rule, %d STL stems unmatched",
+        changed, already, len(protected), len(missing_rule), len(unmatched))
     write_report(args.report, out)
     return 0
 
