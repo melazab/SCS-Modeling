@@ -10,7 +10,19 @@ single click instead of 123 presses of the spacebar.
 
 INSTALL
 -------
-    cp src/freecad/tissue_visibility.FCMacro ~/.local/share/FreeCAD/Macro/
+    cp src/freecad/tissue_visibility.FCMacro "$(python3 -c 'import FreeCAD,os;print(os.path.join(FreeCAD.getUserAppDataDir(),"Macro"))')"
+
+    # FreeCAD's macro directory is VERSIONED -- on 26.3 it is
+    #   ~/.local/share/FreeCAD/v26-3/Macro/
+    # not ~/.local/share/FreeCAD/Macro/, which FreeCAD ignores entirely. Ask it
+    # rather than guessing, because the path moves with the version:
+    #
+    #   python3 -c "import FreeCAD, os; print(os.path.join(FreeCAD.getUserAppDataDir(), 'Macro'))"
+    #
+    # or in FreeCAD's own Python console:
+    #   import FreeCAD, os; os.path.join(FreeCAD.getUserAppDataDir(), "Macro")
+    #
+    # Then, in FreeCAD: Macro -> Macros... -> select this file -> Execute.
 
 then Macro -> Macros... -> tissue_visibility -> Execute. To get it on a toolbar
 (worth it -- this is a thing you press constantly): Tools -> Customize ->
