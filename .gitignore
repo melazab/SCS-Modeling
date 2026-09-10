@@ -14,28 +14,31 @@ src/ansys/**/results/*_slice.csv
 # before it rewrites any Label (25 MB, and the .FCStd itself is tracked)
 *.prelabel*.bak
 
-# Same idea for the other two document-rewriting scripts: apply_colors.py takes
-# a .precolor.bak before it repaints, make_lead_variants.py a .prelead.bak
-# before it rebuilds a variant on top of an existing one
+# Same idea for the other document-rewriting scripts: apply_colors.py takes a
+# .precolor.bak before it repaints. (.prelead.bak was make_lead_variants.py's,
+# which no longer exists -- see below -- but old ones may still be on disk.)
 *.precolor*.bak
 *.prelead*.bak
 
 # Regenerable run reports from the src/freecad/ document scripts
 src/freecad/apply_labels_report.txt
 src/freecad/apply_colors_report*.txt
-src/freecad/make_lead_variants_report.txt
 src/freecad/build_lead_config_report.txt
+src/freecad/drop_rado_lead_report.txt
+src/freecad/foramen_report.txt
 
-# The dorsal/ventral lead variants ARE tracked, per Mohamed. They are
-# reproducible from the base document plus src/freecad/generated_leads/ via
-#   freecadcmd src/freecad/make_lead_variants.py
-# but a collaborator cloning this repo should get the finished models without
-# needing a FreeCAD install first, and they are what the study actually compares.
-# ~25 MB each and binary, so avoid gratuitous re-saves: git stores a whole new
-# copy every time one changes.
+# THERE IS ONE MODEL DOCUMENT: NBF_RADO-SCS.FCStd, holding anatomy only.
 #
-# Only the exploded scratch directories are ignored (mesh cache/thumbnails,
-# regenerated on open), matching the NBF_RADO-SCS/ rule at the top.
+# NBF_RADO-SCS_dorsal.FCStd and _ventral.FCStd used to be tracked here, one per
+# arm of the dorsal-vs-ventral study, built by make_lead_variants.py. They are
+# gone, and so is that script. A lead is no longer baked into a copy of the
+# document: it is an entry in src/freecad/lead_configs.yaml plus a directory of
+# STLs under src/freecad/generated_leads/, previewed into the open document on
+# demand and thrown away. `dorsal_z110_8c` and `ventral_z110_8c` reproduce
+# exactly what those two documents contained, byte for byte.
+#
+# Their exploded scratch directories are still ignored in case an old checkout
+# has them lying about, matching the NBF_RADO-SCS/ rule at the top.
 NBF_RADO-SCS_dorsal/
 NBF_RADO-SCS_ventral/
 

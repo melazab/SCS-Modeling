@@ -47,23 +47,21 @@ FreeCAD 26.3.0 (git 48502).
 
 The SAVE is what you cannot do headless. A document saved by freecadcmd is
 written with NO GuiDocument.xml and none of the ShapeAppearance blobs at all --
-measured on a copy of NBF_RADO-SCS_dorsal.FCStd:
+measured on a copy of the model document:
 
     before   Document.xml + GuiDocument.xml (894 839 bytes) + ShapeAppearance*0-253
     after    Document.xml only, 255 entries -> 1
 
 There is no Gui layer to serialise, so FreeCAD silently writes the App half of
-the file and drops the rest. Every colour and transparency apply_colors.py set,
-and every Visibility flag make_lead_variants.py set on RADO's 4-contact lead,
-would be gone -- and the document would still open, still contain all 254
-bodies, and look like a fresh grey import. That is a much worse outcome than a
-crash, so this script REFUSES to save when FreeCAD.GuiUp is false rather than
-producing it. --force-headless-save exists only for a document that has no view
-data worth keeping.
+the file and drops the rest. Every colour and transparency apply_colors.py set
+would be gone -- and the document would still open, still contain every body,
+and look like a fresh grey import. That is a much worse outcome than a crash, so
+this script REFUSES to save when FreeCAD.GuiUp is false rather than producing
+it. --force-headless-save exists only for a document that has no view data worth
+keeping.
 
-(make_lead_variants.py gets away with freecadcmd because it runs BEFORE
-apply_colors.py, on a document that has no colours yet. The ordering is load-
-bearing, not incidental.)
+drop_rado_lead.py, the only other script here that saves, refuses on the same
+test and for the same reason.
 
 So, like apply_colors.py, the write path runs inside a *running* FreeCAD GUI.
 --dry-run needs no FreeCAD at all and works under plain python3.

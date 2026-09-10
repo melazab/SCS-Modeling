@@ -1,20 +1,41 @@
 # -*- coding: utf-8 -*-
-"""Lead designer panel: pick a lead, check it fits, look at it.
+"""Lead designer panel: build a set of leads, check they fit, look at them.
 
 WHAT IT IS FOR
 --------------
-Someone who wants to know whether an 8-contact lead 3 mm long and 1 mm apart
-will sit in the dorsal epidural space at T10, 1 mm left of the midline, should
+Someone who wants to know whether two 8-contact leads straddling the midline
+will both sit in the dorsal epidural space at T11, or whether a 4-contact lead
+can be threaded out to the left third ganglion without cutting into it, should
 not have to know that the midline is x = 56.60, that the canal centre follows a
-cubic in z, or that "check the fit" means ray casting a hollow shell. This panel
-is that question with spinboxes on it:
+cubic in z, or that a foramen is measured by alternating ray casts. This panel
+is those questions with spinboxes on them:
 
-    pick a configuration, or set the numbers      ->  Check fit
-    a green PASS or a red FAIL, with the actual measurements, in words
-    Preview                                       ->  see it in the open document
-    Export STLs                                   ->  generated_leads/<name>/
+    pick a configuration, or add leads and set the numbers   ->  Check fit
+    a green PASS or a red FAIL per lead AND for the set, with the actual
+    measurements, in words
+    Preview                                    ->  see them all in the open document
+    Export STLs                                ->  generated_leads/<name>/
 
 No coordinates and no centreline polynomials appear anywhere in the interface.
+
+THREE TYPES OF LEAD, AND UP TO max_leads_per_type OF EACH
+---------------------------------------------------------
+A configuration is a SET. Add a dorsal, a ventral or a DRG lead with the buttons
+at the top; each gets its own tab of parameters, and the catalogue's
+max_leads_per_type (2 by default) is what the Add buttons stop at. The
+parameters differ by type because the geometry problems differ: a dorsal or
+ventral lead runs rostro-caudally along the canal and is positioned by a
+vertebral level and an offset from the midline, while a DRG lead runs LATERALLY
+out through a neuroforamen and is positioned by naming a ganglion. The panel
+shows one set of controls or the other, never both.
+
+CHECK FIT ANSWERS TWO QUESTIONS
+-------------------------------
+Each lead's own verdict -- does it fit its channel, is it inside the right
+tissue, does it clear the ganglion -- and then the set's, which is the one no
+single lead can answer: do any two of them occupy the same space. Two leads 1 mm
+apart both fit the epidural space perfectly well and still cannot both be
+implanted, so the banner is red if either kind of check fails.
 
 INSTALL
 -------
@@ -26,9 +47,6 @@ INSTALL
     # rather than guessing, because the path moves with the version:
     #
     #   python3 -c "import FreeCAD, os; print(os.path.join(FreeCAD.getUserAppDataDir(), 'Macro'))"
-    #
-    # or in FreeCAD's own Python console:
-    #   import FreeCAD, os; os.path.join(FreeCAD.getUserAppDataDir(), "Macro")
     #
     # Then, in FreeCAD: Macro -> Macros... -> select this file -> Execute.
 
@@ -43,12 +61,19 @@ default; set SCS_MODELING_REPO if the checkout moves.
 
 THE PREVIEW IS DISPOSABLE, AND NOTHING HERE EVER SAVES
 ------------------------------------------------------
-Preview puts the lead into the ACTIVE DOCUMENT as ordinary parametric bodies
-inside a group called SCS_LeadPreview, replacing whatever the last preview left.
-That is the whole design: a lead configuration is a dozen numbers in
-lead_configs.yaml plus a directory of STLs, and trying ten of them must not mean
-ten copies of a 25 MB document. Explore, export the one you want, and close the
-document WITHOUT SAVING -- "Remove preview" puts the tree back exactly as it was.
+Preview puts every lead of the set into the ACTIVE DOCUMENT as ordinary
+parametric bodies inside a group called SCS_LeadPreview, replacing whatever the
+last preview left. That is the whole design: there is ONE model document,
+NBF_RADO-SCS.FCStd, holding anatomy only, and a lead configuration is a dozen
+numbers in lead_configs.yaml plus a directory of STLs. Trying ten of them must
+not mean ten copies of a 25 MB document. Explore, export the one you want, and
+close the document WITHOUT SAVING -- "Remove preview" puts the tree back exactly
+as it was.
+
+"Show RADO's lead" is the same kind of disposable overlay, in its own group: it
+imports the five STLs RADO ships for its own hand-placed 4-contact DRG lead, so
+a generated DRG lead can be looked at beside the only independently placed one
+in the model. It is not part of the anatomy and must not be saved into it.
 
 This macro contains no save of any kind and must not grow one. A FreeCAD
 document saved with no GUI running loses every ShapeAppearance in it; the panel
@@ -58,13 +83,16 @@ what keeps the tissue colours alive. See make_tissue_groups.py.
 
 WHY IT BLOCKS WHILE CHECKING
 ----------------------------
-Checking a fit ray casts a couple of thousand points against two meshes and
-takes two to four seconds. It runs on the GUI thread with a wait cursor rather
-than in a worker, deliberately: FreeCAD's document API is not thread-safe, the
-meshes have to be loaded in the same interpreter, and a four-second freeze on a
-button press is a far smaller problem than a background thread mutating a
-document while the user clicks in the tree.
+Checking a fit ray casts a few thousand points against several meshes and takes
+two to ten seconds, more for a DRG lead than an epidural one because a foramen
+is measured by iterating two ray casts rather than one. It runs on the GUI
+thread with a wait cursor rather than in a worker, deliberately: FreeCAD's
+document API is not thread-safe, the meshes have to be loaded in the same
+interpreter, and a few seconds of freeze on a button press is a far smaller
+problem than a background thread mutating a document while the user clicks in
+the tree.
 """
+import json
 import os
 import sys
 import traceback
@@ -92,6 +120,9 @@ BANNER = {"PASS": ("#1b5e20", "#c8e6c9"),
           "WARN": ("#7a4f01", "#ffe0b2"),
           "FAIL": ("#8e0000", "#ffcdd2")}
 
+TYPE_WORDS = {"dorsal": "Dorsal epidural", "ventral": "Ventral epidural",
+              "drg": "DRG (foraminal)"}
+
 
 def load_builder():
     """Import build_lead_config from the repo. Everything real lives there."""
@@ -110,159 +141,120 @@ def load_builder():
     return build_lead_config
 
 
-class LeadDesigner(QtWidgets.QWidget):
-    """The dock's contents: the clinical parameters, a verdict, and three buttons."""
+def worst_of(levels):
+    if "FAIL" in levels:
+        return "FAIL"
+    return "WARN" if "WARN" in levels else "PASS"
 
-    def __init__(self, blc):
-        super(LeadDesigner, self).__init__()
-        self.blc = blc
-        self.cfg = blc.parse_config_file(blc.DEFAULT_CONFIGS)
-        self.meshes = None                  # loaded lazily; 4 MB of STL
-        self.result = None                  # last validation, for Preview/Export
-        self.loading = False                # guard while a config is applied
 
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(6, 6, 6, 6)
-        outer.setSpacing(6)
+class LeadPage(QtWidgets.QWidget):
+    """The parameters of ONE lead. Which controls exist depends on its type.
 
-        # -- named configurations ----------------------------------------
-        pick = QtWidgets.QHBoxLayout()
-        pick.addWidget(QtWidgets.QLabel("Configuration"))
-        self.pick = QtWidgets.QComboBox()
-        self.pick.addItems(list(self.cfg["configs"]) + [CUSTOM])
-        self.pick.setToolTip("Ready-made leads from lead_configs.yaml. Changing "
-                             "any number below switches to custom.")
-        self.pick.currentIndexChanged.connect(self.load_config)
-        pick.addWidget(self.pick, 1)
-        outer.addLayout(pick)
+    A page owns no geometry and no verdict; it is a form that can produce the
+    override dict build_lead_config.resolve_lead() layers on top of the
+    catalogue. Keeping it that dumb is what stops the panel and the command line
+    from drifting apart -- both go through the same resolve.
+    """
 
-        self.note = QtWidgets.QLabel("")
-        self.note.setWordWrap(True)
-        self.note.setStyleSheet("color: gray;")
-        outer.addWidget(self.note)
+    changed = QtCore.Signal()
 
-        # -- the lead itself ---------------------------------------------
-        form = QtWidgets.QFormLayout()
+    def __init__(self, panel, kind):
+        super(LeadPage, self).__init__()
+        self.panel = panel
+        self.kind = kind
+        self.loading = False
+
+        form = QtWidgets.QFormLayout(self)
         form.setLabelAlignment(QtCore.Qt.AlignRight)
 
         self.contacts = self.spin_int("How many electrode contacts", 1, 32)
         form.addRow("Contacts", self.contacts)
-
-        self.contact_length = self.spin("Length of each contact", 0.5, 20.0, 0.5, " mm")
+        self.contact_length = self.spin("Length of each contact", 0.25, 20.0, 0.25, " mm")
         form.addRow("Contact length", self.contact_length)
-
         self.gap = self.spin("Insulator between neighbouring contacts", 0.0, 20.0,
-                             0.5, " mm")
+                             0.25, " mm")
         form.addRow("Gap", self.gap)
-
         self.diameter = self.spin("Lead diameter. Khadka et al. use 1.25 mm; the "
                                   "house default is 1.30 mm", 0.2, 4.0, 0.05, " mm")
         form.addRow("Diameter", self.diameter)
-
         self.tail = self.spin("Plain insulator beyond the end contacts", 0.0, 30.0,
-                              1.0, " mm")
+                              0.5, " mm")
         form.addRow("Tail", self.tail)
 
-        self.side = QtWidgets.QComboBox()
-        self.side.addItems(["dorsal", "ventral"])
-        self.side.setToolTip("Which epidural channel. The dorsal space is the "
-                             "roomier one and is where clinical SCS leads go.")
-        self.side.currentIndexChanged.connect(self.went_custom)
-        form.addRow("Side", self.side)
+        if kind == "drg":
+            self.target = QtWidgets.QComboBox()
+            self.target.addItems(panel.ganglia)
+            self.target.setToolTip(
+                "Which dorsal root ganglion. L is the patient's LEFT, R the "
+                "right, numbered rostral to caudal within each side. These are "
+                "the model's own ganglion numbers, NOT lumbar levels.")
+            self.target.currentIndexChanged.connect(self.touched)
+            form.addRow("Target ganglion", self.target)
 
-        # -- where it sits ------------------------------------------------
-        self.level = QtWidgets.QComboBox()
-        self.level.addItem(CUSTOM)
-        self.level.addItems(list(self.cfg["levels"]))
-        self.level.setToolTip("Vertebral level for the centre of the contact "
-                              "array. Level names are RADO's own -- see the "
-                              "caveat at the top of lead_configs.yaml.")
-        self.level.currentIndexChanged.connect(self.level_picked)
-        form.addRow("Level", self.level)
+            self.lateral_offset = self.spin(
+                "Where the centre of the contact array sits along the root, "
+                "relative to the ganglion's own centre. Positive is further out "
+                "along the root (distal).", -10.0, 15.0, 0.5, " mm")
+            form.addRow("Array along the root", self.lateral_offset)
 
-        self.z_center = self.spin("Rostro-caudal position of the middle of the "
-                                  "contact array. Set by the level above, or "
-                                  "type it directly.", 0.0, 300.0, 1.0, " mm")
-        form.addRow("Position (rostro-caudal)", self.z_center)
+            self.ganglion_clearance = self.spin(
+                "How far the lead surface is held off the ganglion. The lead is "
+                "placed on the centre of the foramen and then lifted towards the "
+                "pedicle by however much this takes -- the shift is worked out "
+                "for you, and differs between foramina. 0 sits on the centre, "
+                "which is what RADO's own lead does.", 0.0, 4.0, 0.25, " mm")
+            form.addRow("Clearance from the ganglion", self.ganglion_clearance)
 
-        self.x_offset = self.spin(
-            "Medial-lateral offset from the midline. POSITIVE is the patient's "
-            "LEFT, negative is the right, zero is on the midline.",
-            -10.0, 10.0, 0.5, " mm")
-        self.x_offset.valueChanged.connect(self.describe_offset)
-        form.addRow("Offset from midline", self.x_offset)
+            self.y_offset = self.spin(
+                "A further nudge across the foramen. Positive is DORSAL "
+                "(posterior).", -4.0, 4.0, 0.25, " mm")
+            form.addRow("Nudge dorsal/ventral", self.y_offset)
+            self.z_offset = self.spin(
+                "A further nudge along the spine. Positive is ROSTRAL (towards "
+                "the head).", -6.0, 6.0, 0.25, " mm")
+            form.addRow("Nudge rostral/caudal", self.z_offset)
 
-        # Typing a position by hand un-picks the level, or the panel would go on
-        # claiming "at T11" while sitting somewhere else entirely -- and that
-        # label is what the validation report and the export are titled with.
-        self.z_center.valueChanged.connect(self.z_edited)
+            self.ganglion_note = QtWidgets.QLabel("")
+            self.ganglion_note.setWordWrap(True)
+            self.ganglion_note.setStyleSheet("color: gray;")
+            form.addRow("", self.ganglion_note)
+            self.target.currentIndexChanged.connect(self.describe_target)
 
-        self.offset_note = QtWidgets.QLabel("")
-        self.offset_note.setStyleSheet("color: gray;")
-        form.addRow("", self.offset_note)
+            self.numeric = (self.contacts, self.contact_length, self.gap,
+                            self.diameter, self.tail, self.lateral_offset,
+                            self.ganglion_clearance, self.y_offset, self.z_offset)
+        else:
+            self.level = QtWidgets.QComboBox()
+            self.level.addItem(CUSTOM)
+            self.level.addItems(list(panel.cfg["levels"]))
+            self.level.setToolTip("Vertebral level for the centre of the contact "
+                                  "array. Level names are RADO's own -- see the "
+                                  "caveat at the top of lead_configs.yaml.")
+            self.level.currentIndexChanged.connect(self.level_picked)
+            form.addRow("Level", self.level)
 
-        outer.addLayout(form)
+            self.z_center = self.spin("Rostro-caudal position of the middle of the "
+                                      "contact array. Set by the level above, or "
+                                      "type it directly.", 0.0, 300.0, 1.0, " mm")
+            self.z_center.valueChanged.connect(self.z_edited)
+            form.addRow("Position (rostro-caudal)", self.z_center)
 
-        # -- verdict -------------------------------------------------------
-        self.banner = QtWidgets.QLabel("Not checked yet")
-        self.banner.setAlignment(QtCore.Qt.AlignCenter)
-        self.banner.setMinimumHeight(28)
-        self.set_banner(None, "Not checked yet")
-        outer.addWidget(self.banner)
+            self.x_offset = self.spin(
+                "Medial-lateral offset from the midline. POSITIVE is the patient's "
+                "LEFT, negative is the right, zero is on the midline.",
+                -10.0, 10.0, 0.5, " mm")
+            self.x_offset.valueChanged.connect(self.describe_offset)
+            form.addRow("Offset from midline", self.x_offset)
 
-        self.detail = QtWidgets.QTextEdit()
-        self.detail.setReadOnly(True)
-        self.detail.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
-        self.detail.setMinimumHeight(160)
-        mono = QtGui.QFont("monospace")
-        mono.setStyleHint(QtGui.QFont.TypeWriter)
-        self.detail.setFont(mono)
-        outer.addWidget(self.detail, 1)
+            self.offset_note = QtWidgets.QLabel("")
+            self.offset_note.setStyleSheet("color: gray;")
+            form.addRow("", self.offset_note)
 
-        # -- actions -------------------------------------------------------
-        row1 = QtWidgets.QHBoxLayout()
-        self.btn_check = QtWidgets.QPushButton("Check fit")
-        self.btn_check.setToolTip("Measure the epidural space where this lead "
-                                  "would sit, and test every point on its "
-                                  "surface for being inside it. Takes a few "
-                                  "seconds.")
-        self.btn_check.clicked.connect(self.check)
-        row1.addWidget(self.btn_check, 2)
+            self.numeric = (self.contacts, self.contact_length, self.gap,
+                            self.diameter, self.tail, self.z_center, self.x_offset)
 
-        self.btn_preview = QtWidgets.QPushButton("Preview")
-        self.btn_preview.setToolTip("Put the lead into the active document, "
-                                    "replacing the last preview. Disposable -- "
-                                    "do not save the document for it.")
-        self.btn_preview.clicked.connect(self.do_preview)
-        row1.addWidget(self.btn_preview, 1)
-        outer.addLayout(row1)
-
-        row2 = QtWidgets.QHBoxLayout()
-        self.btn_clear = QtWidgets.QPushButton("Remove preview")
-        self.btn_clear.setToolTip("Delete the previewed lead and put the tree "
-                                  "back as it was.")
-        self.btn_clear.clicked.connect(self.do_clear)
-        row2.addWidget(self.btn_clear, 1)
-
-        self.btn_export = QtWidgets.QPushButton("Export STLs")
-        self.btn_export.setToolTip("Write one STL per contact plus the "
-                                   "insulator to generated_leads/. Only offered "
-                                   "for a lead that fits.")
-        self.btn_export.clicked.connect(self.do_export)
-        row2.addWidget(self.btn_export, 1)
-        outer.addLayout(row2)
-
-        self.status = QtWidgets.QLabel("")
-        self.status.setWordWrap(True)
-        self.status.setStyleSheet("color: gray;")
-        outer.addWidget(self.status)
-
-        for w in (self.contacts, self.contact_length, self.gap, self.diameter,
-                  self.tail, self.z_center, self.x_offset):
-            w.valueChanged.connect(self.went_custom)
-
-        self.load_config()
-        self.describe_offset()
+        for w in self.numeric:
+            w.valueChanged.connect(self.touched)
 
     # -- widget helpers ---------------------------------------------------
     def spin(self, tip, lo, hi, step, suffix):
@@ -280,48 +272,11 @@ class LeadDesigner(QtWidgets.QWidget):
         w.setToolTip(tip)
         return w
 
-    # -- reading and writing the form -------------------------------------
-    def load_config(self, _index=None):
-        """Fill the form from the selected named configuration."""
-        name = self.pick.currentText()
-        if name == CUSTOM:
-            self.note.setText("")
-            return
-        params = self.blc.resolve(name, self.cfg)
-        self.loading = True
-        try:
-            self.contacts.setValue(int(params["contacts"]))
-            self.contact_length.setValue(float(params["contact_length"]))
-            self.gap.setValue(float(params["gap"]))
-            self.diameter.setValue(float(params["diameter"]))
-            self.tail.setValue(float(params["tail"]))
-            self.side.setCurrentText(params["side"])
-            self.z_center.setValue(float(params["z_center"]))
-            self.x_offset.setValue(float(params["x_offset"]))
-            self.level.setCurrentText(params.get("level") or CUSTOM)
-        finally:
-            self.loading = False
-        self.note.setText(params.get("note", ""))
-        self.set_banner(None, "Not checked yet")
-        self.detail.setPlainText(self.blc.describe(params))
-        self.result = None
-        self.describe_offset()
+    def touched(self, *_a):
+        if not self.loading:
+            self.changed.emit()
 
-    def went_custom(self, *_a):
-        """Any hand edit means this is no longer the named configuration."""
-        if self.loading:
-            return
-        if self.pick.currentText() != CUSTOM:
-            self.loading = True
-            try:
-                self.pick.setCurrentText(CUSTOM)
-            finally:
-                self.loading = False
-            self.note.setText("")
-        self.result = None
-        self.set_banner(None, "Not checked yet")
-
-    def level_picked(self, _index=None):
+    def level_picked(self, _i=None):
         """Picking a level drives the position box; typing a position clears it."""
         if self.loading:
             return
@@ -329,10 +284,10 @@ class LeadDesigner(QtWidgets.QWidget):
         if name != CUSTOM:
             self.loading = True
             try:
-                self.z_center.setValue(float(self.cfg["levels"][name]))
+                self.z_center.setValue(float(self.panel.cfg["levels"][name]))
             finally:
                 self.loading = False
-        self.went_custom()
+        self.touched()
 
     def z_edited(self, *_a):
         """A hand-typed position means the level combo no longer describes it."""
@@ -353,30 +308,310 @@ class LeadDesigner(QtWidgets.QWidget):
             self.offset_note.setText("%.2f mm to the patient's %s"
                                      % (abs(dx), "LEFT" if dx > 0 else "RIGHT"))
 
-    def params(self):
-        """The form as a parameter set build_lead_config understands.
+    def describe_target(self, *_a):
+        g = self.panel.foramen.get(self.target.currentText()) if self.panel.foramen else None
+        if not g:
+            self.ganglion_note.setText("")
+            return
+        self.ganglion_note.setText(
+            "%s side, ganglion centre %.1f mm from the midline; the foramen is a "
+            "measurable channel from %.1f to %.1f mm out."
+            % (g["side"], g["ganglion_u_centre"], g["usable_u"][0], g["usable_u"][1]))
 
-        Built by resolving the named entry (or the defaults) and then overriding
-        every field from the widgets, rather than assembling a dict here: that
-        way the panel cannot drift from what the command line does, and any
-        parameter the catalogue grows is validated in exactly one place.
-        """
+    # -- reading and writing ----------------------------------------------
+    def load(self, params):
+        self.loading = True
+        try:
+            self.contacts.setValue(int(params["contacts"]))
+            self.contact_length.setValue(float(params["contact_length"]))
+            self.gap.setValue(float(params["gap"]))
+            self.diameter.setValue(float(params["diameter"]))
+            self.tail.setValue(float(params["tail"]))
+            if self.kind == "drg":
+                self.target.setCurrentText(str(params["target"]))
+                self.lateral_offset.setValue(float(params.get("lateral_offset", 0.0)))
+                self.ganglion_clearance.setValue(
+                    float(params.get("ganglion_clearance", 0.0)))
+                self.y_offset.setValue(float(params.get("y_offset", 0.0)))
+                self.z_offset.setValue(float(params.get("z_offset", 0.0)))
+            else:
+                self.z_center.setValue(float(params["z_center"]))
+                self.x_offset.setValue(float(params["x_offset"]))
+                self.level.setCurrentText(params.get("level") or CUSTOM)
+        finally:
+            self.loading = False
+        if self.kind == "drg":
+            self.describe_target()
+        else:
+            self.describe_offset()
+
+    def overrides(self):
+        """This page as the override dict resolve_lead() understands."""
+        out = {"type": self.kind,
+               "contacts": self.contacts.value(),
+               "contact_length": self.contact_length.value(),
+               "gap": self.gap.value(),
+               "diameter": self.diameter.value(),
+               "tail": self.tail.value()}
+        if self.kind == "drg":
+            out.update(target=self.target.currentText(),
+                       lateral_offset=self.lateral_offset.value(),
+                       ganglion_clearance=self.ganglion_clearance.value(),
+                       y_offset=self.y_offset.value(),
+                       z_offset=self.z_offset.value())
+        else:
+            out.update(z_center=self.z_center.value(),
+                       x_offset=self.x_offset.value())
+            if self.level.currentText() != CUSTOM:
+                out["level"] = self.level.currentText()
+        return out
+
+
+class LeadDesigner(QtWidgets.QWidget):
+    """The dock's contents: a set of leads, a verdict for each and for the set."""
+
+    def __init__(self, blc):
+        super(LeadDesigner, self).__init__()
+        self.blc = blc
+        self.cfg = blc.parse_config_file(blc.DEFAULT_CONFIGS)
+        self.max_per_type = int(self.cfg.get("max_leads_per_type",
+                                             blc.DEFAULT_MAX_LEADS_PER_TYPE))
+        try:
+            self.foramen = blc.load_foramen_corridors()["ganglia"]
+        except Exception:
+            self.foramen = {}
+        self.ganglia = sorted(self.foramen) or ["L3"]
+
+        self.meshes = None                  # loaded lazily; several MB of STL
+        self.outcome = None                 # last validation, for Preview/Export
+        self.leads = None                   # the resolved parameter sets
+        self.loading = False
+
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(6)
+
+        # -- named configurations ----------------------------------------
+        pick = QtWidgets.QHBoxLayout()
+        pick.addWidget(QtWidgets.QLabel("Configuration"))
+        self.pick = QtWidgets.QComboBox()
+        self.pick.addItems(list(self.cfg["configs"]) + [CUSTOM])
+        self.pick.setToolTip("Ready-made lead sets from lead_configs.yaml. "
+                             "Changing anything below switches to custom.")
+        self.pick.currentIndexChanged.connect(self.load_config)
+        pick.addWidget(self.pick, 1)
+        outer.addLayout(pick)
+
+        self.note = QtWidgets.QLabel("")
+        self.note.setWordWrap(True)
+        self.note.setStyleSheet("color: gray;")
+        outer.addWidget(self.note)
+
+        # -- the leads ----------------------------------------------------
+        add = QtWidgets.QHBoxLayout()
+        add.addWidget(QtWidgets.QLabel("Add lead:"))
+        self.add_buttons = {}
+        for kind in ("dorsal", "ventral", "drg"):
+            btn = QtWidgets.QPushButton(TYPE_WORDS[kind].split(" ")[0])
+            btn.setToolTip("Add a %s lead to this configuration. At most %d of "
+                           "each type." % (TYPE_WORDS[kind].lower(), self.max_per_type))
+            btn.clicked.connect(lambda _c=False, k=kind: self.add_lead(k))
+            add.addWidget(btn)
+            self.add_buttons[kind] = btn
+        self.btn_remove = QtWidgets.QPushButton("Remove this lead")
+        self.btn_remove.setToolTip("Remove the lead whose tab is showing.")
+        self.btn_remove.clicked.connect(self.remove_lead)
+        add.addWidget(self.btn_remove)
+        outer.addLayout(add)
+
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setDocumentMode(True)
+        outer.addWidget(self.tabs)
+
+        # -- verdict -------------------------------------------------------
+        self.banner = QtWidgets.QLabel("Not checked yet")
+        self.banner.setAlignment(QtCore.Qt.AlignCenter)
+        self.banner.setMinimumHeight(28)
+        self.set_banner(None, "Not checked yet")
+        outer.addWidget(self.banner)
+
+        self.detail = QtWidgets.QTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
+        self.detail.setMinimumHeight(180)
+        mono = QtGui.QFont("monospace")
+        mono.setStyleHint(QtGui.QFont.TypeWriter)
+        self.detail.setFont(mono)
+        outer.addWidget(self.detail, 1)
+
+        # -- actions -------------------------------------------------------
+        row1 = QtWidgets.QHBoxLayout()
+        self.btn_check = QtWidgets.QPushButton("Check fit")
+        self.btn_check.setToolTip("Measure the space every lead would sit in, test "
+                                  "every point on each lead's surface for being "
+                                  "inside it, and measure the leads against each "
+                                  "other. Takes a few seconds.")
+        self.btn_check.clicked.connect(self.check)
+        row1.addWidget(self.btn_check, 2)
+
+        self.btn_preview = QtWidgets.QPushButton("Preview")
+        self.btn_preview.setToolTip("Put every lead into the active document, "
+                                    "replacing the last preview. Disposable -- "
+                                    "do not save the document for it.")
+        self.btn_preview.clicked.connect(self.do_preview)
+        row1.addWidget(self.btn_preview, 1)
+        outer.addLayout(row1)
+
+        row2 = QtWidgets.QHBoxLayout()
+        self.btn_clear = QtWidgets.QPushButton("Remove preview")
+        self.btn_clear.setToolTip("Delete the previewed leads and put the tree "
+                                  "back as it was.")
+        self.btn_clear.clicked.connect(self.do_clear)
+        row2.addWidget(self.btn_clear, 1)
+
+        self.btn_export = QtWidgets.QPushButton("Export STLs")
+        self.btn_export.setToolTip("Write one STL per contact plus the insulator, "
+                                   "for every lead, to generated_leads/. Only "
+                                   "offered for a set that fits.")
+        self.btn_export.clicked.connect(self.do_export)
+        row2.addWidget(self.btn_export, 1)
+        outer.addLayout(row2)
+
+        row3 = QtWidgets.QHBoxLayout()
+        self.btn_rado = QtWidgets.QPushButton("Show RADO's lead")
+        self.btn_rado.setToolTip(
+            "Import RADO's own hand-placed 4-contact DRG lead from the five STLs "
+            "it ships, as a separate disposable overlay. It is the only "
+            "independently placed lead in the model, and it is what the foraminal "
+            "trajectory is validated against — worth looking at beside a "
+            "generated DRG lead. Not part of the anatomy; do not save it in.")
+        self.btn_rado.clicked.connect(self.do_rado)
+        row3.addWidget(self.btn_rado, 1)
+
+        self.btn_rado_clear = QtWidgets.QPushButton("Hide RADO's lead")
+        self.btn_rado_clear.clicked.connect(self.do_rado_clear)
+        row3.addWidget(self.btn_rado_clear, 1)
+        outer.addLayout(row3)
+
+        self.status = QtWidgets.QLabel("")
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet("color: gray;")
+        outer.addWidget(self.status)
+
+        self.load_config()
+
+    # -- the set of pages --------------------------------------------------
+    def pages(self):
+        return [self.tabs.widget(i) for i in range(self.tabs.count())]
+
+    def count_of(self, kind):
+        return sum(1 for p in self.pages() if p.kind == kind)
+
+    def retitle(self):
+        """Tab labels carry the lead number, which is what the tree and the
+        exported directories are named for, so they must agree."""
+        for i, page in enumerate(self.pages(), start=1):
+            self.tabs.setTabText(i - 1, "%d  %s" % (i, TYPE_WORDS[page.kind]))
+        for kind, btn in self.add_buttons.items():
+            btn.setEnabled(self.count_of(kind) < self.max_per_type)
+        self.btn_remove.setEnabled(self.tabs.count() > 1)
+
+    def add_lead(self, kind, params=None):
+        if self.count_of(kind) >= self.max_per_type:
+            self.status.setText(
+                "This catalogue allows at most %d %s leads per configuration "
+                "(max_leads_per_type in lead_configs.yaml)."
+                % (self.max_per_type, kind))
+            return None
+        page = LeadPage(self, kind)
+        if params is None:
+            params = self.blc.resolve_lead(self.cfg, None, {}, {"type": kind},
+                                           None, self.tabs.count() + 1, 1)
+        page.load(params)
+        page.changed.connect(self.went_custom)
+        self.tabs.addTab(page, "")
+        self.tabs.setCurrentWidget(page)
+        self.retitle()
+        if not self.loading:
+            self.went_custom()
+        return page
+
+    def remove_lead(self):
+        if self.tabs.count() <= 1:
+            return
+        self.tabs.removeTab(self.tabs.currentIndex())
+        self.retitle()
+        self.went_custom()
+
+    # -- reading and writing the form -------------------------------------
+    def load_config(self, _index=None):
+        """Fill the tabs from the selected named configuration."""
         name = self.pick.currentText()
-        overrides = {
-            "contacts": self.contacts.value(),
-            "contact_length": self.contact_length.value(),
-            "gap": self.gap.value(),
-            "diameter": self.diameter.value(),
-            "tail": self.tail.value(),
-            "side": self.side.currentText(),
-            "z_center": self.z_center.value(),
-            "x_offset": self.x_offset.value(),
-        }
-        params = self.blc.resolve(None if name == CUSTOM else name,
-                                  self.cfg, overrides)
-        if self.level.currentText() != CUSTOM:
-            params["level"] = self.level.currentText()
-        return params
+        if name == CUSTOM:
+            if self.tabs.count() == 0:
+                self.loading = True
+                try:
+                    self.add_lead("dorsal")
+                finally:
+                    self.loading = False
+            self.note.setText("")
+            return
+        try:
+            leads = self.blc.resolve_set(name, self.cfg)
+        except Exception as exc:
+            self.note.setText("cannot use this configuration: %s" % exc)
+            return
+        self.loading = True
+        try:
+            while self.tabs.count():
+                self.tabs.removeTab(0)
+            for params in leads:
+                self.add_lead(params["type"], params)
+        finally:
+            self.loading = False
+        self.retitle()
+        self.note.setText(leads[0].get("note", ""))
+        self.set_banner(None, "Not checked yet")
+        self.detail.setPlainText(
+            self.blc.describe_set(leads) + "\n\n"
+            + "\n".join("  %s" % self.blc.describe(l) for l in leads))
+        self.outcome = None
+
+    def went_custom(self, *_a):
+        """Any hand edit means this is no longer the named configuration."""
+        if self.loading:
+            return
+        if self.pick.currentText() != CUSTOM:
+            self.loading = True
+            try:
+                self.pick.setCurrentText(CUSTOM)
+            finally:
+                self.loading = False
+            self.note.setText("")
+        self.outcome = None
+        self.set_banner(None, "Not checked yet")
+
+    def resolve(self):
+        """The tabs as a list of resolved leads.
+
+        Each page is resolved through build_lead_config.resolve_lead() rather
+        than assembled here, so the panel cannot drift from what the command
+        line does and any parameter the catalogue grows is validated in exactly
+        one place.
+        """
+        pages = self.pages()
+        leads = []
+        for i, page in enumerate(pages, start=1):
+            leads.append(self.blc.resolve_lead(self.cfg, None, {}, {},
+                                               page.overrides(), i, len(pages)))
+        counts = {}
+        for lead in leads:
+            counts[lead["type"]] = counts.get(lead["type"], 0) + 1
+        for kind, n in counts.items():
+            if n > self.max_per_type:
+                raise ValueError("%d %s leads, but at most %d are allowed"
+                                 % (n, kind, self.max_per_type))
+        return leads
 
     # -- actions -----------------------------------------------------------
     def set_banner(self, level, text):
@@ -389,72 +624,83 @@ class LeadDesigner(QtWidgets.QWidget):
     def check(self):
         """Run the validation and show it. See the docstring on why this blocks."""
         try:
-            params = self.params()
+            leads = self.resolve()
         except Exception as exc:
-            self.set_banner("FAIL", "Cannot build that lead")
+            self.set_banner("FAIL", "Cannot build that set")
             self.detail.setPlainText(str(exc))
             return
 
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
-        self.status.setText("Measuring the epidural space…")
+        self.status.setText("Measuring…")
         QtWidgets.QApplication.processEvents()
         try:
             if self.meshes is None:
                 self.meshes = self.blc.load_meshes()
-            import json
             corridor = json.load(open(self.blc.DEFAULT_CORRIDOR))
-            self.result = self.blc.validate(params, meshes=self.meshes,
-                                            corridor=corridor)
-            lines = self.blc.report_lines(params, self.result)
+            foramen = (self.blc.load_foramen_corridors()
+                       if any(l["type"] == "drg" for l in leads) else None)
+            self.leads = leads
+            self.outcome = self.blc.validate_set(leads, meshes=self.meshes,
+                                                 corridor=corridor, foramen=foramen)
+            name = self.pick.currentText()
+            lines = self.blc.report_set_lines(
+                "custom" if name == CUSTOM else name, leads, self.outcome)
             self.detail.setPlainText("\n".join(lines[1:]))
-            worst = "PASS"
-            for level, _t, _m in self.result["checks"]:
-                if level == "FAIL":
-                    worst = "FAIL"
-                elif level == "WARN" and worst != "FAIL":
-                    worst = "WARN"
+
+            levels = [lvl for r in self.outcome["leads"]
+                      for lvl, _t, _m in r["checks"]]
+            levels += [lvl for lvl, _t, _m in self.outcome["checks"]]
+            worst = worst_of(levels)
             headline = {"PASS": "FITS", "WARN": "FITS, with a caveat",
                         "FAIL": "DOES NOT FIT"}[worst]
-            n = self.result["numbers"]
-            if "clearance_mm" in n:
-                headline += "   —   %.2f mm channel, %.2f mm lead, %+.2f mm clearance" \
-                    % (n["channel_min_mm"], params["diameter"], n["clearance_mm"])
+            if len(leads) > 1 and self.outcome["pairs"]:
+                closest = min(p["gap_mm"] for p in self.outcome["pairs"])
+                headline += "   —   %d leads, closest approach %.2f mm" \
+                    % (len(leads), closest)
+            elif self.outcome["leads"] and "clearance_mm" in self.outcome["leads"][0]["numbers"]:
+                n = self.outcome["leads"][0]["numbers"]
+                headline += "   —   %.2f mm lead, %+.2f mm clearance" \
+                    % (leads[0]["diameter"], n["clearance_mm"])
             self.set_banner(worst, headline)
             self.status.setText("")
         except Exception:
-            self.result = None
+            self.outcome = None
             self.set_banner("FAIL", "The check itself failed")
             self.detail.setPlainText(traceback.format_exc())
             self.status.setText("")
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
 
-    def need_result(self):
-        """Both Preview and Export work off a checked lead; check if needed."""
-        if self.result is None:
+    def need_outcome(self):
+        """Both Preview and Export work off a checked set; check if needed."""
+        if self.outcome is None:
             self.check()
-        return self.result
+        return self.outcome
 
     def do_preview(self):
         doc = FreeCAD.ActiveDocument
         if doc is None:
             self.status.setText("No active document to preview into.")
             return
-        result = self.need_result()
-        if result is None or result.get("shapes") is None:
-            self.status.setText("Nothing to preview: the lead could not be built.")
+        outcome = self.need_outcome()
+        if outcome is None or not any(r.get("shapes") for r in outcome["leads"]):
+            self.status.setText("Nothing to preview: no lead could be built.")
             return
-        # A failing lead is still previewed, on purpose -- SEEING the lead push
-        # through the dura is the clearest possible explanation of the failure.
+        # A failing set is still previewed, on purpose -- SEEING the lead push
+        # through the dura, or the two leads sitting inside each other, is the
+        # clearest possible explanation of the failure.
+        name = self.pick.currentText()
         try:
-            _group, made = self.blc.preview(doc, result["params"], result["shapes"],
-                                            self.blc.lead_colours())
+            _group, made = self.blc.preview_set(
+                doc, "custom" if name == CUSTOM else name,
+                self.leads, outcome["leads"], self.blc.lead_colours())
         except Exception as exc:
             self.status.setText("Preview failed: %s" % exc)
             return
         FreeCADGui.updateGui()
-        self.status.setText("Previewed %d bodies in %s. Disposable — do not save "
-                            "the document for it." % (len(made), doc.Label))
+        self.status.setText("Previewed %d bodies from %d lead(s) in %s. "
+                            "Disposable — do not save the document for it."
+                            % (len(made), len(self.leads), doc.Label))
 
     def do_clear(self):
         doc = FreeCAD.ActiveDocument
@@ -466,40 +712,67 @@ class LeadDesigner(QtWidgets.QWidget):
         self.status.setText("Removed %d preview object(s)." % n if n
                             else "There was no preview to remove.")
 
-    def do_export(self):
-        result = self.need_result()
-        if result is None or result.get("shapes") is None:
-            self.status.setText("Nothing to export: the lead could not be built.")
+    def do_rado(self):
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            self.status.setText("No active document.")
             return
-        params = result["params"]
-        if not result["ok"]:
+        try:
+            _g, made = self.blc.preview_rado_lead(doc, colours=self.blc.lead_colours())
+        except Exception as exc:
+            self.status.setText("Could not import RADO's lead: %s" % exc)
+            return
+        FreeCADGui.updateGui()
+        self.status.setText(
+            "Imported RADO's own %d-body DRG lead from STL_files/, as a "
+            "reference overlay. It is not part of the anatomy — do not save the "
+            "document with it in." % len(made))
+
+    def do_rado_clear(self):
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            self.status.setText("No active document.")
+            return
+        n = self.blc.clear_rado_lead(doc)
+        FreeCADGui.updateGui()
+        self.status.setText("Removed %d object(s)." % n if n
+                            else "RADO's reference lead was not shown.")
+
+    def do_export(self):
+        outcome = self.need_outcome()
+        if outcome is None or not all(r.get("shapes") for r in outcome["leads"]):
+            self.status.setText("Nothing to export: a lead could not be built.")
+            return
+        if not outcome["ok"]:
             QtWidgets.QMessageBox.warning(
                 self, "Lead designer",
-                "This lead does not fit the epidural space, so it has not been "
-                "exported.\n\nThe fix is a different lead or a different "
-                "position — the anatomy is not carved away to make room for it. "
-                "See the reasons in the panel.")
+                "This configuration does not fit, so it has not been exported."
+                "\n\nThe fix is a different lead, a different position, or more "
+                "space between two leads — the anatomy is not carved away to "
+                "make room. See the reasons in the panel.")
             return
-        name = params["name"]
-        if name == "custom":
+        name = self.pick.currentText()
+        if name == CUSTOM:
             name, ok = QtWidgets.QInputDialog.getText(
                 self, "Export STLs",
-                "Name for this lead (becomes the directory under "
-                "generated_leads/):", text="custom_lead")
+                "Name for this configuration (becomes the directory under "
+                "generated_leads/):", text="custom_leads")
             if not ok or not name.strip():
                 return
             name = name.strip()
         try:
-            outdir, files = self.blc.export_stls(params, result["shapes"], tag=name)
+            outdir, files = self.blc.export_set(name, self.leads, outcome["leads"],
+                                                tag=name)
         except Exception as exc:
             self.status.setText("Export failed: %s" % exc)
             return
         self.status.setText("Wrote %d files to %s" % (len(files), outdir))
         QtWidgets.QMessageBox.information(
             self, "Lead designer",
-            "Wrote %d STLs to\n\n%s\n\nTo keep this lead, add an entry for it to "
-            "lead_configs.yaml — the configuration plus these STLs are the "
-            "durable artefact, not a saved document." % (len(files), outdir))
+            "Wrote %d STLs from %d lead(s) to\n\n%s\n\nTo keep this "
+            "configuration, add an entry for it to lead_configs.yaml — the "
+            "configuration plus these STLs are the durable artefact, not a saved "
+            "document." % (len(files), len(self.leads), outdir))
 
 
 def show_panel():

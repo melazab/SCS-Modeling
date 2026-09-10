@@ -31,7 +31,11 @@ tissues:
     patterns: ["SCS Lead Electrode *"]
     rho_ohm_m: 2.5e-7
     sigma_S_per_m: 4.0e6
-    note: "4 contacts. Bipolar test uses two of these as +/-1 mA source/sink."
+    note: "Matches every generated lead's contacts as well as RADO's own four --
+      the exported filenames are deliberately RADO's. A bipolar test uses two of
+      them as +/-1 mA source/sink. Corrected 2026-09-10: this said \"4 contacts\",
+      which was true only of RADO's DRG lead; a dorsal study lead has 8 and a
+      configuration may now hold several leads."
 
   - name: lead_insulation
     ed_material: "Lead Insulation"
