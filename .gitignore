@@ -25,15 +25,16 @@ src/freecad/apply_labels_report.txt
 src/freecad/apply_colors_report*.txt
 src/freecad/make_lead_variants_report.txt
 
-# The dorsal/ventral lead variants are DERIVED: base document + the STLs in
-# src/freecad/generated_leads/, assembled by make_lead_variants.py in seconds.
-# At 25 MB each, and binary (so git stores a whole new copy on every change),
-# tracking them would add ~50 MB per revision to a public repo for something one
-# command rebuilds. The base NBF_RADO-SCS.FCStd IS tracked -- it is the
-# irreplaceable input, hand-built from the STL set and carrying the labels.
+# The dorsal/ventral lead variants ARE tracked, per Mohamed. They are
+# reproducible from the base document plus src/freecad/generated_leads/ via
 #   freecadcmd src/freecad/make_lead_variants.py
-NBF_RADO-SCS_dorsal.FCStd
-NBF_RADO-SCS_ventral.FCStd
+# but a collaborator cloning this repo should get the finished models without
+# needing a FreeCAD install first, and they are what the study actually compares.
+# ~25 MB each and binary, so avoid gratuitous re-saves: git stores a whole new
+# copy every time one changes.
+#
+# Only the exploded scratch directories are ignored (mesh cache/thumbnails,
+# regenerated on open), matching the NBF_RADO-SCS/ rule at the top.
 NBF_RADO-SCS_dorsal/
 NBF_RADO-SCS_ventral/
 
