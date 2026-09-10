@@ -18,7 +18,19 @@ No coordinates and no centreline polynomials appear anywhere in the interface.
 
 INSTALL
 -------
-    cp src/freecad/lead_designer.FCMacro ~/.local/share/FreeCAD/Macro/
+    cp src/freecad/lead_designer.FCMacro "$(python3 -c 'import FreeCAD,os;print(os.path.join(FreeCAD.getUserAppDataDir(),"Macro"))')"
+
+    # FreeCAD's macro directory is VERSIONED -- on 26.3 it is
+    #   ~/.local/share/FreeCAD/v26-3/Macro/
+    # not ~/.local/share/FreeCAD/Macro/, which FreeCAD ignores entirely. Ask it
+    # rather than guessing, because the path moves with the version:
+    #
+    #   python3 -c "import FreeCAD, os; print(os.path.join(FreeCAD.getUserAppDataDir(), 'Macro'))"
+    #
+    # or in FreeCAD's own Python console:
+    #   import FreeCAD, os; os.path.join(FreeCAD.getUserAppDataDir(), "Macro")
+    #
+    # Then, in FreeCAD: Macro -> Macros... -> select this file -> Execute.
 
 then Macro -> Macros... -> lead_designer -> Execute. Worth putting on a toolbar
 the same way as tissue_visibility.FCMacro: Tools -> Customize -> Macros, then

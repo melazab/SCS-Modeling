@@ -151,3 +151,29 @@ blobs at all — every tissue colour gone, and the document still opens looking
 like a fresh grey import. `make_tissue_groups.py` documents the measurement;
 `build_lead_config.preview()` refuses outright to touch a saved document when
 `FreeCAD.GuiUp` is false.
+
+## The macros
+
+Two GUI panels. `lead_designer` is the clinical front end -- pick or dial in a
+lead configuration, check that it fits, preview it in the open model.
+`tissue_visibility` gives per-tissue show / hide / isolate, which is what makes
+the model legible: hiding bone, discs and vessels turns a dense mess into a
+clear view of the lead in the epidural space.
+
+**Install -- the macro directory is VERSIONED.** On FreeCAD 26.3 it is
+`~/.local/share/FreeCAD/v26-3/Macro/`. A file dropped in
+`~/.local/share/FreeCAD/Macro/` is ignored completely and the macro simply never
+appears in the list, with no error to tell you why. The path moves with the
+FreeCAD version, so ask rather than hardcode:
+
+    MDIR=$(python3 -c 'import FreeCAD, os; print(os.path.join(FreeCAD.getUserAppDataDir(), "Macro"))')
+    cp src/freecad/*.FCMacro "$MDIR"
+
+Then in FreeCAD: **Macro → Macros…**, select it, **Execute**. That is all that is
+needed to run one.
+
+**Putting one on a toolbar** is a separate, optional step, and it only works
+after the macro is in the directory above: **Tools → Customize → Macros** to
+give it an icon, then **Tools → Customize → Toolbars** to create a toolbar in
+whichever workbench you use and move the macro into it. Toolbar changes take
+effect the next time that workbench loads.
