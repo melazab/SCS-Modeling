@@ -83,19 +83,26 @@ PREFIX = "T8-10 - "          # stripped before matching; every RADO body has it
 # Labels this script must never overwrite.
 #
 # The rules in body_aliases.yaml describe RADO's STL export and key on the object
-# Name. In the variant documents that key is NOT unique to RADO's lead. Since
-# make_lead_variants.py deletes RADO's four contacts before importing the study
-# lead, a rebuilt variant holds eight generated contacts named
-# SCS_Lead_Electrode_1..8 and a sheath named SCS_Lead_Insulator -- the very Names
-# the scs_contact and scs_insulator rules match. Without this guard, running this
-# script over a variant would relabel study contacts 1-4 as "RADO DRG lead
-# contact 1..4" and the study sheath as RADO's: the same two-leads-one-name
-# confusion that started all this, but now written into the tree by the script
-# meant to prevent it.
+# Name. That key is NOT unique to RADO's lead: a generated lead's STLs are named
+# exactly what RADO's are (deliberately -- tissue_map.yaml matches the Names they
+# sanitise to), so any document that has had one imported into it holds contacts
+# named SCS_Lead_Electrode_1.. and a sheath named SCS_Lead_Insulator -- the very
+# Names the scs_contact and scs_insulator rules match. Without this guard,
+# running this script over such a document would relabel generated contacts as
+# "RADO DRG lead contact 1..4": the same two-leads-one-name confusion that
+# started all this, but now written into the tree by the script meant to prevent
+# it.
 #
-# So: a body already labelled by make_lead_variants.py is skipped and reported,
-# whatever its Name. The Label is the only thing that distinguishes them, which
-# is why this guard reads the Label even though nothing else here does.
+# So: a body whose Label already names it as a generated lead is skipped and
+# reported, whatever its Name. The Label is the only thing that distinguishes
+# them, which is why this guard reads the Label even though nothing else here
+# does.
+#
+# NOTE: the study leads no longer live in a saved document at all -- there is one
+# anatomy document and leads are a disposable preview (see build_lead_config.py),
+# and preview bodies are named SCS_Preview_* rather than SCS_Lead_*, so they do
+# not match these rules either way. This guard is kept for a document someone has
+# imported generated STLs into by hand, which is still a supported thing to do.
 PROTECTED_LABEL_PREFIXES = ("SCS 8c ",)
 
 

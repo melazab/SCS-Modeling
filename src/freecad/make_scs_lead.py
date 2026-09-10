@@ -92,46 +92,90 @@ def segment_plan(n_contacts, c_len, gap, tail, z_center):
     Segments abut exactly rather than overlapping: neighbours share a flat
     interface, which is what the mesher and a bonded electric contact want, and
     it is how RADO models its own contacts (short full-diameter segments).
+
+    ZERO-LENGTH SEGMENTS ARE DROPPED rather than emitted, because a cylinder of
+    zero height is not a shape: Part.makeCylinder() would be handed a length of
+    0 and a direction vector it cannot normalise, and the failure comes out as
+    an OCC exception several frames away from the `tail: 0.0` that caused it.
+    Two configurations reach this: a lead with no tail (RADO's own DRG lead has
+    its insulator stop at the end contacts, so rado_drg_L3_match sets tail 0),
+    and the degenerate `gap: 0` where contacts would abut. Every lead that
+    existed before this guard has tail 6.0 and gap 1.0, so none of them changes.
+
+    z is the sweep PARAMETER, not necessarily a z coordinate: a DRG lead is
+    planned in u, the lateral distance from the midline. The names are kept
+    because the rostro-caudal case is the one anyone reads this for.
     """
     total = n_contacts * c_len + (n_contacts - 1) * gap + 2 * tail
     z0 = z_center - 0.5 * total
 
     segments = []
     z = z0
-    segments.append(("insulator", 0, z, tail)); z += tail
+    if tail > 0:
+        segments.append(("insulator", 0, z, tail))
+    z += tail
     for i in range(n_contacts):
         segments.append(("contact", i + 1, z, c_len)); z += c_len
         if i < n_contacts - 1:
-            segments.append(("insulator", i + 1, z, gap)); z += gap
-    segments.append(("insulator", n_contacts, z, tail))
+            if gap > 0:
+                segments.append(("insulator", i + 1, z, gap))
+            z += gap
+    if tail > 0:
+        segments.append(("insulator", n_contacts, z, tail))
     return segments, z0, total
 
 
-def sweep_segments(segments, x, y_of_z, radius):
-    """THE one implementation of "sweep a lead along the measured centreline".
+def sweep_path(segments, point_of, radius):
+    """THE one implementation of "sweep a lead along a measured centreline".
 
     Each segment becomes a cylinder placed along the LOCAL TANGENT of the
-    centreline: from (x, y(z0), z0) to (x, y(z0+len), z0+len). The spine here is
-    kyphotic, so the epidural channel migrates about 7 mm posteriorly over the
-    length of an 8-contact lead; a lead built at fixed y would walk out of the
-    space and through the dura. See the module docstring.
+    centreline: from point_of(t0) to point_of(t0 + len). Neighbours therefore
+    abut on a flat interface and never overlap, which is what the mesher and a
+    bonded electric contact want.
 
-    y_of_z is a callable, deliberately: main() passes the midline polynomial
-    from epidural_corridor.json, while build_lead_config.py passes a centreline
-    re-measured at the requested lateral offset, where the midline polynomial is
-    the wrong curve. Both get identical geometry code.
+    point_of maps the segment plan's parameter to a point in space, and it is a
+    callable because the three lead types run along different axes:
+
+        dorsal / ventral   t is z, and point_of(z) = (x, y(z), z) -- the lead
+                           runs rostro-caudally along the epidural canal, whose
+                           centre migrates ~7 mm posteriorly over the length of
+                           an 8-contact lead because the spine is kyphotic. A
+                           lead built at fixed y would walk out of the space and
+                           through the dura.
+        DRG                t is u, the lateral distance from the midline, and
+                           point_of(u) = (midline +/- u, y(u), z(u)) from
+                           measure_foramen.py -- the lead runs OUT THROUGH THE
+                           FORAMEN, so both of the other two coordinates follow
+                           a curve and neither is the sweep parameter.
 
     Returns [(kind, index, Part.Shape), ...] parallel to `segments`. It builds
     shapes and nothing else -- no document, no files -- so the caller decides
     whether they become a preview in a live document or STLs on disk.
     """
     shapes = []
-    for kind, idx, zs, ln in segments:
-        a = App.Vector(x, y_of_z(zs), zs)
-        b = App.Vector(x, y_of_z(zs + ln), zs + ln)
+    for kind, idx, ts, ln in segments:
+        a = App.Vector(*point_of(ts))
+        b = App.Vector(*point_of(ts + ln))
         d = b.sub(a)
         shapes.append((kind, idx, Part.makeCylinder(radius, d.Length, a, d.normalize())))
     return shapes
+
+
+def sweep_segments(segments, x, y_of_z, radius):
+    """Sweep a rostro-caudal lead: the dorsal/ventral case of sweep_path().
+
+    Kept as its own name because it is the signature every caller of this module
+    used before DRG leads existed, and because "at a fixed x, following y(z)" is
+    the whole description of an epidural lead. The arithmetic is unchanged --
+    the same three vectors in the same order -- so leads generated through here
+    are bit-for-bit what they were.
+
+    y_of_z is a callable, deliberately: main() passes the midline polynomial
+    from epidural_corridor.json, while build_lead_config.py passes a centreline
+    re-measured at the requested lateral offset, where the midline polynomial is
+    the wrong curve. Both get identical geometry code.
+    """
+    return sweep_path(segments, lambda z: (x, y_of_z(z), z), radius)
 
 
 def fuse_insulator(shapes):
@@ -141,8 +185,16 @@ def fuse_insulator(shapes):
     condition in the FEM solve -- but the insulator is one physical body, and
     exporting it as six or ten disconnected cylinders would give the mesher
     coincident faces to argue about.
+
+    Raises when a lead has no insulator at all, which segment_plan() will produce
+    for `tail: 0` together with `gap: 0`: that is a lead made of bare metal end
+    to end, and it should be said so rather than turned into an empty STL.
     """
     parts = [s for kind, _idx, s in shapes if kind == "insulator"]
+    if not parts:
+        raise ValueError("this lead has no insulator: with tail 0 and gap 0 the "
+                         "contacts abut and there is nothing between or beyond "
+                         "them. Give it a tail, or a gap between contacts.")
     fused = parts[0]
     for part in parts[1:]:
         fused = fused.fuse(part)
@@ -236,7 +288,7 @@ def main():
 def run_as_freecadcmd_script():
     """True when a FreeCAD interpreter was handed THIS file to run.
 
-    Same guard as apply_colors.py and make_lead_variants.py. It exists here so
+    Same guard as apply_colors.py and measure_corridor.py. It exists here so
     that `from make_scs_lead import sweep_segments` does not build a lead and
     write STLs as an import side effect -- see the module docstring.
     """
