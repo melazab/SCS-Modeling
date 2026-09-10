@@ -46,3 +46,7 @@ __pycache__/
 src/neuron/.venv/
 src/neuron/x86_64/
 src/neuron/**/x86_64/
+
+# Pre-grouping snapshot from src/freecad/make_tissue_groups.py
+*.pregroup*.bak
+src/freecad/make_tissue_groups_report*.txt

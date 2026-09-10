@@ -1,0 +1,300 @@
+# -*- coding: utf-8 -*-
+"""Tissue visibility panel for the NBF_RADO-SCS documents.
+
+FreeCAD's answer to Ansys' named selections, as a panel you can actually drive
+with one hand. One row per tissue: a checkbox that shows or hides all of it, and
+an "only" button that isolates it -- shows that tissue and hides every other
+body in the document. Plus All / None / Invert across the top. The point is to
+make "let me see the lead and the cord with the vertebrae out of the way" a
+single click instead of 123 presses of the spacebar.
+
+INSTALL
+-------
+    cp src/freecad/tissue_visibility.FCMacro ~/.local/share/FreeCAD/Macro/
+
+then Macro -> Macros... -> tissue_visibility -> Execute. To get it on a toolbar
+(worth it -- this is a thing you press constantly): Tools -> Customize ->
+Macros, pick tissue_visibility, add an icon and a shortcut, then Tools ->
+Customize -> Toolbars, make a new toolbar in whatever workbench you live in and
+move the macro into it.
+
+Re-running the macro re-uses the same dock rather than stacking up copies of it;
+close it with the dock's own X.
+
+HOW IT FINDS THE TISSUES
+------------------------
+It does NOT depend on make_tissue_groups.py having been run. Groups are a nice
+way to browse the tree, but they are also exclusive-parentage containers that
+someone may have rearranged, and a visibility panel that broke when the tree was
+reorganised would be worse than useless. So this resolves every body's tissue
+the same way everything else in this repo does -- by importing apply_colors.py's
+build_index() and lookup(), which import check_tissue_map.py's parser and
+matches() in turn. The document's tree is never consulted, so the panel works
+identically on a grouped and an ungrouped document, and cannot disagree with the
+colours or with the Ansys material assignment.
+
+That does mean the macro needs the repo on disk. REPO below is the default; set
+the SCS_MODELING_REPO environment variable to override it, e.g. if the checkout
+moves. If neither resolves, the panel says so in a dialog instead of coming up
+empty.
+
+WHY BODIES AND NOT GROUP VISIBILITY
+-----------------------------------
+Toggling an App::DocumentObjectGroup's Visibility does cascade to its children,
+which is exactly the shortcut make_tissue_groups.py exists to provide from the
+tree. This panel sets each body's Visibility directly instead, for two reasons:
+it then works on an ungrouped document, and isolate needs to hide bodies ACROSS
+groups, which group-level flags cannot express without leaving the tree's
+checkboxes lying about what is actually on screen.
+"""
+import os
+import sys
+
+import FreeCAD
+import FreeCADGui
+
+# FreeCAD 1.0+ ships the PySide shim; the explicit fallbacks are for a build
+# where it is missing and the real binding has to be named.
+try:
+    from PySide import QtCore, QtWidgets
+except ImportError:                                     # pragma: no cover
+    try:
+        from PySide6 import QtCore, QtWidgets
+    except ImportError:
+        from PySide2 import QtCore, QtWidgets
+
+REPO = os.environ.get("SCS_MODELING_REPO",
+                      os.path.expanduser("~/Projects/SCS-Modeling"))
+OBJECT_NAME = "SCS_TissueVisibilityDock"   # so a second run re-uses the dock
+
+# Group labels, minus their numeric prefix, so the panel reads the same as the
+# tree make_tissue_groups.py builds. Kept as a display-only lookup: a tissue
+# missing from here still gets a row, titled from its map name.
+TITLES = {
+    "vertebra":             "Vertebrae",
+    "intervertebral_disc":  "Discs",
+    "epidural_space":       "Epidural space",
+    "meninges_dura":        "Dura and meninges",
+    "csf":                  "CSF",
+    "white_matter":         "White matter",
+    "grey_matter":          "Grey matter",
+    "nerve_root":           "Nerve roots",
+    "dorsal_root_ganglion": "DRG",
+    "sympathetic_chain":    "Sympathetic chain",
+    "blood_vessel":         "Vasculature",
+    "soft_tissue":          "Soft tissue",
+    "electrode_contact":    "Lead contacts",
+    "lead_insulation":      "Lead insulation",
+}
+
+# Display order, outside in then hardware last -- the same order as
+# make_tissue_groups.GROUP_ORDER. Anything not listed is appended in map order.
+ORDER = ["vertebra", "intervertebral_disc", "epidural_space", "meninges_dura",
+         "csf", "white_matter", "grey_matter", "nerve_root",
+         "dorsal_root_ganglion", "sympathetic_chain", "blood_vessel",
+         "soft_tissue", "electrode_contact", "lead_insulation"]
+
+
+def load_resolver():
+    """Import the repo's one tissue resolver. Returns (build_index, lookup, parse)."""
+    freecad_dir = os.path.join(REPO, "src", "freecad")
+    ansys_dir = os.path.join(REPO, "src", "ansys")
+    for d in (ansys_dir, freecad_dir):
+        if d not in sys.path:
+            sys.path.insert(0, d)
+    from apply_colors import build_index, lookup
+    from check_tissue_map import parse_tissue_map
+    return build_index, lookup, parse_tissue_map
+
+
+def tissue_of_bodies(doc):
+    """{tissue name: [body, ...]} for one document, in ORDER then map order.
+
+    Groups are skipped -- they are containers, not bodies, and hiding a group
+    object would double up with hiding its children. So is anything the map
+    cannot place, which is reported by the caller rather than silently dropped.
+    """
+    build_index, lookup, parse_tissue_map = load_resolver()
+    tissues = parse_tissue_map(os.path.join(REPO, "src", "ansys", "tissue_map.yaml"))
+    index = build_index(os.path.join(REPO, "STL_files"), tissues)[0]
+
+    by_tissue, unplaced = {}, []
+    for obj in doc.Objects:
+        if obj.TypeId == "App::DocumentObjectGroup":
+            continue
+        if not hasattr(obj, "Visibility"):
+            continue
+        tissue = lookup(obj.Name, index, tissues)[1]
+        if tissue is None:
+            unplaced.append(obj)
+            continue
+        by_tissue.setdefault(tissue["name"], []).append(obj)
+
+    ordered = [t for t in ORDER if t in by_tissue]
+    ordered += [t["name"] for t in tissues
+                if t["name"] in by_tissue and t["name"] not in ordered]
+    return [(t, by_tissue[t]) for t in ordered], unplaced
+
+
+class TissuePanel(QtWidgets.QWidget):
+    """The dock's contents: a header row of bulk actions, then one row per tissue."""
+
+    def __init__(self, doc):
+        super(TissuePanel, self).__init__()
+        self.doc = doc
+        self.rows = []                     # [(tissue, [body, ...], checkbox), ...]
+        self.updating = False              # guard so refresh() does not re-fire toggles
+
+        groups, unplaced = tissue_of_bodies(doc)
+        self.all_bodies = [b for _t, bodies in groups for b in bodies] + unplaced
+
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(4)
+
+        head = QtWidgets.QLabel("<b>%s</b> &mdash; %d bodies, %d tissues"
+                                % (doc.Label, len(self.all_bodies), len(groups)))
+        head.setWordWrap(True)
+        outer.addWidget(head)
+
+        bulk = QtWidgets.QHBoxLayout()
+        for text, tip, slot in (
+                ("All", "Show every body", self.show_all),
+                ("None", "Hide every body", self.hide_all),
+                ("Invert", "Show what is hidden, hide what is shown", self.invert)):
+            b = QtWidgets.QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            bulk.addWidget(b)
+        outer.addLayout(bulk)
+
+        grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        for r, (tissue, bodies) in enumerate(groups):
+            cb = QtWidgets.QCheckBox("%s  (%d)"
+                                     % (TITLES.get(tissue, tissue.replace("_", " ")),
+                                        len(bodies)))
+            cb.setToolTip("%s -- %d bodies" % (tissue, len(bodies)))
+            cb.setTristate(True)           # partial state when some are hidden
+            cb.clicked.connect(self.make_toggle(bodies))
+            only = QtWidgets.QPushButton("only")
+            only.setToolTip("Isolate: show this tissue and hide everything else")
+            only.setFixedWidth(48)
+            only.clicked.connect(self.make_isolate(bodies))
+            grid.addWidget(cb, r, 0)
+            grid.addWidget(only, r, 1)
+            self.rows.append((tissue, bodies, cb))
+
+        holder = QtWidgets.QWidget()
+        holder.setLayout(grid)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidget(holder)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        outer.addWidget(scroll, 1)
+
+        if unplaced:
+            note = QtWidgets.QLabel(
+                "<i>%d object(s) with no tissue &mdash; not controlled here</i>"
+                % len(unplaced))
+            note.setWordWrap(True)
+            outer.addWidget(note)
+
+        self.refresh()
+
+    # -- helpers ----------------------------------------------------------
+    def make_toggle(self, bodies):
+        # A closure per row, capturing that row's bodies, rather than one
+        # handler that reads the sender: a tristate checkbox's clicked() cycles
+        # through PartiallyChecked, so whatever Qt reports as the new check
+        # state is not what the user meant.
+        def handler(_checked=False):
+            if self.updating:
+                return
+            # Binary from the user's point of view: if any of this tissue is
+            # showing, the click means hide it; otherwise show it.
+            self.set_visible(bodies, not any(b.Visibility for b in bodies))
+            self.refresh()
+        return handler
+
+    def make_isolate(self, bodies):
+        def handler(_checked=False):
+            keep = set(b.Name for b in bodies)
+            self.set_visible([b for b in self.all_bodies if b.Name not in keep], False)
+            self.set_visible(bodies, True)
+            self.refresh()
+        return handler
+
+    def set_visible(self, bodies, state):
+        for b in bodies:
+            if b.Visibility != state:
+                b.Visibility = state
+
+    def show_all(self):
+        self.set_visible(self.all_bodies, True)
+        self.refresh()
+
+    def hide_all(self):
+        self.set_visible(self.all_bodies, False)
+        self.refresh()
+
+    def invert(self):
+        for b in self.all_bodies:
+            b.Visibility = not b.Visibility
+        self.refresh()
+
+    def refresh(self):
+        """Re-read Visibility off the document so the boxes track the 3D view.
+
+        The bodies can be hidden from the tree or the spacebar behind this
+        panel's back, so the checkboxes are a VIEW of the document rather than
+        the source of truth. Partially-shown tissues get Qt's third state, which
+        is the only honest thing to draw for 123 nerve roots of which 40 are on.
+        """
+        self.updating = True
+        try:
+            for _tissue, bodies, cb in self.rows:
+                on = sum(1 for b in bodies if b.Visibility)
+                if on == 0:
+                    cb.setCheckState(QtCore.Qt.Unchecked)
+                elif on == len(bodies):
+                    cb.setCheckState(QtCore.Qt.Checked)
+                else:
+                    cb.setCheckState(QtCore.Qt.PartiallyChecked)
+        finally:
+            self.updating = False
+
+
+def show_panel():
+    doc = FreeCAD.ActiveDocument
+    mw = FreeCADGui.getMainWindow()
+    if doc is None:
+        QtWidgets.QMessageBox.warning(mw, "Tissue visibility",
+                                      "No active document.")
+        return None
+    try:
+        panel = TissuePanel(doc)
+    except Exception as exc:
+        QtWidgets.QMessageBox.critical(
+            mw, "Tissue visibility",
+            "Could not resolve tissues.\n\n%s: %s\n\nLooked for the repo at:\n%s\n\n"
+            "Set SCS_MODELING_REPO if the checkout lives somewhere else."
+            % (type(exc).__name__, exc, REPO))
+        return None
+
+    # Re-use the dock if the macro was run before, so pressing the toolbar
+    # button twice does not leave two panels fighting over the same document.
+    dock = mw.findChild(QtWidgets.QDockWidget, OBJECT_NAME)
+    if dock is None:
+        dock = QtWidgets.QDockWidget("Tissue visibility", mw)
+        dock.setObjectName(OBJECT_NAME)
+        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    dock.setWidget(panel)
+    dock.setWindowTitle("Tissue visibility — %s" % doc.Label)
+    dock.show()
+    dock.raise_()
+    return dock
+
+
+show_panel()
