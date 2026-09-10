@@ -50,9 +50,17 @@ ShapeAppearance; reopen and save under freecadcmd -> Document.xml only.
 
 So on a COLOURED document, run this script from a running FreeCAD GUI (the same
 way apply_colors.py documents), not under freecadcmd. `--dry-run` is always
-safe. A label-only change can also be spliced in at the zip level -- rewrite
-Document.xml inside the .FCStd and copy every other entry byte-for-byte -- which
-is how the RADO-lead relabel of 2026-09-10 was applied with FreeCAD closed.
+safe.
+
+A label-only change can also be spliced in at the zip level with FreeCAD closed:
+Label lives in Document.xml, so rewriting that one entry and copying every other
+zip entry BYTE-FOR-BYTE leaves GuiDocument.xml and the appearance blobs exactly
+as they were (verify: only Document.xml changes, and the ShapeAppearance count
+is unchanged). What must not be attempted that way is reconstructing
+GuiDocument.xml itself -- a partial merge of appearance entries is what left 97
+bodies painted FreeCAD's default grey while every blob-count check still passed.
+Counting blobs does not prove they are attached to the right bodies; only
+reading DiffuseColor back off a ViewObject does, and that needs a GUI.
 
 The 8-contact study lead is protected from this script; see
 PROTECTED_LABEL_PREFIXES below.
@@ -74,16 +82,20 @@ PREFIX = "T8-10 - "          # stripped before matching; every RADO body has it
 
 # Labels this script must never overwrite.
 #
-# The rules in body_aliases.yaml describe RADO's STL export, and the object Name
-# is the key. In the two variant documents that key is no longer unique to RADO:
-# make_lead_variants.py imports eight generated contacts whose STLs are named
-# exactly like RADO's, so FreeCAD uniquifies them to SCS_Lead_Electrode_001..004
-# and _5..8. Today only "SCS Lead Electrode 1..4.stl" exist in STL_files/, so
-# _5..8 match no rule and are left alone by luck rather than by design -- drop
-# the generated lead's STLs into STL_files/ and the scs_contact rule would
-# happily relabel study contacts 5-8 as RADO DRG contacts. This guard makes that
-# impossible: a body already labelled by make_lead_variants.py is skipped and
-# reported, whatever its Name.
+# The rules in body_aliases.yaml describe RADO's STL export and key on the object
+# Name. In the variant documents that key is NOT unique to RADO's lead. Since
+# make_lead_variants.py deletes RADO's four contacts before importing the study
+# lead, a rebuilt variant holds eight generated contacts named
+# SCS_Lead_Electrode_1..8 and a sheath named SCS_Lead_Insulator -- the very Names
+# the scs_contact and scs_insulator rules match. Without this guard, running this
+# script over a variant would relabel study contacts 1-4 as "RADO DRG lead
+# contact 1..4" and the study sheath as RADO's: the same two-leads-one-name
+# confusion that started all this, but now written into the tree by the script
+# meant to prevent it.
+#
+# So: a body already labelled by make_lead_variants.py is skipped and reported,
+# whatever its Name. The Label is the only thing that distinguishes them, which
+# is why this guard reads the Label even though nothing else here does.
 PROTECTED_LABEL_PREFIXES = ("SCS 8c ",)
 
 

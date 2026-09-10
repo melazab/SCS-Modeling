@@ -11,26 +11,40 @@ at 100% of sampled vertices inside epidural fat and 0% in dura -- so they are
 imported with NO transform of any kind. Anything that moved them would silently
 invalidate that check.
 
-RADO's own 4-contact DRG lead is LEFT IN PLACE and only hidden (Visibility =
-False). Deleting it is a modelling decision about what the published RADO-SCS
-model should still contain, and that is Mohamed's to make, not this script's.
-It is still in the tree, still in the Ansys name selections, and one click from
-being visible again.
+RADO's own 4-contact DRG lead is DELETED from each variant, before the study
+lead is imported. Per Mohamed: "I don't see the point of hiding them they don't
+belong there!" -- and it is the right call for the physics, not just for the
+tree. A variant exists to model ONE lead. A second lead left in the geometry is
+not merely untidy: Simpleware/Gmsh would mesh it, the FEM solve would treat four
+platinum cylinders and an insulator sheath as conductors sitting in the field a
+few millimetres off the cord, and the resulting potentials -- and every axon
+threshold computed from them -- would be wrong. Hiding a body (Visibility =
+False) changes nothing about any of that; it only stops FreeCAD drawing it.
 
-Note what happens to the new objects' Names. The generated files are called
-exactly what RADO's are -- "SCS Lead Electrode 1.stl", "SCS Lead Insulator.stl" --
-so the Names those sanitize to are already taken in the base document and
-FreeCAD uniquifies them. It does that by stripping the trailing digits off the
-base name before appending a 3-digit counter, so contacts 1-4 land as
-SCS_Lead_Electrode_001..004 (NOT _1001) while 5-8, which collide with nothing,
-keep SCS_Lead_Electrode_5..8. The contact number in the Name is therefore not
-reliable -- the Label is where it lives, and the Labels set below are also what
-tells the 8-contact lead apart from RADO's hidden 4-contact one in the tree.
+The BASE document, NBF_RADO-SCS.FCStd, keeps RADO's lead untouched. That is the
+published model, and this script never writes to it -- it copies it.
 
-Renaming the STLs to dodge the collision would break the tissue_map.yaml
-patterns that give the contacts their silver and the insulator its near-black,
-so it is not done; apply_colors.py matches those patterns against the object
-Name, where "SCS Lead Electrode" survives the uniquifier intact.
+Deleting first, then importing, is also what keeps the object Names clean. The
+generated files are called exactly what RADO's are -- "SCS Lead Electrode 1.stl",
+"SCS Lead Insulator.stl" -- so importing them while RADO's bodies were still
+present made FreeCAD uniquify the new Names to SCS_Lead_Electrode_001..004 (it
+strips the trailing digits before appending a 3-digit counter) while 5-8, which
+collided with nothing, kept SCS_Lead_Electrode_5..8. Those two runs of numbers
+alphabetised around RADO's _1..4 and made the tree read as a 12-contact lead
+with four contacts greyed out. With RADO's five bodies gone before the import,
+the eight contacts land as SCS_Lead_Electrode_1..8 and the sheath as
+SCS_Lead_Insulator: contiguous, in physical order, and the contact number in the
+Name means what it says. check_names() below asserts exactly that.
+
+NOTE for anyone comparing against a variant built before 2026-09-10: those
+documents were built the old way and their contacts still carry the uniquified
+Names (_001..004, _5..8). Nothing keys on the digits -- tissue_map.yaml matches
+on the "SCS Lead Electrode" prefix, which survives either way -- but a rebuild
+by this script will not reproduce the old Names.
+
+Renaming the STLs to dodge the filename collision would break those
+tissue_map.yaml patterns, so it is not done; apply_colors.py matches them
+against the object Name.
 
     python3 src/freecad/make_lead_variants.py --dry-run       # no FreeCAD needed
     freecadcmd src/freecad/make_lead_variants.py              # writes both variants
@@ -68,10 +82,13 @@ VARIANTS = {
     "ventral": ("ventral_z110_8c", "SCS 8c ventral"),
 }
 
-# RADO's original 4-contact DRG lead, hidden but kept. Matched on Name, which is
-# stable; Labels are apply_labels.py's and are not load-bearing.
+# RADO's original 4-contact DRG lead, deleted from every variant. Matched on
+# Name, which is stable; Labels are apply_labels.py's and are not load-bearing.
 RADO_LEAD = ("SCS_Lead_Electrode_1", "SCS_Lead_Electrode_2", "SCS_Lead_Electrode_3",
              "SCS_Lead_Electrode_4", "SCS_Lead_Insulator")
+
+# What the study lead's nine bodies must be called once RADO's are gone.
+EXPECTED_NAMES = tuple("SCS_Lead_Electrode_%d" % i for i in range(1, 9)) + ("SCS_Lead_Insulator",)
 
 
 def script_args():
@@ -90,6 +107,44 @@ def lead_files(lead_dir):
         raise ValueError("%s: expected 8 contacts + 1 insulator, got %d + %d"
                          % (lead_dir, len(contacts), len(insulators)))
     return contacts + insulators
+
+
+def drop_rado_lead(doc, say):
+    """Delete RADO's four contacts and its insulator from `doc`. Idempotent.
+
+    A body is removed from its tissue group first. App::DocumentObjectGroup owns
+    its children through a PropertyLinkList, and removing the object without
+    removing the link is how a group ends up holding a dangling entry.
+    """
+    dropped, absent = [], []
+    for name in RADO_LEAD:
+        obj = doc.getObject(name)
+        if obj is None:                      # already gone: a rerun, or a base
+            absent.append(name)              # document that never had it
+            continue
+        parent = obj.getParentGroup() if hasattr(obj, "getParentGroup") else None
+        if parent is not None:
+            parent.removeObject(obj)
+        dropped.append("%s (%s)" % (name, obj.Label))
+        doc.removeObject(name)
+    say("deleted:   RADO's 4-contact DRG lead, %d bodies -- %s",
+        len(dropped), ", ".join(dropped) or "none")
+    if absent:
+        say("           already absent: %s", ", ".join(absent))
+    return len(dropped)
+
+
+def check_names(added, say):
+    """Confirm the imported bodies got the clean Names, i.e. nothing was uniquified."""
+    got = tuple(o.Name for o in added)
+    if got == EXPECTED_NAMES:
+        say("names:     SCS_Lead_Electrode_1..8 + SCS_Lead_Insulator, no uniquifier suffix")
+        return 0
+    say("ERROR: unexpected object Names after import -- something was still")
+    say("       holding those Names when the STLs were read.")
+    say("       expected %s", ", ".join(EXPECTED_NAMES))
+    say("       got      %s", ", ".join(got))
+    return 1
 
 
 def label_for(prefix, filename):
@@ -135,8 +190,13 @@ def build(variant, args, say):
     say("copied:    %s -> %s", os.path.basename(args.base), os.path.basename(out))
 
     doc = FreeCAD.openDocument(out)
+    say("opened:    %s, %d objects", doc.Name, len(doc.Objects))
+
+    # Delete BEFORE importing: it is what frees the Names the generated bodies
+    # should have, and it is why they come out as _1..8 instead of _001..004
+    # plus _5..8. See the module docstring.
+    drop_rado_lead(doc, say)
     before = len(doc.Objects)
-    say("opened:    %s, %d objects", doc.Name, before)
 
     # Mesh.insert reads the file straight into the document's own frame; there is
     # no placement argument and none is wanted -- see the module docstring.
@@ -147,23 +207,14 @@ def build(variant, args, say):
         say("ERROR: imported %d files but the document gained %d objects",
             len(stls), len(added))
         return 1
+    if check_names(added, say):
+        return 1
 
     say("")
     say("%-28s %-24s %s", "IMPORTED FILE", "OBJECT NAME", "LABEL")
     for fn, obj in zip(stls, added):
         obj.Label = label_for(prefix, fn)
         say("%-28s %-24s %s", fn, obj.Name, obj.Label)
-
-    hidden = []
-    for name in RADO_LEAD:
-        obj = doc.getObject(name)
-        if obj is None:
-            say("WARNING: %s not in the base document", name)
-            continue
-        obj.Visibility = False
-        hidden.append(obj.Label)
-    say("")
-    say("hidden (kept, not deleted): RADO's 4-contact DRG lead -- %s", ", ".join(hidden))
 
     doc.recompute()
     doc.save()
@@ -202,7 +253,8 @@ def main():
         if args.dry_run:
             for fn in stls:
                 say("   %-28s -> Label %r", fn, label_for(prefix, fn))
-            say("   would hide: %s", ", ".join(RADO_LEAD))
+            say("   would delete RADO's DRG lead: %s", ", ".join(RADO_LEAD))
+            say("   would then import as: %s", ", ".join(EXPECTED_NAMES))
             say("   would write NBF_RADO-SCS_%s.FCStd", variant)
         else:
             rc |= build(variant, args, say)
