@@ -1,0 +1,3 @@
+# Generated FEM output. Everything here is reproduced by `bash fem/run_all.sh`
+# and is far too large to version (the mesh alone is ~100 MB).
+out/

@@ -1,0 +1,9 @@
+# FreeCAD-side FEM route (fem/). Everything here installs with pip into a venv;
+# no root needed. The system packages gmsh and calculix-ccx (apt) are used only
+# by crosscheck_ccx.py -- the meshing itself uses the gmsh PYTHON API below.
+gmsh>=4.13
+numpy>=1.26
+scipy>=1.11
+pyamg>=5.0
+meshio>=5.3
+matplotlib>=3.7
