@@ -107,13 +107,14 @@ properties OF the body, and membership of a group is a property of the GROUP
 (its Group link list), so moving one cannot perturb the other. check_untouched()
 below asserts that rather than trusting it.
 """
+
 import argparse
 import os
 import shlex
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(HERE))   # src/freecad/ -> repo root
+REPO = os.path.dirname(os.path.dirname(HERE))  # src/freecad/ -> repo root
 DEFAULT_DOC = os.path.join(REPO, "NBF_RADO-SCS.FCStd")
 DEFAULT_STL = os.path.join(REPO, "STL_files")
 DEFAULT_MAP = os.path.join(HERE, "..", "ansys", "tissue_map.yaml")
@@ -121,12 +122,23 @@ DEFAULT_REPORT = os.path.join(HERE, "make_tissue_groups_report.txt")
 
 # HERE is on sys.path when this file is the script being run, but not when a
 # running FreeCAD GUI loads it by path through importlib, which is how the write
-# path is invoked -- so put it on explicitly. apply_colors.py does the same for
-# ../ansys, and importing it is what puts check_tissue_map on the path too.
+# path is invoked -- so put it on explicitly.
+#
+# ../ansys is added here too, and that is deliberate rather than redundant.
+# check_tissue_map lives there, and apply_colors also adds that path as a side
+# effect of being imported -- so this file used to work only because
+# `from apply_colors import ...` happened to sit ABOVE
+# `from check_tissue_map import ...`. An import sorter reordered them
+# alphabetically, which is a correct thing for an import sorter to do, and the
+# script died with "No module named 'check_tissue_map'". Adding the path
+# explicitly removes the ordering dependency instead of restoring it, so the
+# next formatter run is harmless.
 sys.path.insert(0, HERE)
-from apply_colors import (build_index, lookup,                     # noqa: E402
-                          is_freecad_interpreter, open_document)
-from check_tissue_map import parse_tissue_map                      # noqa: E402
+sys.path.insert(0, os.path.join(HERE, "..", "ansys"))
+
+from apply_colors import (build_index, is_freecad_interpreter,      # noqa: E402
+                          lookup, open_document)
+from check_tissue_map import parse_tissue_map                       # noqa: E402
 
 # tissue name in tissue_map.yaml -> the human-readable half of the group Label.
 # The order of this list IS the numbering: outside in, then peripheral, then
@@ -134,20 +146,20 @@ from check_tissue_map import parse_tissue_map                      # noqa: E402
 # here is still grouped -- it lands at the end with the next number -- so adding
 # a tissue to the map cannot silently drop its bodies out of the tree.
 GROUP_ORDER = [
-    ("vertebra",             "Vertebrae"),
-    ("intervertebral_disc",  "Discs"),
-    ("epidural_space",       "Epidural space"),
-    ("meninges_dura",        "Dura and meninges"),
-    ("csf",                  "CSF"),
-    ("white_matter",         "White matter"),
-    ("grey_matter",          "Grey matter"),
-    ("nerve_root",           "Nerve roots"),
+    ("vertebra", "Vertebrae"),
+    ("intervertebral_disc", "Discs"),
+    ("blood_vessel", "Vasculature"),
+    ("epidural_space", "Epidural space"),
+    ("meninges_dura", "Dura and meninges"),
+    ("csf", "CSF"),
+    ("white_matter", "White matter"),
+    ("grey_matter", "Grey matter"),
+    ("nerve_root", "Nerve roots"),
     ("dorsal_root_ganglion", "DRG"),
-    ("sympathetic_chain",    "Sympathetic chain"),
-    ("blood_vessel",         "Vasculature"),
-    ("soft_tissue",          "Soft tissue"),
-    ("electrode_contact",    "Lead contacts"),
-    ("lead_insulation",      "Lead insulation"),
+    ("sympathetic_chain", "Sympathetic chain"),
+    ("soft_tissue", "Soft tissue"),
+    ("electrode_contact", "Lead contacts"),
+    ("lead_insulation", "Lead insulation"),
 ]
 
 # Prefix for the group objects' internal Names. The Name, not the Label, is what
@@ -198,7 +210,8 @@ def snapshot(objs):
     for obj in objs:
         shot[obj.Name] = tuple(
             str(getattr(obj, p)) if p == "Placement" else getattr(obj, p)
-            for p in WATCHED)
+            for p in WATCHED
+        )
     return shot
 
 
@@ -227,18 +240,31 @@ def main():
     ap.add_argument("--stl-dir", default=DEFAULT_STL)
     ap.add_argument("--map", default=DEFAULT_MAP)
     ap.add_argument("--report", default=DEFAULT_REPORT)
-    ap.add_argument("--dry-run", action="store_true",
-                    help="report the full plan; touches neither the document nor FreeCAD")
-    ap.add_argument("--backup", action="store_true",
-                    help="copy the .FCStd to .pregroup.bak before writing")
-    ap.add_argument("--keep-open", action="store_true",
-                    help="leave the document open after saving (for a GUI session)")
-    ap.add_argument("--force-headless-save", action="store_true",
-                    help="save even with no Gui layer -- DISCARDS every colour, "
-                         "transparency and visibility flag in the document")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report the full plan; touches neither the document nor FreeCAD",
+    )
+    ap.add_argument(
+        "--backup",
+        action="store_true",
+        help="copy the .FCStd to .pregroup.bak before writing",
+    )
+    ap.add_argument(
+        "--keep-open",
+        action="store_true",
+        help="leave the document open after saving (for a GUI session)",
+    )
+    ap.add_argument(
+        "--force-headless-save",
+        action="store_true",
+        help="save even with no Gui layer -- DISCARDS every colour, "
+        "transparency and visibility flag in the document",
+    )
     args = ap.parse_args(script_args())
 
     out = []
+
     def say(fmt, *a):
         out.append(fmt % a if a else fmt)
 
@@ -259,8 +285,10 @@ def main():
         for stem in unmatched:
             say("   %s", stem)
         say("")
-        say("RESULT: aborted, %d STL bodies unmatched (unmatched_policy: error)",
-            len(unmatched))
+        say(
+            "RESULT: aborted, %d STL bodies unmatched (unmatched_policy: error)",
+            len(unmatched),
+        )
         write_report(args.report, out)
         return 1
 
@@ -282,21 +310,27 @@ def main():
     say("")
 
     if ambiguous:
-        say("AMBIGUOUS (%d) -- matched more than one tissue; first in map order wins,",
-            len(ambiguous))
+        say(
+            "AMBIGUOUS (%d) -- matched more than one tissue; first in map order wins,",
+            len(ambiguous),
+        )
         say("which is also the group each lands in:")
         for stem, hits in ambiguous:
             say("   %-58s -> %s", stem[:58], hits)
         say("")
 
     if args.dry_run:
-        say("RESULT: dry run OK, %d groups over %d bodies",
-            len([1 for t, _g, _l in plan if stl_counts.get(t)]), sum(stl_counts.values()))
+        say(
+            "RESULT: dry run OK, %d groups over %d bodies",
+            len([1 for t, _g, _l in plan if stl_counts.get(t)]),
+            sum(stl_counts.values()),
+        )
         write_report(args.report, out)
         return 0
 
     # -- write path: FreeCAD only imported here so --dry-run works anywhere ---
     import shutil
+
     import FreeCAD
 
     # Refuse BEFORE touching anything. A headless save would silently strip
@@ -308,7 +342,9 @@ def main():
         say("       The grouping itself would work fine headless, but the SAVE would")
         say("       write Document.xml alone: no GuiDocument.xml, no ShapeAppearance")
         say("       blobs. Every colour and transparency apply_colors.py set, and the")
-        say("       Visibility flags on RADO's 4-contact lead, would be lost -- and the")
+        say(
+            "       Visibility flags on RADO's 4-contact lead, would be lost -- and the"
+        )
         say("       document would still open and look like a fresh grey import.")
         say("       Run this from the Python console of a running FreeCAD GUI instead;")
         say("       see the module docstring. --force-headless-save overrides, and is")
@@ -328,8 +364,12 @@ def main():
         say("backup:    %s", os.path.basename(bak))
 
     doc, was_open = open_document(args.doc)
-    say("opened:    %s, %d objects%s", doc.Name, len(doc.Objects),
-        " (already open in this FreeCAD)" if was_open else "")
+    say(
+        "opened:    %s, %d objects%s",
+        doc.Name,
+        len(doc.Objects),
+        " (already open in this FreeCAD)" if was_open else "",
+    )
 
     bodies = [o for o in doc.Objects if o.TypeId != "App::DocumentObjectGroup"]
     before = snapshot(bodies)
@@ -417,29 +457,39 @@ def main():
     say("")
     say("groups created: %d  (%s)", len(created), ", ".join(created) or "-")
     say("groups reused:  %d  (%s)", len(reused), ", ".join(reused) or "-")
-    say("groups removed: %d  (%s)   empty, no body of that tissue in the document",
-        len(emptied), ", ".join(emptied) or "-")
+    say(
+        "groups removed: %d  (%s)   empty, no body of that tissue in the document",
+        len(emptied),
+        ", ".join(emptied) or "-",
+    )
     if relabelled:
-        say("groups renamed: %s",
-            ", ".join("%r -> %r" % (a, b) for a, b in relabelled))
+        say("groups renamed: %s", ", ".join("%r -> %r" % (a, b) for a, b in relabelled))
     say("bodies moved:   %d", moved)
     say("bodies already in the right group: %d", already)
 
     if no_tissue:
         say("")
-        say("OBJECTS WITH NO TISSUE (%d) -- left ungrouped at the document root:",
-            len(no_tissue))
+        say(
+            "OBJECTS WITH NO TISSUE (%d) -- left ungrouped at the document root:",
+            len(no_tissue),
+        )
         for name, label in no_tissue:
             say("   %-40s Label=%r", name[:40], label)
 
     say("")
     if diffs:
-        say("REGROUPING CHANGED BODY PROPERTIES (%d) -- this should be empty:", len(diffs))
+        say(
+            "REGROUPING CHANGED BODY PROPERTIES (%d) -- this should be empty:",
+            len(diffs),
+        )
         for name, prop, was, now in diffs[:40]:
             say("   %-32s %-12s %r -> %r", name[:32], prop, was, now)
     else:
-        say("untouched-check: %d bodies, %s all unchanged by the regrouping",
-            len(before), "/".join(WATCHED))
+        say(
+            "untouched-check: %d bodies, %s all unchanged by the regrouping",
+            len(before),
+            "/".join(WATCHED),
+        )
 
     if moved or created or relabelled:
         doc.save()
@@ -450,8 +500,15 @@ def main():
         FreeCAD.closeDocument(doc.Name)
 
     say("")
-    say("RESULT: %d groups, %d bodies moved, %d already grouped, %d ungrouped, "
-        "%d property changes", len(groups), moved, already, len(no_tissue), len(diffs))
+    say(
+        "RESULT: %d groups, %d bodies moved, %d already grouped, %d ungrouped, "
+        "%d property changes",
+        len(groups),
+        moved,
+        already,
+        len(no_tissue),
+        len(diffs),
+    )
     write_report(args.report, out)
     return 0 if not (no_tissue or diffs) else 1
 

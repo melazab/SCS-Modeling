@@ -57,3 +57,13 @@ src/neuron/**/x86_64/
 # Pre-grouping snapshot from src/freecad/make_tissue_groups.py
 *.pregroup*.bak
 src/freecad/make_tissue_groups_report*.txt
+
+# fem/ -- the FreeCAD-side FEM route. Scripts and the write-up are tracked; the
+# meshes, solutions and sampled fields are not. They are ~330 MB, regenerable by
+# `bash fem/run_all.sh`, and the .msh/.npz/.vtu files in particular are binary
+# blobs git would store whole on every change. fem/NBF_RADO-SCS_fem.FCStd is the
+# agent's private 24 MB copy of a document already tracked at the repo root.
+fem/out/
+fem/NBF_RADO-SCS_fem.FCStd
+fem/leads/
+fem/scripts/__pycache__/
