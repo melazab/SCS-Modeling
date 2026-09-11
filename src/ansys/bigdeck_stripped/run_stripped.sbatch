@@ -108,7 +108,15 @@ allsel,all
 *get,_n_after,node,0,count
 /com, ==== STRIP after: elements %_e_after% nodes %_n_after% ====
 finish
+/solu
 !  ---- END DEBUG STRIP ----
+!  The /solu above is load-bearing. This block is injected immediately before
+!  the deck's own `solve`, which sits inside a /SOLU section. Entering /prep7
+!  to delete elements leaves that section, and a bare `finish` drops MAPDL to
+!  BEGIN level -- where `solve` is not a valid command and is SILENTLY IGNORED
+!  with only a warning. Job 3802282 did exactly that: the strip deleted
+!  everything correctly, MAPDL skipped the solve, and the run "completed" in
+!  5:48 with no results file and exit code 0.
 """
 src = io.open(p, encoding="latin-1").read()
 i = src.find("\nsolve")
@@ -136,6 +144,10 @@ cd "$WORK"
 echo "=== solve start: $(date) ==="
 time ansys251 -b -dis -mpi intelmpi -np "$NRANK" -i scs_model.dat -o scs_model.out
 echo "=== exit $? at $(date) ==="
+echo "--- did the solve actually run? ---"
+if grep -qaE "SOLVE is not a recognized|No results file available" scs_model.out; then
+    echo "FAIL: the solve was skipped -- MAPDL was not in /SOLU when `solve` arrived."
+fi
 echo "--- strip markers ---"; grep -aE "^ ==== STRIP" scs_model.out
 echo "--- volt ---";          grep -aE "^ ==== STRIPPED" scs_model.out
 echo "--- pivots ---"
