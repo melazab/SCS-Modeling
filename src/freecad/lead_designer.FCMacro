@@ -194,34 +194,56 @@ class LeadPage(QtWidgets.QWidget):
         form = QtWidgets.QFormLayout(self)
         form.setLabelAlignment(QtCore.Qt.AlignRight)
 
-        # THE HARDWARE CONTROLS EXIST ONLY FOR A SWEPT LEAD.
+        # THE HARDWARE CONTROLS ARE ALWAYS BUILT; FOR A DRG LEAD THEY ARE
+        # DISABLED AND SHOW RADO'S OWN NUMBERS.
         #
         # A dorsal or ventral lead is generated, so its contact count, contact
-        # length, gap, diameter and tail are real parameters and get spinboxes.
+        # length, gap, diameter and tail are real parameters and are editable.
         # A DRG lead is a rigid COPY of the four-contact lead RADO ships, so
         # those five are properties of RADO's meshes and nothing can change
-        # them. They are therefore not built for a DRG page at all, rather than
-        # built and disabled: a greyed-out spinbox still says "this is a
-        # setting, just not now", and these are not settings any more. What the
-        # DRG page shows instead is a read-only line saying what the hardware
-        # IS, measured off the meshes, so the number is still in front of
-        # whoever needs it.
-        if kind != "drg":
-            self.contacts = self.spin_int("How many electrode contacts", 1, 32)
-            form.addRow("Contacts", self.contacts)
-            self.contact_length = self.spin("Length of each contact", 0.25, 20.0,
-                                            0.25, " mm")
-            form.addRow("Contact length", self.contact_length)
-            self.gap = self.spin("Insulator between neighbouring contacts", 0.0,
-                                 20.0, 0.25, " mm")
-            form.addRow("Gap", self.gap)
-            self.diameter = self.spin("Lead diameter. Khadka et al. use 1.25 mm; "
-                                      "the house default is 1.30 mm",
-                                      0.2, 4.0, 0.05, " mm")
-            form.addRow("Diameter", self.diameter)
-            self.tail = self.spin("Plain insulator beyond the end contacts", 0.0,
-                                  30.0, 0.5, " mm")
-            form.addRow("Tail", self.tail)
+        # them.
+        #
+        # An earlier version omitted the five rows entirely on a DRG page, on
+        # the reasoning that a greyed-out spinbox still reads as "a setting,
+        # just not now". Mohamed asked for the opposite and he is right: with
+        # the rows absent, the only way to find out what RADO's lead actually
+        # IS was to read a sentence, and the only way to discover the values
+        # were fixed was to try to set one and get an error back. Showing the
+        # real numbers, greyed out, answers both questions before they are
+        # asked. Errors are a bad way to teach an interface's rules.
+        #
+        # The values come from RADO's meshes via show_hardware(), never from a
+        # literal, so the panel cannot display one thing while the geometry is
+        # another.
+        self.contacts = self.spin_int("How many electrode contacts", 1, 32)
+        form.addRow("Contacts", self.contacts)
+        self.contact_length = self.spin("Length of each contact", 0.25, 20.0,
+                                        0.25, " mm")
+        form.addRow("Contact length", self.contact_length)
+        self.gap = self.spin("Insulator between neighbouring contacts", 0.0,
+                             20.0, 0.25, " mm")
+        form.addRow("Gap", self.gap)
+        self.diameter = self.spin("Lead diameter. Khadka et al. use 1.25 mm; "
+                                  "the house default is 1.30 mm",
+                                  0.2, 4.0, 0.05, " mm")
+        form.addRow("Diameter", self.diameter)
+        self.tail = self.spin("Plain insulator beyond the end contacts", 0.0,
+                              30.0, 0.5, " mm")
+        form.addRow("Tail", self.tail)
+
+        if kind == "drg":
+            fixed_tip = ("Fixed by RADO's meshes. A DRG lead is a rigid copy of "
+                         "the lead this model ships, so this is measured, not "
+                         "chosen. Only the target and the three nudges are yours.")
+            for w in (self.contacts, self.contact_length, self.gap,
+                      self.diameter, self.tail):
+                w.setEnabled(False)
+                w.setToolTip(fixed_tip)
+                # Three decimals, not the two a swept lead uses. These are
+                # measurements off RADO's meshes, and rounding 1.251 mm to
+                # 1.25 in a box captioned "measured" would be a small lie.
+                if hasattr(w, "setDecimals"):
+                    w.setDecimals(3)
 
         if kind == "drg":
             self.hardware_note = QtWidgets.QLabel("")
@@ -377,12 +399,26 @@ class LeadPage(QtWidgets.QWidget):
                 "RADO's lead STLs could not be read (%s), so a DRG lead cannot "
                 "be built." % exc)
             return
+        # Put the real numbers into the five disabled spinboxes, so the page
+        # shows what RADO's lead IS rather than leaving them at a swept lead's
+        # defaults. Measured here, never hardcoded.
+        for widget, key in ((self.contacts, "contacts"),
+                            (self.contact_length, "contact_length"),
+                            (self.gap, "gap"),
+                            (self.diameter, "diameter"),
+                            (self.tail, "tail")):
+            was = widget.blockSignals(True)
+            if key == "contacts":
+                widget.setValue(int(hw[key]))
+            else:
+                widget.setValue(float(hw[key]))
+            widget.blockSignals(was)
+
         self.hardware_note.setText(
-            "%d contacts, %.2f mm long, %.2f mm across -- RADO's own, FIXED. "
+            "Above is RADO's own hardware, measured off its meshes and FIXED. "
             "A DRG lead is a rigid copy of the lead this model ships, so there "
-            "is nothing here to resize. Only the target and the three nudges "
-            "below are yours."
-            % (hw["contacts"], hw["contact_length"], hw["diameter"]))
+            "is nothing there to resize. Only the target and the three nudges "
+            "below are yours.")
 
     def describe_target(self, *_a):
         g = self.panel.foramen.get(self.target.currentText()) if self.panel.foramen else None
