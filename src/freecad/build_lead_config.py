@@ -925,15 +925,22 @@ def sample_points(shapes, tolerance=0.02, max_samples=6000):
     return pts
 
 
-def inside(mesh, point, direction=(0.0, 1.0, 0.0)):
-    """Is `point` inside the material of this mesh? Crossing parity along a ray.
+# Extra directions used to break ties in inside(). Deliberately not axis-aligned
+# and not parallel to each other: an axis-aligned ray through a mesh built on a
+# regular grid is far more likely to graze an edge than a skew one.
+TIEBREAK_DIRECTIONS = (
+    (0.0, -1.0, 0.0),
+    (0.5773502692, 0.5773502692, 0.5773502692),
+    (-0.5773502692, 0.5773502692, -0.5773502692),
+)
+
+
+def _parity_inside(mesh, point, direction):
+    """One ray. Odd number of forward crossings => inside the material.
 
     foraminate() returns the intersections of the whole INFINITE line, not the
     forward ray, so the crossings behind the point have to be dropped by hand --
-    counting all of them would make every point look outside. Odd number of
-    crossings ahead => inside the material. This is the test measure_corridor.py
-    documents: RADO's compartments are hollow shells, so "inside the epidural
-    body" means inside its fat, not inside its central cavity.
+    counting all of them would make every point look outside.
     """
     hits = mesh.foraminate(point, direction)
     n = 0
@@ -943,6 +950,42 @@ def inside(mesh, point, direction=(0.0, 1.0, 0.0)):
         if t > 1e-9:
             n += 1
     return n % 2 == 1
+
+
+def inside(mesh, point, direction=(0.0, 1.0, 0.0)):
+    """Is `point` inside the material of this mesh?
+
+    RADO's compartments are hollow shells, so "inside the epidural body" means
+    inside its fat, not inside its central cavity -- the parity test
+    measure_corridor.py documents.
+
+    WHY THIS VOTES INSTEAD OF TRUSTING ONE RAY. Crossing parity is exact in
+    theory and brittle in practice: a ray that passes exactly through a shared
+    triangle edge or vertex can register one crossing or two depending on
+    floating-point luck, and that single miscount inverts the answer. It is rare
+    but it does not stay rare when you cast thousands of rays -- an 8-contact
+    dorsal lead samples 4284 surface points.
+
+    It produced a real false failure. A lead with 0.97 mm of clearance, whose
+    every other measurement was comfortable, failed containment on ONE point of
+    4284 at (58.065, 86.321, 126.386). Seven of eight ray directions put that
+    point inside the fat; only the default +Y disagreed, because it grazed an
+    edge. The report then said "100.0% of points are inside; the other 0.0% are
+    outside", which is what a rounded percentage does to a count of one.
+
+    Escalation is ASYMMETRIC on purpose: a bare "inside" is returned
+    immediately, and only "outside" is re-tested along TIEBREAK_DIRECTIONS.
+    Two reasons. The failure mode observed is outside-when-actually-inside, a
+    single spurious crossing; being wrongly called inside needs an even number
+    of spurious crossings, which is much less likely. And the points being
+    tested sit on a lead that is overwhelmingly in open fat, so nearly all of
+    them take the fast path and the check stays affordable -- voting on every
+    point would cost four times the ray casts for no benefit.
+    """
+    if _parity_inside(mesh, point, direction):
+        return True
+    votes = 1 + sum(1 for d in TIEBREAK_DIRECTIONS if _parity_inside(mesh, point, d))
+    return votes * 2 > 1 + len(TIEBREAK_DIRECTIONS)
 
 
 def inside_any(mesh, points):
@@ -1123,22 +1166,27 @@ def _validate_epidural(params, meshes, corridor, max_samples):
     pct_dura = 100.0 * len(in_dura) / len(pts)
     numbers.update(sampled_vertices=len(pts), pct_in_fat=pct_fat, pct_in_dura=pct_dura)
 
+    # Report COUNTS, not percentages. "100.0% are inside; the other 0.0% are
+    # outside" is what %.1f does to 1 stray point in 4284, and a verdict whose
+    # own evidence reads as 100% pass is worse than no verdict at all.
+    n_stray = len(pts) - len(in_fat)
     if pct_dura > 0:
         checks.append(("FAIL", "Overlaps the dura",
-                       "%.1f%% of %d sampled points on the lead surface are inside "
-                       "the dura, between z %.1f and %.1f mm. The lead is not in the "
-                       "epidural space there -- it is in the thecal sac."
-                       % (pct_dura, len(pts), min(p[2] for p in in_dura),
-                          max(p[2] for p in in_dura))))
-    elif pct_fat < 100.0:
+                       "%d of %d sampled points on the lead surface (%.2f%%) are "
+                       "inside the dura, between z %.1f and %.1f mm. The lead is not "
+                       "in the epidural space there -- it is in the thecal sac."
+                       % (len(in_dura), len(pts), pct_dura,
+                          min(p[2] for p in in_dura), max(p[2] for p in in_dura))))
+    elif n_stray:
         stray = [p for p in pts if not inside(epi, p)]
+        z_lo, z_hi = min(p[2] for p in stray), max(p[2] for p in stray)
+        span = ("at z %.1f mm" % z_lo if z_hi - z_lo < 0.05
+                else "between z %.1f and %.1f mm" % (z_lo, z_hi))
         checks.append(("FAIL", "Leaves the epidural fat",
-                       "%.1f%% of %d sampled points on the lead surface are inside "
-                       "the epidural fat; the other %.1f%% are outside it, between "
-                       "z %.1f and %.1f mm. The lead would be sitting partly in "
-                       "bone or in the foramen."
-                       % (pct_fat, len(pts), 100.0 - pct_fat,
-                          min(p[2] for p in stray), max(p[2] for p in stray))))
+                       "%d of %d sampled points on the lead surface (%.2f%%) are "
+                       "outside the epidural fat, %s. The lead would be sitting "
+                       "partly in bone or in the foramen."
+                       % (n_stray, len(pts), 100.0 - pct_fat, span)))
     else:
         checks.append(("PASS", "Entirely within the epidural fat",
                        "All %d sampled points on the lead surface are inside the "
