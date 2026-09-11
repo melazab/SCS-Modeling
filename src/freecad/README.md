@@ -5,11 +5,13 @@ document: labelling bodies, measuring the epidural space and the neuroforamina,
 building parametric SCS leads, and colouring the model to match Ansys
 Engineering Data.
 
-**There is one model document.** `NBF_RADO-SCS.FCStd` holds anatomy and nothing
-else. A lead is not baked into a copy of it — it is an entry in
-`lead_configs.yaml` plus a directory of STLs, previewed into the open document
-on demand and thrown away. The former `NBF_RADO-SCS_dorsal.FCStd` and
-`_ventral.FCStd`, and the `make_lead_variants.py` that built them, are gone.
+**There is one model document, and it contains no lead.** `NBF_RADO-SCS.FCStd`
+holds anatomy and nothing else — **240 bodies in 11 groups**, RADO's own
+4-contact DRG lead removed by `drop_rado_lead.py`. A lead is not baked into a
+copy of it and is not an entry in any list: it is a handful of parameters plus a
+directory of STLs, previewed into the open document on demand and thrown away.
+The former `NBF_RADO-SCS_dorsal.FCStd` and `_ventral.FCStd`, and the
+`make_lead_variants.py` that built them, are gone.
 
 ## Install
 
@@ -23,14 +25,15 @@ against FreeCAD 26.3.0 / Python 3.14.4.
 
 | script | interpreter | what it does |
 |---|---|---|
-| `apply_labels.py` | `freecadcmd` | gives all 245 bodies human-readable `Label`s from `body_aliases.yaml` |
+| `apply_labels.py` | `freecadcmd` | gives every body a human-readable `Label` from `body_aliases.yaml` |
 | `apply_colors.py` | `freecadcmd` | colours bodies by tissue, using `../ansys/tissue_map.yaml` |
 | `measure_corridor.py` | `freecadcmd` | ray-casts the epidural mesh, writes `epidural_corridor.json` |
 | `measure_foramen.py` | `freecadcmd` | ray-casts all eight neuroforamina, writes `foraminal_corridors.json` |
 | `make_scs_lead.py` | `freecadcmd` | builds an *n*-contact lead swept along a measured centreline |
-| `build_lead_config.py` | `freecadcmd` (`--list`/`--show` work anywhere) | builds and **validates** any named configuration from `lead_configs.yaml` |
+| `build_lead_config.py` | `freecadcmd` (`--show` works anywhere) | builds and **validates** one lead from its parameters |
+| `test_regression.py` | `freecadcmd` | rebuilds the two committed leads and asserts their 18 STLs are byte-identical |
 | `make_tissue_groups.py` | running FreeCAD GUI | puts every body in a group named for its tissue |
-| `drop_rado_lead.py` | running FreeCAD GUI | removes RADO's own 4-contact DRG lead from the anatomy document |
+| `drop_rado_lead.py` | running FreeCAD GUI | strips RADO's own 4-contact DRG lead, and its two now-empty groups, out of the anatomy document |
 | `check_laterality.py` | `python3` | re-derives left/right from geometry and validates `body_aliases.yaml` |
 | `find_floating_bodies.py` | `python3` | proximity graph over the STL surfaces; finds electrically isolated islands |
 
@@ -44,7 +47,8 @@ environment variable instead:
     freecadcmd src/freecad/measure_foramen.py
     MAKE_LEAD_ARGS="--side ventral --z-center 110" freecadcmd src/freecad/make_scs_lead.py
     APPLY_LABELS_ARGS="--dry-run" freecadcmd src/freecad/apply_labels.py
-    BUILD_LEAD_CONFIG_ARGS="--all --validate" freecadcmd src/freecad/build_lead_config.py
+    BUILD_LEAD_CONFIG_ARGS="--level T11 --x-offset 1.5 --validate" freecadcmd src/freecad/build_lead_config.py
+    freecadcmd src/freecad/test_regression.py
 
 Two more `freecadcmd` behaviours these scripts are written around: it *imports*
 the script rather than running it as `__main__` (so a `__main__` guard never
@@ -143,32 +147,64 @@ corridor centre is a coin toss between grazing it and cutting into it.
 So the clinical parameter is `ganglion_clearance` — “hold the lead this far off
 the ganglion” — and the rostral shift needed to achieve it is **computed per
 lead**. It has to be: 0.25 mm of clearance needs +0.77 mm on L3 and +1.62 mm on
-R3, and either number written into the catalogue would be wrong for the other
+R3, and either number written down as a parameter would be wrong for the other
 side. Rostrally rather than dorsally because that is where the room is (the block
 is 13–14 mm tall in *z* against 8–10 mm in *y*, with the ganglion low in it) and
 because that is where a percutaneous DRG lead goes in theatre: into the superior
 aspect of the foramen, under the pedicle, over the ganglion.
 
-## Lead configurations
+## Describing a lead
 
 A lead is described clinically — “8 contacts, 3 mm long, 1 mm apart, dorsal, at
-T10, 1 mm left of midline”, or “four contacts out to the left third ganglion” —
-and `lead_configs.yaml` is that description. `build_lead_config.py` turns a name
-into geometry and, more usefully, into a verdict:
+T10, 1 mm left of midline”, or “four contacts out to the left third ganglion”.
+`build_lead_config.py` turns that description into geometry and, more usefully,
+into a verdict:
 
-    python3 src/freecad/build_lead_config.py --list
-    BUILD_LEAD_CONFIG_ARGS="--name dorsal_pair_T11 --validate" \
+    python3 src/freecad/build_lead_config.py --level T11 --x-offset 1.5 --show
+    BUILD_LEAD_CONFIG_ARGS="--level T11 --x-offset 1.5 --validate" \
         freecadcmd src/freecad/build_lead_config.py
-    BUILD_LEAD_CONFIG_ARGS="--name rado_drg_L3_match --validate --compare-rado" \
+    BUILD_LEAD_CONFIG_ARGS="--type drg --target L3 --validate" \
         freecadcmd src/freecad/build_lead_config.py
-    BUILD_LEAD_CONFIG_ARGS="--name dorsal_T11_left1 --export" \
-        freecadcmd src/freecad/build_lead_config.py
+    BUILD_LEAD_CONFIG_ARGS="--type ventral --z-center 110.432 --export \
+        --tag ventral_T11" freecadcmd src/freecad/build_lead_config.py
 
-Any field can be overridden on top of a named entry (`--level T10 --x-offset -2`,
-`--target R2`), which is how the GUI drives it. `src/freecad/lead_designer.FCMacro`
-is the same thing as a dock panel: a tab of spinboxes per lead, a green/red
-verdict with the measurements, a disposable preview in the open document, and an
-Export button. Install it like `tissue_visibility.FCMacro`.
+Anything not given falls back to `lead_defaults.yaml`.
+`src/freecad/lead_designer.FCMacro` is the same thing as a dock panel: a tab of
+spinboxes per lead, a green/red verdict with the measurements, a **Show leads**
+toggle that puts them in the open document, and an Export button.
+
+### There is no catalogue of placements
+
+There used to be a `configs:` section in the YAML holding one named placement
+per entry, a matching `--name` flag, and a dropdown at the top of the panel. All
+three are gone. The file grew every time a lead was positioned, and a name is a
+worse artefact than the two numbers that produced it: it has to be invented,
+explained, and then kept in step with the geometry it claims to describe. You
+dial the parameters in and go.
+
+What `lead_defaults.yaml` still holds is small and stable, because it describes
+what a lead **is** rather than where anyone once put one:
+
+| key | what it is |
+|---|---|
+| `defaults` | the lead every new tab opens with: 8 contacts, 3 mm long, 1 mm apart, 1.30 mm across, 6 mm tails |
+| `epidural_defaults` | `x_offset` and `z_center`, applied to a dorsal or ventral lead |
+| `drg_defaults` | the four short contacts, the tail, the target, the standoffs — a DRG lead is different hardware |
+| `levels` | `T10`/`T11`/`T12` and the four discs → a *z*, derived from the geometry |
+| `max_leads_per_type` | how many leads of any one type may exist at once (2) |
+
+**Two placements are still pinned, as a test.**
+`src/freecad/test_regression.py` holds the parameters of the dorsal and ventral
+8-contact leads whose 18 STLs are committed under `generated_leads/`, rebuilds
+them, and asserts every byte comes back the same:
+
+    freecadcmd src/freecad/test_regression.py
+    # -> all 2 leads reproduced their 18 committed STLs byte for byte
+
+It writes nothing into the repository (the rebuild goes to a temp directory) and
+it does not read `lead_defaults.yaml` at all — it names every number itself, so
+changing a default cannot move the fixture. It has caught real drift in the
+sweep path twice; it is not a formality.
 
 ### Three lead types
 
@@ -183,9 +219,8 @@ They are not three settings of one thing, so their parameters do not overlap and
 type — `z_center` on a DRG lead, or `target` on a dorsal one, is an error, on the
 same principle that a typo'd `diamter: 2.0` is.
 
-`side: dorsal|ventral` is still accepted as a spelling of `type:`, for older
-entries and the `--side` flag. It cannot spell `drg`: a DRG lead is not a side of
-the canal.
+`side: dorsal|ventral` is still accepted as a spelling of `type:`, for the
+`--side` flag. It cannot spell `drg`: a DRG lead is not a side of the canal.
 
 **Ganglion names are the model's own, not lumbar levels.** `L3` means “left,
 third from the top”, counted rostral to caudal from the ganglion cores' *z* —
@@ -193,36 +228,27 @@ the same derivation `body_aliases.yaml` uses for its labels, and it reproduces
 that file's `level_map` exactly. In this T8–T10 model `L3` is a *thoracic*
 ganglion at about *z* = 93.
 
-### A configuration is a set of leads
+### Several leads at once
 
 Clinicians do not implant one lead and stop. Two dorsal leads straddling the
 midline is routine; so is a dorsal plus a DRG lead, or one DRG lead per side. So
-an entry is a **set**, written either way:
+the panel builds a **set**: **Add lead → Dorsal / Ventral / DRG** gives each lead
+its own tab, **Remove this lead** takes the showing one away, and the checks then
+answer two questions rather than one — does each lead fit, and do any two of them
+occupy the same space.
 
-```yaml
-dorsal_z110_8c:              # one lead: describe it inline, as before
-  z_center: 110.43203353881836
+`max_leads_per_type` in `lead_defaults.yaml` caps how many of any **one** type
+may exist at once; it is 2 by default, so the largest legal set is two dorsal +
+two ventral + two DRG, and the Add buttons grey out there.
 
-dorsal_pair_T11:             # several: a `leads:` list
-  level: T11                 #   keys out here apply to EVERY lead in the set
-  leads:
-    - x_offset:  1.5
-      contacts:  8
-    - x_offset: -1.5
-```
+Layering for one lead, later wins:
 
-`max_leads_per_type` at the top of the file caps how many of any **one** type a
-set may hold; it is 2 by default, so the largest legal set is two dorsal + two
-ventral + two DRG. The Add buttons in the macro stop there too.
+    defaults  ->  epidural_defaults | drg_defaults (by type)  ->  that lead's
+    own parameters (its tab, or the CLI flags)
 
-Layering for one lead of a set, later wins:
-
-    defaults  ->  epidural_defaults | drg_defaults (by type)  ->  the
-    configuration's shared keys  ->  that lead's own keys  ->  CLI/GUI overrides
-
-An entry with no `leads:` list is a set of one whose single lead is the entry
-itself, which is why every pre-existing entry still resolves to exactly the
-geometry it always did.
+The command line builds one lead per run; `resolve_leads()` is what the panel
+calls for a set, and both go through the same `resolve_lead()` so the two cannot
+drift apart.
 
 ### Three things it checks, and why there is no boolean subtraction
 
@@ -251,10 +277,10 @@ A **DRG** lead asks a different question, because the foramen is not a void:
 | clearance | every sampled vertex **outside** the target ganglion and outside the thecal sac (FAIL); overlap with a nerve root is reported but only WARNs — RADO's own lead does it too |
 | coverage | whether the array runs off the fitted corridor (WARN — the containment check is what decides) |
 
-A configuration that fails is reported in clinical terms and **not exported** —
+A lead that fails is reported in clinical terms and **not exported** —
 “the lead is 2.00 mm across, but the ventral epidural fat is only 1.68 mm thick
-at its narrowest; it would press through the dura.” `ventral_z110_2mm_FAILS` in
-the catalogue is kept as a worked example of exactly that.
+at its narrowest; it would press through the dura.” Reproduce it with
+`--type ventral --diameter 2.0 --z-center 110.432 --validate`.
 
 ### And one check no single lead can make
 
@@ -263,11 +289,11 @@ nothing in a per-lead check looks at the other lead. So the **set** is checked
 too: every pair, by exact shape-to-shape distance, and when that is zero, by the
 volume they share and how much of one lead's sampled surface is inside the other.
 
-    dorsal_pair_T11         ±1.5 mm off midline → 1.70 mm apart      PASS
-    dorsal_pair_tight_FAILS ±0.5 mm off midline → 0.00 mm, INTERSECT FAIL
+    two dorsal leads at x_offset ±1.5   →  1.70 mm apart         PASS
+    two dorsal leads at x_offset ±0.5   →  0.00 mm, INTERSECTING  FAIL
 
-`dorsal_pair_tight_FAILS` is kept for the same reason `ventral_z110_2mm_FAILS`
-is: both its leads fit the channel perfectly well on their own.
+Both leads of that second pair fit the channel perfectly well on their own; that
+is the whole point of checking the set as well as each lead.
 
 Lateral offsets get their **own** centreline. The stored polynomial in
 `epidural_corridor.json` is measured at the midline, and the channel centre
@@ -288,24 +314,24 @@ are T10–T12, while the paper says T9–T11 and RADO's filenames say “T8-10�
 three disagree and nothing in the geometry settles it. The *z* coordinates are
 solid; the level *names* are RADO's, taken at face value.
 
-## Generated output, and why there is no `.FCStd` per configuration
+## Generated output, and why there is no `.FCStd` per lead
 
-`generated_leads/<tag>/` holds one STL per contact plus one for the insulator,
+`generated_leads/<name>/` holds one STL per contact plus one for the insulator,
 already positioned in the model's own coordinates — import them without any
 transform. `dorsal_z110_8c/` and `ventral_z110_8c/` are what the two former study
 documents contained; both verified at 100% of sampled vertices inside epidural
 fat and 0% in dura, and both **reproduced byte-for-byte** by
-`build_lead_config.py --export`. That is this module's regression test: any
-change to the resolve/sweep path has to leave all eighteen files identical.
+`test_regression.py`. That is this module's regression test: any change to the
+resolve/sweep path has to leave all eighteen files identical.
 
 The layout is deliberately not uniform:
 
-    one lead    generated_leads/<tag>/SCS Lead Electrode 1.stl, ...
-    several     generated_leads/<tag>/lead1_dorsal/SCS Lead Electrode 1.stl, ...
-                generated_leads/<tag>/lead2_drg_L3/...
-                generated_leads/<tag>/leads.txt        (which lead is which)
+    one lead    generated_leads/<name>/SCS Lead Electrode 1.stl, ...
+    several     generated_leads/<name>/lead1_dorsal/SCS Lead Electrode 1.stl, ...
+                generated_leads/<name>/lead2_drg_L3/...
+                generated_leads/<name>/leads.txt       (which lead is which)
 
-A single-lead configuration keeps the flat layout it has always had, because
+A single lead keeps the flat layout it has always had, because
 those two directories are committed at those exact paths and moving them would
 make the byte-for-byte test untestable. A set gets one subdirectory per lead,
 because the **filenames** cannot carry the distinction: they are RADO's own, and
@@ -317,14 +343,24 @@ FreeCAD document therefore gives the second one's bodies uniquified `Name`s
 appending its counter). `tissue_map.yaml` still matches them; `leads.txt` is
 what tells you which contact belongs to which lead.
 
-The document is 25 MB, so ten configurations must not mean ten documents, and
+The document is 25 MB, so ten arrangements must not mean ten documents, and
 every save of one is another full copy in git history. The durable artefact is
-therefore the YAML entry plus its STL directory — a dozen numbers and a few
-hundred kB. Bodies in a FreeCAD document are a **disposable preview**: the macro
-(or `build_lead_config.preview_set()`) drops every lead of the set into the
-active document inside a group named `SCS_LeadPreview`, replacing any previous
-preview, and “Remove preview” puts the tree back. Explore, export the one you
-want, close the document without saving.
+therefore the STL directory — a few hundred kB. Bodies in a FreeCAD document are
+**disposable**: the panel's **Show leads** toggle (or
+`build_lead_config.preview_set()`) drops every lead of the set into the active
+document inside **one** group labelled **`13 SCS Leads`**, replacing whatever the
+last one left; pressing the toggle again puts the tree back. Explore, export the
+one you want, close the document without saving.
+
+The group is numbered 13 on purpose. `make_tissue_groups.py` numbers the anatomy
+groups by position, and with no lead in the document that numbering now ends at
+`11 Vasculature` — 12 is soft tissue, which this model has no bodies for, and 13
+and 14 were the two lead-hardware groups before `drop_rado_lead.py` removed them.
+So previewed leads sort exactly where a lead has always sorted: last, at the
+bottom of the tree, in creation order or alphabetical. The label does not say
+“preview”, because what is in the tree is leads. Each body inside carries its own
+lead number — `lead 2 (drg) — contact 03`, `lead 1 (dorsal) — insulator` — which
+is the same number as its tab in the panel and its subdirectory on export.
 
 Preview `Name`s are prefixed per lead — `SCS_Preview_Lead2_Contact_03` — and that
 is not cosmetic. FreeCAD uniquifies a colliding `Name` by **stripping its
@@ -336,23 +372,42 @@ one 8-contact lead read as a 12-contact one in the tree.
 ## What happened to RADO's own 4-contact DRG lead
 
 It stays in `STL_files/` — five files RADO ships, unmodified and tracked — and it
-is **removed from the anatomy document** by `drop_rado_lead.py`. The reasoning is
-the same one that deleted it from the old study variants, now applied to the
-document those were copies of: Simpleware or Gmsh will mesh it, and the solve
-will treat four platinum cylinders and a sheath as conductors sitting in the
-field a few millimetres off the cord. Hiding a body changes none of that.
+is **removed from the anatomy document** by `drop_rado_lead.py`, along with the
+two tissue groups that held it (`13 Lead contacts`, `14 Lead insulation`), which
+are empty once the bodies are gone and would otherwise announce hardware the
+document does not have. **245 bodies / 13 groups → 240 bodies / 11 groups.** The
+reasoning is the same one that deleted it from the old study variants, now
+applied to the document those were copies of: Simpleware or Gmsh will mesh it,
+and the solve will treat four platinum cylinders and a sheath as conductors
+sitting in the field a few millimetres off the cord. Hiding a body changes none
+of that.
+
+The two lead **tissues** stay in `../ansys/tissue_map.yaml` regardless — a
+previewed lead needs its silver and its black, and an exported STL needs its
+conductivity when it reaches Ansys. It is the *document* that has no lead in it,
+not the model.
 
 Nothing is lost, because the geometry was never *in* the document in any sense
-other than “imported from those STLs”. It comes back into any open document in
-one click — `build_lead_config.preview_rado_lead()`, or the panel's **Show RADO's
-lead** button — as its own disposable overlay group, imported with no transform,
-so a generated DRG lead can be looked at right beside it. And it is reproduced as
-parameters by `rado_drg_L3_match` in the catalogue, which is what `--compare-rado`
-measures against.
+other than “imported from those STLs”. It comes back into any open document as
+its own disposable overlay group, imported with no transform, so a generated DRG
+lead can be looked at right beside it — two lines in FreeCAD's Python console:
+
+```python
+import sys; sys.path.insert(0, "/home/mohamed/Projects/SCS-Modeling/src/freecad")
+import build_lead_config as blc
+blc.preview_rado_lead(FreeCAD.ActiveDocument, colours=blc.lead_colours())
+blc.clear_rado_lead(FreeCAD.ActiveDocument)      # and back out again
+```
+
+There was a **Show RADO's lead** button in the panel for this; it is gone,
+because it earned its space about once. The lead is also reproducible as
+parameters — `--type drg --target L3 --contacts 4 --contact-length 1.25 --gap
+3.50 --diameter 1.25 --tail 0 --lateral-offset 2.93 --ganglion-clearance 0` —
+which is what `--compare-rado` measures against.
 
 **The tradeoff, stated plainly:** `NBF_RADO-SCS.FCStd` stops being a faithful
 mirror of what RADO published — someone opening it will not see the lead the
-paper's figures show, and has to know about the button. Against that, the
+paper's figures show, and has to know where it went. Against that, the
 document becomes usable as the mesh/solve input it is meant to be without a step
 somebody has to remember, and the step people forget is the one that silently
 corrupts a solve rather than failing it.
@@ -371,13 +426,21 @@ which is the one script here that does save, refuses for the same reason.
 
 ## The macros
 
-Two GUI panels. `lead_designer` is the clinical front end -- pick or dial in a
-lead configuration, add up to `max_leads_per_type` leads of each type, check that
-each fits *and* that no two of them collide, preview them all in the open model,
-and overlay RADO's own lead to compare against.
+Two GUI panels. `lead_designer` is the clinical front end -- dial a lead in, add
+up to `max_leads_per_type` leads of each type, check that each fits *and* that no
+two of them collide, show them all in the open model, export the STLs.
 `tissue_visibility` gives per-tissue show / hide / isolate, which is what makes
 the model legible: hiding bone, discs and vessels turns a dense mess into a
 clear view of the lead in the epidural space.
+
+**One toggle, not two buttons.** `lead_designer` had *Preview* and *Remove
+preview* side by side, which meant the panel never said which state you were in.
+They are now a single checkable button: **Show leads**, plain, when the document
+has none, and **Leads shown** on a green background when it does. It is styled
+from the widget's own palette in its off state and paints its own green and white
+when checked, so it stays readable on FreeCAD's light and dark themes alike —
+a rule that only styled `:checked` would leave the off state a flat rectangle
+with the wrong text colour on the dark ones.
 
 **Install -- the macro directory is VERSIONED.** On FreeCAD 26.3 it is
 `~/.local/share/FreeCAD/v26-3/Macro/`. A file dropped in
@@ -396,3 +459,40 @@ after the macro is in the directory above: **Tools → Customize → Macros** to
 give it an icon, then **Tools → Customize → Toolbars** to create a toolbar in
 whichever workbench you use and move the macro into it. Toolbar changes take
 effect the next time that workbench loads.
+
+### Icons
+
+`icons/` holds one per macro, drawn rather than borrowed:
+
+| file | what it is |
+|---|---|
+| `icons/lead_designer.svg` | an SCS lead: three silver contacts on a black shaft, running off the bottom edge |
+| `icons/tissue_visibility.svg` | three tissue-coloured slabs with the bottom one ghosted out |
+| `icons/*_16.png`, `_32.png`, `_64.png` | the same thing rasterised, for a picker that will not take SVG |
+
+The lead icon uses the model's own colours — contacts `192,192,192`, insulator
+`40,40,40`, straight out of `../ansys/tissue_map.yaml` — so the toolbar and the
+geometry agree. It draws **three** contacts, not eight: at 16 px a faithful
+8-contact array is about a pixel a band and reads as a grey smudge, and what has
+to survive the shrink is the alternation. It is upright rather than tilted for
+the same reason — a vertical shaft puts every band edge on a pixel boundary, and
+tilted versions of exactly this drawing blur into a capsule at 16 px. The shaft
+runs off the bottom of the frame so it reads as the end of something long rather
+than as a battery, and it carries a thin mid-grey outline so the black body does
+not vanish on a dark toolbar theme.
+
+**To attach one** (the macro must already be in the macro directory):
+
+1. **Tools → Customize… → Macros**
+2. pick `lead_designer.FCMacro` in the list
+3. click the **Pixmap** `...` button
+4. **Add icons…** → browse to
+   `/home/mohamed/Projects/SCS-Modeling/src/freecad/icons/` and choose
+   `lead_designer.svg` (or `lead_designer_32.png` if that dialog refuses SVG)
+5. select the icon that now appears, **OK**, then **Replace** to update the
+   existing macro entry
+6. **Tools → Customize… → Toolbars** to put it on a toolbar, if it is not on one
+   already
+
+The icon shows next to the macro in **Macro → Macros…** as well as on the
+toolbar. Same steps for `tissue_visibility`.

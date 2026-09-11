@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Toolbar icon for src/freecad/tissue_visibility.FCMacro: a stack of tissue
+  layers with one of them switched off.
+
+  The macro shows and hides whole tissues at once, so the icon is three slabs in
+  the model's own colours, outside in, with the bottom one ghosted to 30% to say
+  "this one is hidden". Three rather than eleven for the reason the lead icon
+  draws three contacts rather than eight: at 16 px a slab is four pixels tall
+  and a faithful count is a smear.
+
+  The colours are read off src/ansys/tissue_map.yaml, so the icon cannot drift
+  from what the tree actually looks like:
+     vertebra     230,220,195  #e6dcc3
+     csf          189,235,249  #bdebf9
+     grey_matter  128,128,128  #808080
+
+  Each slab carries a dark outline, which is what keeps the two pale ones
+  visible on a light toolbar and the whole stack visible on a dark one.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <g stroke="#3c3c3c" stroke-width="1.1" stroke-linejoin="round">
+    <rect x="3.5" y="4.5"  width="25" height="7" rx="2" fill="#e6dcc3"/>
+    <rect x="3.5" y="13.5" width="25" height="7" rx="2" fill="#bdebf9"/>
+    <rect x="3.5" y="22.5" width="25" height="7" rx="2" fill="#808080"
+          opacity="0.3"/>
+  </g>
+</svg>

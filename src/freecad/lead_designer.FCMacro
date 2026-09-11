@@ -10,24 +10,38 @@ not have to know that the midline is x = 56.60, that the canal centre follows a
 cubic in z, or that a foramen is measured by alternating ray casts. This panel
 is those questions with spinboxes on them:
 
-    pick a configuration, or add leads and set the numbers   ->  Check fit
+    add the leads you want and set the numbers   ->  Check fit
     a green PASS or a red FAIL per lead AND for the set, with the actual
     measurements, in words
-    Preview                                    ->  see them all in the open document
-    Export STLs                                ->  generated_leads/<name>/
+    Show leads (a toggle)                        ->  see them in the document
+    Export STLs                                  ->  generated_leads/<name>/
 
 No coordinates and no centreline polynomials appear anywhere in the interface.
 
+THERE IS NO CONFIGURATION LIST
+------------------------------
+There used to be a dropdown of named configurations at the top of this panel,
+backed by a `configs:` section in the YAML that grew an entry every time a lead
+was positioned. Both are gone. You dial the parameters in and go; everything is
+custom, and nothing has to be named before it can be looked at. What the YAML
+still holds -- lead_defaults.yaml -- is the STARTING VALUES a new lead opens
+with, the vertebral levels, and how many leads of one type are allowed.
+
+The one thing that still pins two exact placements is src/freecad/
+test_regression.py, which rebuilds the two committed 8-contact leads from
+parameters written out inside it and asserts their 18 STLs come back byte for
+byte. That is a test, not a catalogue, and this panel does not read it.
+
 THREE TYPES OF LEAD, AND UP TO max_leads_per_type OF EACH
 ---------------------------------------------------------
-A configuration is a SET. Add a dorsal, a ventral or a DRG lead with the buttons
-at the top; each gets its own tab of parameters, and the catalogue's
-max_leads_per_type (2 by default) is what the Add buttons stop at. The
-parameters differ by type because the geometry problems differ: a dorsal or
-ventral lead runs rostro-caudally along the canal and is positioned by a
-vertebral level and an offset from the midline, while a DRG lead runs LATERALLY
-out through a neuroforamen and is positioned by naming a ganglion. The panel
-shows one set of controls or the other, never both.
+Add a dorsal, a ventral or a DRG lead with the buttons at the top; each gets its
+own tab of parameters, and lead_defaults.yaml's max_leads_per_type (2 by
+default) is what the Add buttons stop at. The parameters differ by type because
+the geometry problems differ: a dorsal or ventral lead runs rostro-caudally
+along the canal and is positioned by a vertebral level and an offset from the
+midline, while a DRG lead runs LATERALLY out through a neuroforamen and is
+positioned by naming a ganglion. The panel shows one set of controls or the
+other, never both.
 
 CHECK FIT ANSWERS TWO QUESTIONS
 -------------------------------
@@ -52,28 +66,31 @@ INSTALL
 
 then Macro -> Macros... -> lead_designer -> Execute. Worth putting on a toolbar
 the same way as tissue_visibility.FCMacro: Tools -> Customize -> Macros, then
-Tools -> Customize -> Toolbars. Re-running re-uses the same dock rather than
-stacking copies; close it with the dock's own X.
+Tools -> Customize -> Toolbars. That same dialog is where its icon is set: pick
+this macro under Tools -> Customize -> Macros, click the Pixmap "..." button,
+Add icons..., and choose src/freecad/icons/lead_designer.svg (or
+lead_designer_32.png if the picker refuses SVG). src/freecad/README.md has the
+full six steps. Re-running re-uses the same dock rather than stacking copies;
+close it with the dock's own X.
 
 Like tissue_visibility.FCMacro this needs the repo on disk -- it imports
 build_lead_config, which is where all the actual work lives. REPO below is the
 default; set SCS_MODELING_REPO if the checkout moves.
 
-THE PREVIEW IS DISPOSABLE, AND NOTHING HERE EVER SAVES
+THE PREVIEW IS ONE TOGGLE, AND NOTHING HERE EVER SAVES
 ------------------------------------------------------
-Preview puts every lead of the set into the ACTIVE DOCUMENT as ordinary
-parametric bodies inside a group called SCS_LeadPreview, replacing whatever the
-last preview left. That is the whole design: there is ONE model document,
-NBF_RADO-SCS.FCStd, holding anatomy only, and a lead configuration is a dozen
-numbers in lead_configs.yaml plus a directory of STLs. Trying ten of them must
-not mean ten copies of a 25 MB document. Explore, export the one you want, and
-close the document WITHOUT SAVING -- "Remove preview" puts the tree back exactly
-as it was.
+"Show leads" is a single checkable button, green while the leads are in the
+document. Pressing it builds every lead of the set into the ACTIVE DOCUMENT as
+ordinary parametric bodies inside one group labelled "13 SCS Leads"; pressing it
+again deletes them and puts the tree back exactly as it was. Showing and hiding
+were two buttons once, which meant the interface never said which state you were
+in -- the button now IS the state.
 
-"Show RADO's lead" is the same kind of disposable overlay, in its own group: it
-imports the five STLs RADO ships for its own hand-placed 4-contact DRG lead, so
-a generated DRG lead can be looked at beside the only independently placed one
-in the model. It is not part of the anatomy and must not be saved into it.
+That is the whole design: there is ONE model document, NBF_RADO-SCS.FCStd,
+holding anatomy only -- 240 bodies, 11 groups, no lead of any kind -- and a lead
+is a handful of numbers plus a directory of STLs. Trying ten arrangements must
+not mean ten copies of a 25 MB document. Explore, export the one you want, and
+close the document WITHOUT SAVING.
 
 This macro contains no save of any kind and must not grow one. A FreeCAD
 document saved with no GUI running loses every ShapeAppearance in it; the panel
@@ -120,6 +137,16 @@ BANNER = {"PASS": ("#1b5e20", "#c8e6c9"),
           "WARN": ("#7a4f01", "#ffe0b2"),
           "FAIL": ("#8e0000", "#ffcdd2")}
 
+# The "Show leads" toggle, checked. A mid green dark enough for white text to
+# clear 4.5:1, which is what makes it readable on both FreeCAD themes -- the
+# checked state paints its OWN background and text rather than tinting the
+# theme's, so it cannot end up as light-grey-on-light-green under one stylesheet
+# and unreadable under another.
+TOGGLE_ON_BG = "#2e7d32"
+TOGGLE_ON_HOVER = "#388e3c"
+TOGGLE_ON_BORDER = "#1b5e20"
+TOGGLE_ON_FG = "#ffffff"
+
 TYPE_WORDS = {"dorsal": "Dorsal epidural", "ventral": "Ventral epidural",
               "drg": "DRG (foraminal)"}
 
@@ -150,10 +177,10 @@ def worst_of(levels):
 class LeadPage(QtWidgets.QWidget):
     """The parameters of ONE lead. Which controls exist depends on its type.
 
-    A page owns no geometry and no verdict; it is a form that can produce the
-    override dict build_lead_config.resolve_lead() layers on top of the
-    catalogue. Keeping it that dumb is what stops the panel and the command line
-    from drifting apart -- both go through the same resolve.
+    A page owns no geometry and no verdict; it is a form that produces the
+    parameter dict build_lead_config.resolve_lead() layers on top of
+    lead_defaults.yaml. Keeping it that dumb is what stops the panel and the
+    command line from drifting apart -- both go through the same resolve.
     """
 
     changed = QtCore.Signal()
@@ -229,7 +256,7 @@ class LeadPage(QtWidgets.QWidget):
             self.level.addItems(list(panel.cfg["levels"]))
             self.level.setToolTip("Vertebral level for the centre of the contact "
                                   "array. Level names are RADO's own -- see the "
-                                  "caveat at the top of lead_configs.yaml.")
+                                  "caveat in lead_defaults.yaml.")
             self.level.currentIndexChanged.connect(self.level_picked)
             form.addRow("Level", self.level)
 
@@ -346,7 +373,7 @@ class LeadPage(QtWidgets.QWidget):
             self.describe_offset()
 
     def overrides(self):
-        """This page as the override dict resolve_lead() understands."""
+        """This page as the parameter dict resolve_lead() understands."""
         out = {"type": self.kind,
                "contacts": self.contacts.value(),
                "contact_length": self.contact_length.value(),
@@ -373,7 +400,7 @@ class LeadDesigner(QtWidgets.QWidget):
     def __init__(self, blc):
         super(LeadDesigner, self).__init__()
         self.blc = blc
-        self.cfg = blc.parse_config_file(blc.DEFAULT_CONFIGS)
+        self.cfg = blc.parse_defaults_file(blc.DEFAULTS_YAML)
         self.max_per_type = int(self.cfg.get("max_leads_per_type",
                                              blc.DEFAULT_MAX_LEADS_PER_TYPE))
         try:
@@ -391,30 +418,14 @@ class LeadDesigner(QtWidgets.QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
-        # -- named configurations ----------------------------------------
-        pick = QtWidgets.QHBoxLayout()
-        pick.addWidget(QtWidgets.QLabel("Configuration"))
-        self.pick = QtWidgets.QComboBox()
-        self.pick.addItems(list(self.cfg["configs"]) + [CUSTOM])
-        self.pick.setToolTip("Ready-made lead sets from lead_configs.yaml. "
-                             "Changing anything below switches to custom.")
-        self.pick.currentIndexChanged.connect(self.load_config)
-        pick.addWidget(self.pick, 1)
-        outer.addLayout(pick)
-
-        self.note = QtWidgets.QLabel("")
-        self.note.setWordWrap(True)
-        self.note.setStyleSheet("color: gray;")
-        outer.addWidget(self.note)
-
         # -- the leads ----------------------------------------------------
         add = QtWidgets.QHBoxLayout()
         add.addWidget(QtWidgets.QLabel("Add lead:"))
         self.add_buttons = {}
         for kind in ("dorsal", "ventral", "drg"):
             btn = QtWidgets.QPushButton(TYPE_WORDS[kind].split(" ")[0])
-            btn.setToolTip("Add a %s lead to this configuration. At most %d of "
-                           "each type." % (TYPE_WORDS[kind].lower(), self.max_per_type))
+            btn.setToolTip("Add a %s lead to the set. At most %d of each type."
+                           % (TYPE_WORDS[kind].lower(), self.max_per_type))
             btn.clicked.connect(lambda _c=False, k=kind: self.add_lead(k))
             add.addWidget(btn)
             self.add_buttons[kind] = btn
@@ -454,21 +465,22 @@ class LeadDesigner(QtWidgets.QWidget):
         self.btn_check.clicked.connect(self.check)
         row1.addWidget(self.btn_check, 2)
 
-        self.btn_preview = QtWidgets.QPushButton("Preview")
-        self.btn_preview.setToolTip("Put every lead into the active document, "
-                                    "replacing the last preview. Disposable -- "
-                                    "do not save the document for it.")
-        self.btn_preview.clicked.connect(self.do_preview)
+        # ONE button for the leads being in the document or not, because that
+        # is one piece of state and two buttons could never show which way it
+        # was. Checked and green: they are in the tree, under "13 SCS Leads".
+        self.btn_preview = QtWidgets.QPushButton("Show leads")
+        self.btn_preview.setCheckable(True)
+        self.btn_preview.setMinimumHeight(26)
+        self.btn_preview.setStyleSheet(self.toggle_style())
+        self.btn_preview.setToolTip(
+            "Put every lead into the active document, in one group called "
+            "\"13 SCS Leads\". Press again to take them out. They are "
+            "disposable — do not save the document for them.")
+        self.btn_preview.toggled.connect(self.preview_toggled)
         row1.addWidget(self.btn_preview, 1)
         outer.addLayout(row1)
 
         row2 = QtWidgets.QHBoxLayout()
-        self.btn_clear = QtWidgets.QPushButton("Remove preview")
-        self.btn_clear.setToolTip("Delete the previewed leads and put the tree "
-                                  "back as it was.")
-        self.btn_clear.clicked.connect(self.do_clear)
-        row2.addWidget(self.btn_clear, 1)
-
         self.btn_export = QtWidgets.QPushButton("Export STLs")
         self.btn_export.setToolTip("Write one STL per contact plus the insulator, "
                                    "for every lead, to generated_leads/. Only "
@@ -477,28 +489,13 @@ class LeadDesigner(QtWidgets.QWidget):
         row2.addWidget(self.btn_export, 1)
         outer.addLayout(row2)
 
-        row3 = QtWidgets.QHBoxLayout()
-        self.btn_rado = QtWidgets.QPushButton("Show RADO's lead")
-        self.btn_rado.setToolTip(
-            "Import RADO's own hand-placed 4-contact DRG lead from the five STLs "
-            "it ships, as a separate disposable overlay. It is the only "
-            "independently placed lead in the model, and it is what the foraminal "
-            "trajectory is validated against — worth looking at beside a "
-            "generated DRG lead. Not part of the anatomy; do not save it in.")
-        self.btn_rado.clicked.connect(self.do_rado)
-        row3.addWidget(self.btn_rado, 1)
-
-        self.btn_rado_clear = QtWidgets.QPushButton("Hide RADO's lead")
-        self.btn_rado_clear.clicked.connect(self.do_rado_clear)
-        row3.addWidget(self.btn_rado_clear, 1)
-        outer.addLayout(row3)
-
         self.status = QtWidgets.QLabel("")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: gray;")
         outer.addWidget(self.status)
 
-        self.load_config()
+        self.add_lead("dorsal")
+        self.sync_preview_button()
 
     # -- the set of pages --------------------------------------------------
     def pages(self):
@@ -508,8 +505,10 @@ class LeadDesigner(QtWidgets.QWidget):
         return sum(1 for p in self.pages() if p.kind == kind)
 
     def retitle(self):
-        """Tab labels carry the lead number, which is what the tree and the
-        exported directories are named for, so they must agree."""
+        """Tab labels carry the lead number, which is what the bodies in the
+        tree and the exported subdirectories are named for, so they agree:
+        tab "2  DRG (foraminal)" is "lead 2 (drg) — contact 03" in the tree and
+        lead2_drg_L3/ on disk."""
         for i, page in enumerate(self.pages(), start=1):
             self.tabs.setTabText(i - 1, "%d  %s" % (i, TYPE_WORDS[page.kind]))
         for kind, btn in self.add_buttons.items():
@@ -519,21 +518,20 @@ class LeadDesigner(QtWidgets.QWidget):
     def add_lead(self, kind, params=None):
         if self.count_of(kind) >= self.max_per_type:
             self.status.setText(
-                "This catalogue allows at most %d %s leads per configuration "
-                "(max_leads_per_type in lead_configs.yaml)."
-                % (self.max_per_type, kind))
+                "At most %d %s leads at once (max_leads_per_type in "
+                "lead_defaults.yaml)." % (self.max_per_type, kind))
             return None
         page = LeadPage(self, kind)
         if params is None:
-            params = self.blc.resolve_lead(self.cfg, None, {}, {"type": kind},
-                                           None, self.tabs.count() + 1, 1)
+            params = self.blc.resolve_lead(self.cfg, {"type": kind},
+                                           self.tabs.count() + 1, 1)
         page.load(params)
-        page.changed.connect(self.went_custom)
+        page.changed.connect(self.parameters_changed)
         self.tabs.addTab(page, "")
         self.tabs.setCurrentWidget(page)
         self.retitle()
         if not self.loading:
-            self.went_custom()
+            self.parameters_changed()
         return page
 
     def remove_lead(self):
@@ -541,77 +539,35 @@ class LeadDesigner(QtWidgets.QWidget):
             return
         self.tabs.removeTab(self.tabs.currentIndex())
         self.retitle()
-        self.went_custom()
+        self.parameters_changed()
 
     # -- reading and writing the form -------------------------------------
-    def load_config(self, _index=None):
-        """Fill the tabs from the selected named configuration."""
-        name = self.pick.currentText()
-        if name == CUSTOM:
-            if self.tabs.count() == 0:
-                self.loading = True
-                try:
-                    self.add_lead("dorsal")
-                finally:
-                    self.loading = False
-            self.note.setText("")
-            return
-        try:
-            leads = self.blc.resolve_set(name, self.cfg)
-        except Exception as exc:
-            self.note.setText("cannot use this configuration: %s" % exc)
-            return
-        self.loading = True
-        try:
-            while self.tabs.count():
-                self.tabs.removeTab(0)
-            for params in leads:
-                self.add_lead(params["type"], params)
-        finally:
-            self.loading = False
-        self.retitle()
-        self.note.setText(leads[0].get("note", ""))
-        self.set_banner(None, "Not checked yet")
-        self.detail.setPlainText(
-            self.blc.describe_set(leads) + "\n\n"
-            + "\n".join("  %s" % self.blc.describe(l) for l in leads))
-        self.outcome = None
+    def parameters_changed(self, *_a):
+        """Any edit invalidates the last check, and dates any shown leads.
 
-    def went_custom(self, *_a):
-        """Any hand edit means this is no longer the named configuration."""
+        The leads in the tree are NOT rebuilt here. Rebuilding means re-running
+        the fit check, which takes seconds, and doing that on every keystroke in
+        a spinbox would make the panel unusable. The toggle is how you ask for
+        it: the status line says so, and turning it off and on again rebuilds
+        from the numbers now on screen.
+        """
         if self.loading:
             return
-        if self.pick.currentText() != CUSTOM:
-            self.loading = True
-            try:
-                self.pick.setCurrentText(CUSTOM)
-            finally:
-                self.loading = False
-            self.note.setText("")
         self.outcome = None
         self.set_banner(None, "Not checked yet")
+        if self.btn_preview.isChecked():
+            self.status.setText("The leads in the tree are the previous numbers. "
+                                "Press \u201cShow leads\u201d twice to rebuild them.")
 
     def resolve(self):
         """The tabs as a list of resolved leads.
 
-        Each page is resolved through build_lead_config.resolve_lead() rather
-        than assembled here, so the panel cannot drift from what the command
-        line does and any parameter the catalogue grows is validated in exactly
-        one place.
+        Resolved through build_lead_config.resolve_leads() rather than
+        assembled here, so the panel cannot drift from what the command line
+        does: the layering onto lead_defaults.yaml, the per-type parameter
+        rules and the max_leads_per_type cap all happen in exactly one place.
         """
-        pages = self.pages()
-        leads = []
-        for i, page in enumerate(pages, start=1):
-            leads.append(self.blc.resolve_lead(self.cfg, None, {}, {},
-                                               page.overrides(), i, len(pages)))
-        counts = {}
-        for lead in leads:
-            counts[lead["type"]] = counts.get(lead["type"], 0) + 1
-        for kind, n in counts.items():
-            if n > self.max_per_type:
-                raise ValueError("%d %s leads, but at most %d are allowed"
-                                 % (n, kind, self.max_per_type))
-        return leads
+        return self.blc.resolve_leads(self.cfg, [p.overrides() for p in self.pages()])
 
     # -- actions -----------------------------------------------------------
     def set_banner(self, level, text):
@@ -642,9 +598,7 @@ class LeadDesigner(QtWidgets.QWidget):
             self.leads = leads
             self.outcome = self.blc.validate_set(leads, meshes=self.meshes,
                                                  corridor=corridor, foramen=foramen)
-            name = self.pick.currentText()
-            lines = self.blc.report_set_lines(
-                "custom" if name == CUSTOM else name, leads, self.outcome)
+            lines = self.blc.report_set_lines("this set", leads, self.outcome)
             self.detail.setPlainText("\n".join(lines[1:]))
 
             levels = [lvl for r in self.outcome["leads"]
@@ -663,6 +617,11 @@ class LeadDesigner(QtWidgets.QWidget):
                     % (leads[0]["diameter"], n["clearance_mm"])
             self.set_banner(worst, headline)
             self.status.setText("")
+            # Check fit doubles as "rebuild what is in the tree": if the leads
+            # are showing, they are now the numbers that were just measured.
+            if self.btn_preview.isChecked():
+                self.do_preview()
+            self.sync_preview_button()
         except Exception:
             self.outcome = None
             self.set_banner("FAIL", "The check itself failed")
@@ -672,35 +631,105 @@ class LeadDesigner(QtWidgets.QWidget):
             QtWidgets.QApplication.restoreOverrideCursor()
 
     def need_outcome(self):
-        """Both Preview and Export work off a checked set; check if needed."""
+        """Showing and exporting both work off a checked set; check if needed."""
         if self.outcome is None:
             self.check()
         return self.outcome
 
+    # -- the leads are either in the document or they are not -------------
+    def toggle_style(self):
+        """Stylesheet for the Show-leads toggle: green when checked.
+
+        Both states are painted explicitly, and the unchecked one is painted
+        from the widget's OWN palette rather than from named colours. That is
+        what makes it theme-proof: FreeCAD ships light and dark stylesheets and
+        several third-party ones, and a rule that only styled :checked would
+        make Qt draw the whole button through the stylesheet engine -- leaving
+        the normal state a flat rectangle with whatever text colour the theme
+        happened to set for a NATIVE button, which on the dark themes is nearly
+        invisible. Asking the palette means the off state matches the buttons
+        beside it whatever the theme is, and the on state is a green that has
+        enough contrast for white text either way.
+        """
+        pal = self.palette()
+        face = pal.color(QtGui.QPalette.Button).name()
+        text = pal.color(QtGui.QPalette.ButtonText).name()
+        edge = pal.color(QtGui.QPalette.Mid).name()
+        lit = pal.color(QtGui.QPalette.Midlight).name()
+        off = pal.color(QtGui.QPalette.Dark).name()
+        return ("""
+            QPushButton {
+                background: %s; color: %s;
+                border: 1px solid %s; border-radius: 3px; padding: 4px 10px;
+            }
+            QPushButton:hover  { background: %s; }
+            QPushButton:disabled { color: %s; }
+            QPushButton:checked {
+                background: %s; color: %s;
+                border: 1px solid %s; font-weight: bold;
+            }
+            QPushButton:checked:hover { background: %s; }
+        """ % (face, text, edge, lit, off,
+               TOGGLE_ON_BG, TOGGLE_ON_FG, TOGGLE_ON_BORDER, TOGGLE_ON_HOVER))
+
+    def preview_shown(self):
+        """True if the leads group is actually in the active document."""
+        doc = FreeCAD.ActiveDocument
+        return doc is not None and doc.getObject(self.blc.PREVIEW_GROUP) is not None
+
+    def sync_preview_button(self):
+        """Make the toggle say what the DOCUMENT says, not what it last did.
+
+        The group can go without the panel being told -- deleted in the tree,
+        another document activated, the document closed -- and a button stuck in
+        the green state would then be a lie. Checked without firing the toggle
+        handler, or syncing would itself build or delete leads.
+        """
+        shown = self.preview_shown()
+        if self.btn_preview.isChecked() != shown:
+            self.btn_preview.blockSignals(True)
+            self.btn_preview.setChecked(shown)
+            self.btn_preview.blockSignals(False)
+        self.btn_preview.setText("Leads shown" if shown else "Show leads")
+
+    def preview_toggled(self, on):
+        """The one handler for both directions."""
+        if on:
+            if not self.do_preview():
+                # Nothing went into the document, so the button must not claim
+                # otherwise. blockSignals so this does not re-enter as a clear.
+                self.btn_preview.blockSignals(True)
+                self.btn_preview.setChecked(False)
+                self.btn_preview.blockSignals(False)
+        else:
+            self.do_clear()
+        self.sync_preview_button()
+
     def do_preview(self):
+        """Build the set into the active document. True if anything landed."""
         doc = FreeCAD.ActiveDocument
         if doc is None:
-            self.status.setText("No active document to preview into.")
-            return
+            self.status.setText("No active document to put the leads in.")
+            return False
         outcome = self.need_outcome()
         if outcome is None or not any(r.get("shapes") for r in outcome["leads"]):
-            self.status.setText("Nothing to preview: no lead could be built.")
-            return
-        # A failing set is still previewed, on purpose -- SEEING the lead push
+            self.status.setText("Nothing to show: no lead could be built.")
+            return False
+        # A failing set is still shown, on purpose -- SEEING the lead push
         # through the dura, or the two leads sitting inside each other, is the
         # clearest possible explanation of the failure.
-        name = self.pick.currentText()
         try:
-            _group, made = self.blc.preview_set(
-                doc, "custom" if name == CUSTOM else name,
-                self.leads, outcome["leads"], self.blc.lead_colours())
+            group, made = self.blc.preview_set(doc, self.leads, outcome["leads"],
+                                               self.blc.lead_colours())
         except Exception as exc:
-            self.status.setText("Preview failed: %s" % exc)
-            return
+            self.status.setText("Could not show the leads: %s" % exc)
+            return False
         FreeCADGui.updateGui()
-        self.status.setText("Previewed %d bodies from %d lead(s) in %s. "
-                            "Disposable — do not save the document for it."
-                            % (len(made), len(self.leads), doc.Label))
+        self.status.setText(
+            "%d bodies from %d lead(s) in %s, under “%s”. Disposable — do not "
+            "save the document for them."
+            % (len(made), len(self.leads), doc.Label, group.Label))
+        return True
 
     def do_clear(self):
         doc = FreeCAD.ActiveDocument
@@ -709,34 +738,8 @@ class LeadDesigner(QtWidgets.QWidget):
             return
         n = self.blc.clear_preview(doc)
         FreeCADGui.updateGui()
-        self.status.setText("Removed %d preview object(s)." % n if n
-                            else "There was no preview to remove.")
-
-    def do_rado(self):
-        doc = FreeCAD.ActiveDocument
-        if doc is None:
-            self.status.setText("No active document.")
-            return
-        try:
-            _g, made = self.blc.preview_rado_lead(doc, colours=self.blc.lead_colours())
-        except Exception as exc:
-            self.status.setText("Could not import RADO's lead: %s" % exc)
-            return
-        FreeCADGui.updateGui()
-        self.status.setText(
-            "Imported RADO's own %d-body DRG lead from STL_files/, as a "
-            "reference overlay. It is not part of the anatomy — do not save the "
-            "document with it in." % len(made))
-
-    def do_rado_clear(self):
-        doc = FreeCAD.ActiveDocument
-        if doc is None:
-            self.status.setText("No active document.")
-            return
-        n = self.blc.clear_rado_lead(doc)
-        FreeCADGui.updateGui()
-        self.status.setText("Removed %d object(s)." % n if n
-                            else "RADO's reference lead was not shown.")
+        self.status.setText("Took %d object(s) back out of the tree." % n if n
+                            else "There were no leads in the tree to remove.")
 
     def do_export(self):
         outcome = self.need_outcome()
@@ -746,33 +749,56 @@ class LeadDesigner(QtWidgets.QWidget):
         if not outcome["ok"]:
             QtWidgets.QMessageBox.warning(
                 self, "Lead designer",
-                "This configuration does not fit, so it has not been exported."
+                "This set does not fit, so it has not been exported."
                 "\n\nThe fix is a different lead, a different position, or more "
                 "space between two leads — the anatomy is not carved away to "
                 "make room. See the reasons in the panel.")
             return
-        name = self.pick.currentText()
-        if name == CUSTOM:
-            name, ok = QtWidgets.QInputDialog.getText(
-                self, "Export STLs",
-                "Name for this configuration (becomes the directory under "
-                "generated_leads/):", text="custom_leads")
-            if not ok or not name.strip():
-                return
-            name = name.strip()
+        # The name is asked for every time, because there is no catalogue to
+        # take one from: it is a DIRECTORY name and nothing reads it back.
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "Export STLs",
+            "Folder to write these %d lead(s) into, under generated_leads/:"
+            % len(self.leads), text=self.suggested_name())
+        if not ok or not name.strip():
+            return
+        name = name.strip()
         try:
-            outdir, files = self.blc.export_set(name, self.leads, outcome["leads"],
-                                                tag=name)
+            outdir, files = self.blc.export_set(name, self.leads, outcome["leads"])
         except Exception as exc:
             self.status.setText("Export failed: %s" % exc)
             return
         self.status.setText("Wrote %d files to %s" % (len(files), outdir))
         QtWidgets.QMessageBox.information(
             self, "Lead designer",
-            "Wrote %d STLs from %d lead(s) to\n\n%s\n\nTo keep this "
-            "configuration, add an entry for it to lead_configs.yaml — the "
-            "configuration plus these STLs are the durable artefact, not a saved "
-            "document." % (len(files), len(self.leads), outdir))
+            "Wrote %d STLs from %d lead(s) to\n\n%s\n\nThat directory is the "
+            "durable artefact — not a saved document, and not an entry in any "
+            "list. Close the model document without saving."
+            % (len(files), len(self.leads), outdir))
+
+    def suggested_name(self):
+        """A directory name derived from the leads themselves, to be edited.
+
+        Built from what the set IS -- "dorsal_T11_x1.5", "2x_dorsal", "drg_L3" --
+        so the offered name is never stale and nobody has to invent one. It is a
+        suggestion in an editable box, not an identifier: nothing resolves it.
+        """
+        if not self.pages():
+            return "lead"
+        if len(self.pages()) > 1:
+            counts = {}
+            for page in self.pages():
+                counts[page.kind] = counts.get(page.kind, 0) + 1
+            return "_".join("%dx_%s" % (n, k) for k, n in sorted(counts.items()))
+        page = self.pages()[0]
+        if page.kind == "drg":
+            return "drg_%s_%dc" % (page.target.currentText(), page.contacts.value())
+        where = page.level.currentText()
+        if where == CUSTOM:
+            where = "z%.0f" % page.z_center.value()
+        dx = page.x_offset.value()
+        side = "" if abs(dx) < 0.005 else ("_L%.1f" % dx if dx > 0 else "_R%.1f" % -dx)
+        return "%s_%s%s_%dc" % (page.kind, where, side, page.contacts.value())
 
 
 def show_panel():

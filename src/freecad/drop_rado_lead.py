@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
-"""Remove RADO's own 4-contact DRG lead from NBF_RADO-SCS.FCStd. GUI only.
+"""Strip every lead out of NBF_RADO-SCS.FCStd, leaving anatomy only. GUI only.
+
+WHAT IT LEAVES BEHIND
+---------------------
+    245 bodies, 13 groups   ->   240 bodies, 11 groups
+
+RADO's five hardware bodies (four platinum contacts and an insulator sheath)
+go, and so do the two tissue groups that held them -- "13 Lead contacts" and
+"14 Lead insulation" -- which are empty once the bodies are gone and would
+otherwise sit in the tree implying a lead that is not there. The two LEAD
+TISSUES stay in src/ansys/tissue_map.yaml: previews and exported STLs still
+need their colours and conductivities. It is the DOCUMENT that holds no lead,
+not the model.
 
 WHY THE ANATOMY DOCUMENT SHOULD NOT CONTAIN A LEAD
 --------------------------------------------------
 There is now one model document and it holds ANATOMY ONLY. Every lead is
-configuration (lead_configs.yaml) plus geometry generated on demand, previewed
-into the open document and thrown away. RADO's five hardware bodies -- four
+parameters (starting from lead_defaults.yaml) plus geometry generated on demand,
+previewed into the open document and thrown away. RADO's five hardware bodies -- four
 platinum contacts and an insulator sheath -- are the last thing in the document
 that does not belong to that scheme, and leaving them there is not merely untidy:
 
@@ -29,16 +41,23 @@ that this repo tracks unmodified:
 They are still the published geometry, still in the model's own coordinate
 frame, and they come back into any open document in one click --
 build_lead_config.preview_rado_lead() imports them with no transform, into their
-own group, as a disposable overlay that the lead designer panel has a button
-for. So RADO's lead stops being a permanent conductor in the anatomy and becomes
+own group, as a disposable overlay:
+
+    import sys; sys.path.insert(0, "/home/mohamed/Projects/SCS-Modeling/src/freecad")
+    import build_lead_config as blc
+    blc.preview_rado_lead(FreeCAD.ActiveDocument, colours=blc.lead_colours())
+    blc.clear_rado_lead(FreeCAD.ActiveDocument)      # and back again
+
+So RADO's lead stops being a permanent conductor in the anatomy and becomes
 what it actually is here: a reference placement to compare against.
 
 It is worth having as exactly that. It is the only independently placed DRG lead
 in the model -- RADO put it there by hand in SolidWorks -- and it is what the
 foraminal corridor derived by measure_foramen.py is validated against
-(`build_lead_config.py --name rado_drg_L3_match --compare-rado`). Deleting the
-STLs, or the catalogue entry that reproduces it, would throw that away. Deleting
-the five bodies from the document does not.
+(`build_lead_config.py --type drg --target L3 --contacts 4 --contact-length 1.25
+--gap 3.50 --diameter 1.25 --tail 0 --lateral-offset 2.93 --ganglion-clearance 0
+--compare-rado`). Deleting the STLs would throw that away. Deleting the five
+bodies from the document does not.
 
 THE TRADEOFF, STATED PLAINLY
 ----------------------------
@@ -70,6 +89,12 @@ main() refuses outright unless FreeCAD.GuiUp is true.
 It is idempotent: run on a document that has already had them removed, it says
 so and changes nothing.
 
+It VERIFIES THE SAVE rather than trusting it, because the failure this pipeline
+fears is silent: after writing, it reopens the .FCStd as a zip and checks that
+GuiDocument.xml is there and that there is exactly one ShapeAppearance blob per
+body, then reads DiffuseColor back off a sample of live ViewObjects. Blob count
+alone has passed while 97 bodies were unpainted, so both checks are made.
+
 Options come from DROP_RADO_LEAD_ARGS under a FreeCAD interpreter, for the
 reason apply_labels.py documents: FreeCAD eats the command line itself. Output
 goes to a report file as well as to stdout.
@@ -94,6 +119,14 @@ RADO_LEAD = ("SCS_Lead_Electrode_1", "SCS_Lead_Electrode_2", "SCS_Lead_Electrode
 RADO_LEAD_STLS = ("SCS Lead Electrode 1.stl", "SCS Lead Electrode 2.stl",
                   "SCS Lead Electrode 3.stl", "SCS Lead Electrode 4.stl",
                   "SCS Lead Insulator.stl")
+
+# The two tissue groups make_tissue_groups.py creates for lead hardware --
+# "13 Lead contacts" and "14 Lead insulation". Matched on Name, which is
+# NAME_PREFIX + the tissue name there; once the five bodies above are gone these
+# hold nothing, and an empty group in the tree says a lead is somewhere in the
+# document when none is. Removed ONLY when empty, so a document that is being
+# used with a lead in it keeps its groups.
+LEAD_GROUPS = ("TissueGroup_electrode_contact", "TissueGroup_lead_insulation")
 
 
 def script_args():
@@ -148,6 +181,88 @@ def drop_rado_lead(doc, say):
     return len(dropped)
 
 
+def drop_empty_lead_groups(doc, say):
+    """Delete the two lead tissue groups, but only if they are empty.
+
+    A non-empty one is left alone and reported: it means the document holds lead
+    bodies this script does not know about (a previewed lead, an imported
+    generated one), and deleting the group would take them with it.
+    """
+    dropped, kept, absent = [], [], []
+    for name in LEAD_GROUPS:
+        g = doc.getObject(name)
+        if g is None:
+            absent.append(name)
+            continue
+        if g.Group:
+            kept.append("%s (%s, %d bodies)" % (name, g.Label, len(g.Group)))
+            continue
+        dropped.append("%s (%s)" % (name, g.Label))
+        doc.removeObject(name)
+    say("groups:    %d removed -- %s", len(dropped), ", ".join(dropped) or "none")
+    if kept:
+        say("           LEFT ALONE, not empty: %s", ", ".join(kept))
+    if absent:
+        say("           already absent: %s", ", ".join(absent))
+    return len(dropped)
+
+
+def verify_saved(path, doc, say):
+    """Check the written .FCStd kept its colours. Returns True if it did.
+
+    Two independent checks, because neither alone is sufficient:
+
+      - the ZIP: GuiDocument.xml present at all (a headless save writes none),
+        and one ShapeAppearance blob per body. FreeCAD stores each body's
+        material as its own zip entry, "...ShapeAppearance", "ShapeAppearance1",
+        and so on, so counting them against the mesh kernels counts painted
+        bodies against bodies.
+      - the LIVE document: DiffuseColor read back off a sample of ViewObjects.
+        The blob count passed once while 97 bodies were silently unpainted --
+        every blob present, most of them default grey -- so the colours are
+        looked at, not just counted.
+    """
+    import zipfile
+    ok = True
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+    meshes = sum(1 for n in names if n.endswith(".bms"))
+    blobs = sum(1 for n in names if "ShapeAppearance" in n)
+    has_gui = "GuiDocument.xml" in names
+    say("verify:    GuiDocument.xml %s", "present" if has_gui else "MISSING")
+    say("           %d mesh kernels, %d ShapeAppearance blobs", meshes, blobs)
+    if not has_gui:
+        say("           FAILED: the colours are gone. Restore from git.")
+        ok = False
+    if meshes != blobs:
+        say("           FAILED: %d bodies but %d colour blobs", meshes, blobs)
+        ok = False
+
+    bodies = [o for o in doc.Objects if o.TypeId != "App::DocumentObjectGroup"]
+    sample, grey = [], 0
+    for obj in bodies[::max(1, len(bodies) // 8)][:8]:
+        vo = getattr(obj, "ViewObject", None)
+        rgb = None
+        if vo is not None and hasattr(vo, "ShapeAppearance"):
+            try:
+                rgb = tuple(round(c, 3) for c in vo.ShapeAppearance[0].DiffuseColor[:3])
+            except Exception:
+                rgb = None
+        if rgb is None and vo is not None and hasattr(vo, "ShapeColor"):
+            rgb = tuple(round(c, 3) for c in vo.ShapeColor[:3])
+        sample.append((obj.Name, rgb))
+        if rgb is not None and len(set(rgb)) == 1:
+            grey += 1
+    say("           DiffuseColor read back off %d ViewObjects:", len(sample))
+    for name, rgb in sample:
+        say("              %-34s %s", name[:34], rgb)
+    if grey == len(sample) and sample:
+        say("           FAILED: every sampled body is grey -- they are unpainted.")
+        ok = False
+    say("           colour check: %s", "OK" if ok else "FAILED")
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--document", default=DEFAULT_DOC)
@@ -164,17 +279,19 @@ def main():
 
     say("document:  %s", args.document)
     say("bodies:    %s", ", ".join(RADO_LEAD))
+    say("groups:    %s (removed only if empty)", ", ".join(LEAD_GROUPS))
     say("")
     ok = check_stls_present(args.stl_dir, say)
     say("")
 
     rc = 0
     if args.dry_run:
-        say("DRY RUN: would remove those %d bodies and save the document.",
-            len(RADO_LEAD))
+        say("DRY RUN: would remove those %d bodies, plus the %d lead groups if "
+            "they are empty, and save the document.",
+            len(RADO_LEAD), len(LEAD_GROUPS))
         say("They come back into any open document as a disposable overlay via")
-        say("build_lead_config.preview_rado_lead(), or the lead designer panel's")
-        say("\"Show RADO's lead\" button.")
+        say("build_lead_config.preview_rado_lead(); see the docstring for the")
+        say("two lines that show and hide it from FreeCAD's Python console.")
     elif not ok:
         rc = 2
     else:
@@ -207,17 +324,25 @@ def main():
                     say("using the already-open document %s", doc.Name)
                 before = len(doc.Objects)
                 n = drop_rado_lead(doc, say)
+                n += drop_empty_lead_groups(doc, say)
                 doc.recompute()
                 if n:
                     doc.save()
-                    say("saved:     %s, %d objects (was %d)",
-                        args.document, len(doc.Objects), before)
+                    bodies = [o for o in doc.Objects
+                              if o.TypeId != "App::DocumentObjectGroup"]
+                    groups = len(doc.Objects) - len(bodies)
+                    say("saved:     %s", args.document)
+                    say("           %d objects (was %d): %d bodies, %d groups",
+                        len(doc.Objects), before, len(bodies), groups)
+                    say("")
+                    if not verify_saved(args.document, doc, say):
+                        rc = 2
                 else:
                     say("nothing to do: the document already holds anatomy only.")
 
     say("")
     say("RESULT: %s", {0: "dry run OK" if args.dry_run else "OK",
-                       2: "refused"}[rc])
+                       2: "refused or unverified"}[rc])
     with open(args.report, "w", encoding="utf-8") as fh:
         fh.write("\n".join(out) + "\n")
     sys.stdout.write("\n".join(out) + "\n")

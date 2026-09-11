@@ -40,8 +40,9 @@ is a no-op and re-running after a partial run finishes the job.
 
 WARNING -- SAVING UNDER freecadcmd DESTROYS THE TISSUE COLOURS
 --------------------------------------------------------------
-Since apply_colors.py ran, all three documents carry a GuiDocument.xml holding
-one ShapeAppearance blob per body (245 / 254 / 254). freecadcmd has no Gui
+Since apply_colors.py ran, NBF_RADO-SCS.FCStd carries a GuiDocument.xml holding
+one ShapeAppearance blob per body -- 240 of them, since drop_rado_lead.py took
+RADO's five lead bodies out and left anatomy only. freecadcmd has no Gui
 layer, so a document it saves is written WITHOUT GuiDocument.xml and without the
 appearance entries -- every colour and transparency is gone, silently, and the
 exit code still looks fine. Verified on this build (FreeCAD 26.3.0, git 48502)
@@ -62,8 +63,8 @@ bodies painted FreeCAD's default grey while every blob-count check still passed.
 Counting blobs does not prove they are attached to the right bodies; only
 reading DiffuseColor back off a ViewObject does, and that needs a GUI.
 
-The 8-contact study lead is protected from this script; see
-PROTECTED_LABEL_PREFIXES below.
+Generated and previewed lead bodies are protected from this script; see
+PROTECTED_LABEL_PREFIXES and PROTECTED_NAME_PREFIXES below.
 """
 import argparse
 import os
@@ -99,11 +100,18 @@ PREFIX = "T8-10 - "          # stripped before matching; every RADO body has it
 # does.
 #
 # NOTE: the study leads no longer live in a saved document at all -- there is one
-# anatomy document and leads are a disposable preview (see build_lead_config.py),
-# and preview bodies are named SCS_Preview_* rather than SCS_Lead_*, so they do
-# not match these rules either way. This guard is kept for a document someone has
+# anatomy document, it holds ANATOMY ONLY, and leads are a disposable preview
+# (see build_lead_config.py). This guard is kept for a document someone has
 # imported generated STLs into by hand, which is still a supported thing to do.
 PROTECTED_LABEL_PREFIXES = ("SCS 8c ",)
+
+# The same idea one level up: a previewed lead's bodies are named SCS_Preview_*,
+# which no rule in body_aliases.yaml matches, so without this they would be
+# listed as "objects with no rule" every time this script ran with the lead
+# designer's preview showing. They are not unlabelled anatomy, they are hardware
+# the panel named ("lead 1 (dorsal) - contact 01"), and they are not part of the
+# document in any lasting sense. Reported as protected rather than as a problem.
+PROTECTED_NAME_PREFIXES = ("SCS_Preview_",)
 
 
 # --------------------------------------------------------------------------
@@ -317,6 +325,27 @@ def main():
         while os.path.exists(bak):
             n += 1
             bak = "%s.prelabel%d.bak" % (args.doc, n)
+    # Refuse BEFORE opening anything. This script SAVES, and a save with no Gui
+    # layer silently drops GuiDocument.xml and every ShapeAppearance blob with
+    # it -- every tissue colour in the document, gone, with no error. That has
+    # already cost two recoveries in this repo. Labels are App-level and could
+    # in principle be written headlessly; the save is what cannot be. Same guard
+    # as drop_rado_lead.py and make_tissue_groups.py.
+    if not args.dry_run and not FreeCAD.GuiUp:
+        say("REFUSING to write: no Gui layer (FreeCAD.GuiUp is false).")
+        say("")
+        say("    Saving a document from freecadcmd drops GuiDocument.xml and")
+        say("    every ShapeAppearance blob, destroying all tissue colours.")
+        say("")
+        say("    Run this from the Python console of a running FreeCAD instead:")
+        say("        import sys; sys.path.insert(0, %r)", HERE)
+        say("        import os; os.environ['APPLY_LABELS_ARGS'] = '...'")
+        say("        import apply_labels; apply_labels.main()")
+        say("")
+        say("    Or use --dry-run, which needs no Gui and writes nothing.")
+        write_report(args.report, out)
+        return 1
+
         shutil.copy2(args.doc, bak)
         say("backup:    %s", os.path.basename(bak))
 
@@ -326,7 +355,8 @@ def main():
 
     changed, already, missing_rule, samples, protected = 0, 0, [], [], []
     for obj in doc.Objects:
-        if obj.Label.startswith(PROTECTED_LABEL_PREFIXES):
+        if obj.Label.startswith(PROTECTED_LABEL_PREFIXES) \
+                or obj.Name.startswith(PROTECTED_NAME_PREFIXES):
             protected.append((obj.Name, obj.Label))
             continue
         entry = index.get(obj.Name)
@@ -346,7 +376,8 @@ def main():
     say("unchanged: %d (already correct)", already)
     if protected:
         say("")
-        say("PROTECTED (%d) -- generated study-lead bodies, Label left alone:", len(protected))
+        say("PROTECTED (%d) -- generated or previewed lead bodies, Label left "
+            "alone:", len(protected))
         for name, label in protected:
             say("   %-30s Label=%r", name[:30], label)
     if missing_rule:

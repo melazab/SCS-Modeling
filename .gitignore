@@ -25,6 +25,7 @@ src/freecad/apply_labels_report.txt
 src/freecad/apply_colors_report*.txt
 src/freecad/build_lead_config_report.txt
 src/freecad/drop_rado_lead_report.txt
+src/freecad/test_regression_report.txt
 src/freecad/foramen_report.txt
 
 # THERE IS ONE MODEL DOCUMENT: NBF_RADO-SCS.FCStd, holding anatomy only.
@@ -32,10 +33,11 @@ src/freecad/foramen_report.txt
 # NBF_RADO-SCS_dorsal.FCStd and _ventral.FCStd used to be tracked here, one per
 # arm of the dorsal-vs-ventral study, built by make_lead_variants.py. They are
 # gone, and so is that script. A lead is no longer baked into a copy of the
-# document: it is an entry in src/freecad/lead_configs.yaml plus a directory of
-# STLs under src/freecad/generated_leads/, previewed into the open document on
-# demand and thrown away. `dorsal_z110_8c` and `ventral_z110_8c` reproduce
-# exactly what those two documents contained, byte for byte.
+# document: it is a handful of parameters plus a directory of STLs under
+# src/freecad/generated_leads/, previewed into the open document on demand and
+# thrown away. generated_leads/dorsal_z110_8c/ and ventral_z110_8c/ are what
+# those two documents contained, and src/freecad/test_regression.py rebuilds
+# them from their parameters and compares every byte.
 #
 # Their exploded scratch directories are still ignored in case an old checkout
 # has them lying about, matching the NBF_RADO-SCS/ rule at the top.
