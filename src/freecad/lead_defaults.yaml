@@ -134,24 +134,42 @@ epidural_defaults:
   x_offset: 0.0           # mm from midline, + is anatomical LEFT
   z_center: 110.0         # mm, centre of the contact array
 
-# Applied on top of `defaults` for a DRG lead only. A DRG lead is a different
-# piece of hardware, not a dorsal lead pointed sideways: clinical percutaneous
-# DRG leads carry four SHORT contacts (about 1.25 mm) on a 4 mm pitch, against
-# the eight 3 mm contacts on a 4 mm pitch of a dorsal-column lead. RADO's own
-# 4-contact lead measures 1.25 mm contacts on a 4.75 mm pitch.
+# Applied on top of `defaults` for a DRG lead only.
+#
+# A DRG LEAD IS NOT BUILT, IT IS COPIED -- READ THIS BEFORE ADDING A KNOB HERE
+# ---------------------------------------------------------------------------
+# A dorsal or ventral lead is GENERATED: a segment plan swept along a measured
+# corridor, so its contact count, contact length, gap, diameter and tail are
+# real parameters and the `defaults:` block above supplies them.
+#
+# A DRG lead is not. It is RADO's OWN four-contact lead -- the five STLs in
+# STL_files/, hand-placed in SolidWorks -- rigidly transformed onto whichever
+# ganglion you name. See src/freecad/rado_drg_lead.py.
+#
+# So five parameters that a dorsal lead takes DO NOT EXIST for a DRG lead:
+#
+#     contacts   contact_length   gap   diameter   tail
+#
+# They are properties of RADO's meshes, and a rigid transform cannot change
+# them. build_lead_config.py REJECTS them on a DRG lead rather than ignoring
+# them, and the panel does not show spinboxes for them, because a control that
+# does nothing is worse than no control. Their values are still reported --
+# measured back off the placed geometry rather than written down here, so they
+# cannot drift from the meshes they describe. As measured: 4 contacts, 1.251 mm
+# long, 1.101 mm across, 5.129 mm true centre-to-centre pitch, on a 1.185 mm
+# sheath, with NO plain tail at all (the end contacts overhang the sheath by
+# 0.23 mm medially and 0.62 mm laterally).
+#
+# WHY IT IS DONE THIS WAY. The swept DRG lead fitted the foramen without ever
+# being the lead RADO drew: its sheath curvature was whatever the sweep gave,
+# and it had to be nudged off the corridor centre by a solved-for standoff to
+# stop it cutting into the ganglion it was meant to sit beside. RADO's lead
+# needs neither, because RADO already placed it correctly against a ganglion --
+# and the eight ganglion cores in this model are CONGRUENT COPIES of two master
+# bodies, so carrying that placement to another ganglion carries the standoff
+# with it. Measured: 0.294 mm on every left target and 0.288-0.289 mm on every
+# right one, against RADO's own 0.294 mm.
 drg_defaults:
-  contacts: 4
-  contact_length: 1.25
-  gap: 2.75               # -> 4.00 mm contact pitch
-  # 1.0 mm of plain insulator beyond the end contacts, and no more. The medial
-  # end of a DRG lead is heading back towards the canal, and a longer tail walks
-  # it into the dural sac -- measured, on every one of the eight foramina, a
-  # 2.5 mm tail puts the medial tip inside the thecal sac. (A real lead does of
-  # course continue back up the epidural space; this model stops at the foramen,
-  # the way RADO's own lead does, because the field near the contacts is what
-  # the solve is for.)
-  tail: 1.0
-
   # GANGLION NAMES -- READ THIS CAVEAT
   # A DRG lead names its target ganglion: L1..L4 on the patient's left, R1..R4
   # on the right, counted ROSTRAL to CAUDAL within each side. They are the
@@ -161,40 +179,35 @@ drg_defaults:
   # numbering the body labels use ("DRG L3 -- ganglion core"), derived the same
   # way. The eight and their corridors are in foraminal_corridors.json; run
   # `freecadcmd src/freecad/measure_foramen.py` to regenerate it.
+  #
+  # L3 is the default because it is RADO'S OWN. Asking for it with no offsets
+  # gives back RADO's five STLs exactly where RADO left them -- the transform
+  # is the identity, and build_lead_config --compare-rado asserts that every
+  # body's centroid moved by exactly zero.
   target: L3
 
-  # How far along the corridor the CENTRE of the contact array sits, relative to
-  # the ganglion's own centre. + is further out along the root. The default is
-  # 1.0 rather than 0 for two measured reasons, not for taste:
+  # THE THREE NUDGES, all in the TARGET GANGLION'S OWN FRAME
+  # --------------------------------------------------------
+  # The frame is built from the ganglion itself: origin at its area-weighted
+  # centroid, +e1 along its long axis pointing OUT along the root, +e2 dorsal,
+  # +e3 rostral. Using the ganglion's frame rather than the model's global axes
+  # is what makes these three mean the same thing on both sides: +z_offset is
+  # rostral at every ganglion, left or right, even though getting to a right
+  # ganglion involved a reflection through the sagittal plane.
   #
-  #   - Medial of the ganglion the foraminal block flares vertically to meet the
-  #     canal -- on L3 it is 14 mm tall in z at 11 mm out -- and its centre
-  #     climbs 3-4 mm above the nerve root, so the corridor is a poor description
-  #     of where a lead goes there. RADO's own lead follows the root instead.
-  #     Pushing the array out keeps every contact clear of that flare.
-  #   - It is also the clinical placement and RADO's: the array is advanced past
-  #     the ganglion so the proximal contacts lie over it and the tip is distal.
-  #     RADO's own array centre is 2.93 mm out from the ganglion's.
+  # THE DEFAULT FOR ALL THREE IS ZERO, and that is the point. Zero means "put
+  # the lead exactly where RADO put it relative to its ganglion". There is no
+  # longer a default nudge to compensate for a construction that did not quite
+  # work; if a particular foramen needs the lead moved, move it deliberately
+  # and the fit check will say what it bought.
   #
-  # Not something bigger, because the foramen is only about 20 mm of usable
-  # channel and this lead is 15.25 mm long: pushed further out, the tip leaves
-  # the foraminal tissue. Checked on all eight -- with these defaults seven of
-  # the eight validate clean. R1, the tightest foramen in the model (5.3 x 6.2 mm
-  # at its narrowest), leaves the tissue with about 0.8% of its sampled surface
-  # whatever the lateral offset, and needs a y_offset or z_offset nudge of its
-  # own; the fit check says so and says where.
-  lateral_offset: 1.0
+  # Checked on all eight targets with all three at zero: none intersects its
+  # ganglion, none enters the thecal sac, and none touches bone or a disc.
+  # L1, L3 and R1 are wholly inside their foraminal tissue. On the other five
+  # the distal tip protrudes 0.07-0.55 mm past the lateral MOUTH of the
+  # foramen, which is what a real DRG lead's tip does and which the fit check
+  # reports as a warning, naming how much and where.
 
-  # How far the lead surface is held off the ganglion, mm. The lead is placed on
-  # the corridor centre and then shifted ROSTRALLY by however much it takes to
-  # keep this clearance -- the shift is SOLVED FOR, not written down, because it
-  # differs by foramen (0.77 mm on L3, 1.62 mm on R3 for 0.25 mm of clearance).
-  # See build_lead_config.ganglion_standoff for why rostrally and why at all;
-  # the short version is that the corridor centre runs along the top of the
-  # ganglion to within 0.1 mm, so without this a lead is a coin toss between
-  # touching it and cutting into it. 0.0 means "sit on the corridor centre",
-  # which is what RADO's own lead does.
-  ganglion_clearance: 0.5
-
-  y_offset: 0.0           # further nudge from the corridor centre, + is DORSAL
-  z_offset: 0.0           # further nudge from the corridor centre, + is ROSTRAL
+  lateral_offset: 0.0     # mm along the root, + is further OUT (distal)
+  y_offset: 0.0           # mm, + is DORSAL
+  z_offset: 0.0           # mm, + is ROSTRAL

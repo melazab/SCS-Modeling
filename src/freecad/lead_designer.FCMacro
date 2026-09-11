@@ -194,21 +194,48 @@ class LeadPage(QtWidgets.QWidget):
         form = QtWidgets.QFormLayout(self)
         form.setLabelAlignment(QtCore.Qt.AlignRight)
 
-        self.contacts = self.spin_int("How many electrode contacts", 1, 32)
-        form.addRow("Contacts", self.contacts)
-        self.contact_length = self.spin("Length of each contact", 0.25, 20.0, 0.25, " mm")
-        form.addRow("Contact length", self.contact_length)
-        self.gap = self.spin("Insulator between neighbouring contacts", 0.0, 20.0,
-                             0.25, " mm")
-        form.addRow("Gap", self.gap)
-        self.diameter = self.spin("Lead diameter. Khadka et al. use 1.25 mm; the "
-                                  "house default is 1.30 mm", 0.2, 4.0, 0.05, " mm")
-        form.addRow("Diameter", self.diameter)
-        self.tail = self.spin("Plain insulator beyond the end contacts", 0.0, 30.0,
-                              0.5, " mm")
-        form.addRow("Tail", self.tail)
+        # THE HARDWARE CONTROLS EXIST ONLY FOR A SWEPT LEAD.
+        #
+        # A dorsal or ventral lead is generated, so its contact count, contact
+        # length, gap, diameter and tail are real parameters and get spinboxes.
+        # A DRG lead is a rigid COPY of the four-contact lead RADO ships, so
+        # those five are properties of RADO's meshes and nothing can change
+        # them. They are therefore not built for a DRG page at all, rather than
+        # built and disabled: a greyed-out spinbox still says "this is a
+        # setting, just not now", and these are not settings any more. What the
+        # DRG page shows instead is a read-only line saying what the hardware
+        # IS, measured off the meshes, so the number is still in front of
+        # whoever needs it.
+        if kind != "drg":
+            self.contacts = self.spin_int("How many electrode contacts", 1, 32)
+            form.addRow("Contacts", self.contacts)
+            self.contact_length = self.spin("Length of each contact", 0.25, 20.0,
+                                            0.25, " mm")
+            form.addRow("Contact length", self.contact_length)
+            self.gap = self.spin("Insulator between neighbouring contacts", 0.0,
+                                 20.0, 0.25, " mm")
+            form.addRow("Gap", self.gap)
+            self.diameter = self.spin("Lead diameter. Khadka et al. use 1.25 mm; "
+                                      "the house default is 1.30 mm",
+                                      0.2, 4.0, 0.05, " mm")
+            form.addRow("Diameter", self.diameter)
+            self.tail = self.spin("Plain insulator beyond the end contacts", 0.0,
+                                  30.0, 0.5, " mm")
+            form.addRow("Tail", self.tail)
 
         if kind == "drg":
+            self.hardware_note = QtWidgets.QLabel("")
+            self.hardware_note.setWordWrap(True)
+            self.hardware_note.setStyleSheet("color: gray;")
+            self.hardware_note.setToolTip(
+                "A DRG lead is not built here -- it is RADO's own four-contact "
+                "lead, the five STLs in STL_files/, rigidly transformed onto "
+                "the ganglion you pick. Its contacts cannot be resized, so "
+                "there are no spinboxes for them. These numbers are measured "
+                "back off those meshes.")
+            form.addRow("Hardware", self.hardware_note)
+            self.show_hardware()
+
             self.target = QtWidgets.QComboBox()
             self.target.addItems(panel.ganglia)
             self.target.setToolTip(
@@ -218,27 +245,28 @@ class LeadPage(QtWidgets.QWidget):
             self.target.currentIndexChanged.connect(self.touched)
             form.addRow("Target ganglion", self.target)
 
+            # The three nudges, all in the TARGET GANGLION'S own frame, which
+            # is what makes them mean the same thing on the right side as on
+            # the left -- rostral is rostral at every ganglion, even though
+            # reaching a right one involved a reflection. Zero on all three
+            # means "exactly where RADO put it relative to its ganglion", which
+            # is the placement Mohamed called correct, so zero is the default
+            # and any other value is a deliberate departure from it.
             self.lateral_offset = self.spin(
-                "Where the centre of the contact array sits along the root, "
-                "relative to the ganglion's own centre. Positive is further out "
-                "along the root (distal).", -10.0, 15.0, 0.5, " mm")
-            form.addRow("Array along the root", self.lateral_offset)
-
-            self.ganglion_clearance = self.spin(
-                "How far the lead surface is held off the ganglion. The lead is "
-                "placed on the centre of the foramen and then lifted towards the "
-                "pedicle by however much this takes -- the shift is worked out "
-                "for you, and differs between foramina. 0 sits on the centre, "
-                "which is what RADO's own lead does.", 0.0, 4.0, 0.25, " mm")
-            form.addRow("Clearance from the ganglion", self.ganglion_clearance)
+                "Slide the lead along the root. Positive is further OUT "
+                "(distal). Zero puts the array exactly where RADO's sits "
+                "relative to its own ganglion.", -10.0, 15.0, 0.5, " mm")
+            form.addRow("Along the root", self.lateral_offset)
 
             self.y_offset = self.spin(
-                "A further nudge across the foramen. Positive is DORSAL "
-                "(posterior).", -4.0, 4.0, 0.25, " mm")
+                "Nudge across the foramen. Positive is DORSAL (posterior). "
+                "Zero keeps RADO's own relationship to the ganglion.",
+                -4.0, 4.0, 0.25, " mm")
             form.addRow("Nudge dorsal/ventral", self.y_offset)
             self.z_offset = self.spin(
-                "A further nudge along the spine. Positive is ROSTRAL (towards "
-                "the head).", -6.0, 6.0, 0.25, " mm")
+                "Nudge along the spine. Positive is ROSTRAL (towards the head) "
+                "on EITHER side. Use this if the fit check reports the lead "
+                "too close to the ganglion here.", -6.0, 6.0, 0.25, " mm")
             form.addRow("Nudge rostral/caudal", self.z_offset)
 
             self.ganglion_note = QtWidgets.QLabel("")
@@ -247,9 +275,7 @@ class LeadPage(QtWidgets.QWidget):
             form.addRow("", self.ganglion_note)
             self.target.currentIndexChanged.connect(self.describe_target)
 
-            self.numeric = (self.contacts, self.contact_length, self.gap,
-                            self.diameter, self.tail, self.lateral_offset,
-                            self.ganglion_clearance, self.y_offset, self.z_offset)
+            self.numeric = (self.lateral_offset, self.y_offset, self.z_offset)
         else:
             self.level = QtWidgets.QComboBox()
             self.level.addItem(CUSTOM)
@@ -335,6 +361,29 @@ class LeadPage(QtWidgets.QWidget):
             self.offset_note.setText("%.2f mm to the patient's %s"
                                      % (abs(dx), "LEFT" if dx > 0 else "RIGHT"))
 
+    def show_hardware(self):
+        """Fill the DRG page's read-only hardware line, from RADO's own meshes.
+
+        Measured rather than quoted, by the same call resolve_lead() makes, so
+        the panel cannot tell the user one thing while the geometry is another.
+        If the STLs cannot be read the line says so instead of guessing --
+        there is no fallback set of numbers to fall back to, which is the point
+        of this type of lead.
+        """
+        try:
+            hw = self.panel.blc.rado_drg_hardware()
+        except Exception as exc:
+            self.hardware_note.setText(
+                "RADO's lead STLs could not be read (%s), so a DRG lead cannot "
+                "be built." % exc)
+            return
+        self.hardware_note.setText(
+            "%d contacts, %.2f mm long, %.2f mm across -- RADO's own, FIXED. "
+            "A DRG lead is a rigid copy of the lead this model ships, so there "
+            "is nothing here to resize. Only the target and the three nudges "
+            "below are yours."
+            % (hw["contacts"], hw["contact_length"], hw["diameter"]))
+
     def describe_target(self, *_a):
         g = self.panel.foramen.get(self.target.currentText()) if self.panel.foramen else None
         if not g:
@@ -349,19 +398,17 @@ class LeadPage(QtWidgets.QWidget):
     def load(self, params):
         self.loading = True
         try:
-            self.contacts.setValue(int(params["contacts"]))
-            self.contact_length.setValue(float(params["contact_length"]))
-            self.gap.setValue(float(params["gap"]))
-            self.diameter.setValue(float(params["diameter"]))
-            self.tail.setValue(float(params["tail"]))
             if self.kind == "drg":
                 self.target.setCurrentText(str(params["target"]))
                 self.lateral_offset.setValue(float(params.get("lateral_offset", 0.0)))
-                self.ganglion_clearance.setValue(
-                    float(params.get("ganglion_clearance", 0.0)))
                 self.y_offset.setValue(float(params.get("y_offset", 0.0)))
                 self.z_offset.setValue(float(params.get("z_offset", 0.0)))
             else:
+                self.contacts.setValue(int(params["contacts"]))
+                self.contact_length.setValue(float(params["contact_length"]))
+                self.gap.setValue(float(params["gap"]))
+                self.diameter.setValue(float(params["diameter"]))
+                self.tail.setValue(float(params["tail"]))
                 self.z_center.setValue(float(params["z_center"]))
                 self.x_offset.setValue(float(params["x_offset"]))
                 self.level.setCurrentText(params.get("level") or CUSTOM)
@@ -374,20 +421,24 @@ class LeadPage(QtWidgets.QWidget):
 
     def overrides(self):
         """This page as the parameter dict resolve_lead() understands."""
-        out = {"type": self.kind,
-               "contacts": self.contacts.value(),
-               "contact_length": self.contact_length.value(),
-               "gap": self.gap.value(),
-               "diameter": self.diameter.value(),
-               "tail": self.tail.value()}
+        out = {"type": self.kind}
         if self.kind == "drg":
+            # No hardware keys at all. resolve_lead() REJECTS contacts,
+            # contact_length, gap, diameter and tail on a DRG lead, so sending
+            # them -- even set to RADO's own measured values -- would be an
+            # error, and rightly: the panel would be asking for geometry it
+            # does not get to choose.
             out.update(target=self.target.currentText(),
                        lateral_offset=self.lateral_offset.value(),
-                       ganglion_clearance=self.ganglion_clearance.value(),
                        y_offset=self.y_offset.value(),
                        z_offset=self.z_offset.value())
         else:
-            out.update(z_center=self.z_center.value(),
+            out.update(contacts=self.contacts.value(),
+                       contact_length=self.contact_length.value(),
+                       gap=self.gap.value(),
+                       diameter=self.diameter.value(),
+                       tail=self.tail.value(),
+                       z_center=self.z_center.value(),
                        x_offset=self.x_offset.value())
             if self.level.currentText() != CUSTOM:
                 out["level"] = self.level.currentText()
@@ -712,7 +763,7 @@ class LeadDesigner(QtWidgets.QWidget):
             self.status.setText("No active document to put the leads in.")
             return False
         outcome = self.need_outcome()
-        if outcome is None or not any(r.get("shapes") for r in outcome["leads"]):
+        if outcome is None or not any(self.blc.is_built(r) for r in outcome["leads"]):
             self.status.setText("Nothing to show: no lead could be built.")
             return False
         # A failing set is still shown, on purpose -- SEEING the lead push
@@ -743,7 +794,7 @@ class LeadDesigner(QtWidgets.QWidget):
 
     def do_export(self):
         outcome = self.need_outcome()
-        if outcome is None or not all(r.get("shapes") for r in outcome["leads"]):
+        if outcome is None or not all(self.blc.is_built(r) for r in outcome["leads"]):
             self.status.setText("Nothing to export: a lead could not be built.")
             return
         if not outcome["ok"]:
@@ -792,7 +843,10 @@ class LeadDesigner(QtWidgets.QWidget):
             return "_".join("%dx_%s" % (n, k) for k, n in sorted(counts.items()))
         page = self.pages()[0]
         if page.kind == "drg":
-            return "drg_%s_%dc" % (page.target.currentText(), page.contacts.value())
+            # No contact count in the name: every DRG lead is the same
+            # four-contact hardware, so the ganglion is the only thing that
+            # distinguishes one from another.
+            return "drg_%s_rado" % page.target.currentText()
         where = page.level.currentText()
         if where == CUSTOM:
             where = "z%.0f" % page.z_center.value()

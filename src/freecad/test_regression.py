@@ -32,17 +32,47 @@ directory name is that number through "%.0f". Every digit is spelled out
 deliberately -- at 110.0 the lead rebuilds 0.43 mm caudal of the committed STLs,
 which is exactly the kind of silent divergence this test exists to catch.
 
+AND A THIRD FIXTURE, WHICH IS NOT A BYTE COMPARISON
+--------------------------------------------------
+The DRG lead has no committed STLs to diff, and deliberately so: it is not
+generated any more. It is RADO's own four-contact lead -- the five files in
+STL_files/, which are already committed and already the source of truth --
+rigidly transformed onto whichever ganglion is named (rado_drg_lead.py). So the
+fixture it needs is not "do the bytes match a copy we kept", it is the stronger
+claim the mechanism actually makes:
+
+    1. ON RADO'S OWN GANGLION, WITH NO OFFSETS, THE TRANSFORM IS THE IDENTITY.
+       Every vertex of all five bodies must come back BIT-IDENTICAL to the
+       source STL. Not "within a tolerance" -- identical, because copying a
+       lead onto the ganglion it is already on must not move it.
+
+    2. ON ALL EIGHT TARGETS THE MAP IS RIGID AND THE MESH SURVIVES IT.
+       Signed volume and surface area preserved exactly, zero open edges, and
+       signed volume still POSITIVE -- that last one is the whole reason this
+       case exists. Reaching a right-side ganglion from a left-side one is a
+       reflection, which inverts every facet normal unless the vertex winding
+       is reversed with it, and an inside-out STL breaks meshing downstream
+       while looking perfectly fine in a viewport.
+
+    3. THE DETERMINANT MATCHES THE SIDE. +1 within a side, -1 across, and the
+       winding reversed exactly when it is -1.
+
+    4. IT IS DETERMINISTIC. Placing twice gives byte-identical files.
+
+None of that needs FreeCAD -- rado_drg_lead.py is numpy and struct -- so this
+part runs even in a plain Python interpreter, and it runs FIRST, before the two
+swept leads give up for want of a FreeCAD.
+
 RUN IT
 ------
-Needs FreeCAD, because building a lead needs FreeCAD:
-
-    freecadcmd src/freecad/test_regression.py
+    freecadcmd src/freecad/test_regression.py     # all three fixtures
+    python3 src/freecad/test_regression.py        # the DRG fixture only
 
 Nothing is written into the repository: the rebuild goes to a temporary
 directory which is removed afterwards, and the committed files are only read.
 There is no document involved at any point, so none of the save/colour hazards
-the rest of this directory is careful about apply here. Exit status is 0 if both
-leads reproduce, 1 if either does not.
+the rest of this directory is careful about apply here. Exit status is 0 if
+everything that could be checked reproduced, 1 if anything did not.
 """
 import filecmp
 import os
@@ -110,6 +140,71 @@ def compare(case_dir, built_dir, say):
     return ok
 
 
+def check_drg(say):
+    """The DRG fixture. Returns True if it holds. Needs no FreeCAD.
+
+    See the module docstring for what is being asserted and why it is not a
+    byte comparison against a committed copy.
+    """
+    import numpy as np
+    import rado_drg_lead as rdl
+
+    ok = True
+    say("=" * 72)
+    say("DRG -- RADO's own lead, copied onto all eight ganglia")
+
+    # 0. the constant is not stale: re-derive which ganglion RADO's lead is on.
+    foramen = rdl.load_foramen()
+    native, ranking = rdl.verify_native_target(foramen)
+    say("   native ganglion re-derived from the meshes: %s (nearest core centroid "
+        "%.2f mm; runner-up %s at %.2f mm)",
+        native, ranking[0]["centroid_gap_mm"], ranking[1]["tag"],
+        ranking[1]["centroid_gap_mm"])
+    if native != rdl.NATIVE_TARGET:
+        say("   FAIL: rado_drg_lead.NATIVE_TARGET says %s", rdl.NATIVE_TARGET)
+        ok = False
+
+    # 1. the identity case, bit for bit.
+    source = {fn: tris for _k, _i, fn, tris in rdl.load_rado_bodies()}
+    placed = rdl.place(rdl.NATIVE_TARGET, foramen)
+    exact = True
+    for _kind, _idx, fn, tris in placed["bodies"]:
+        if tris.shape != source[fn].shape or not np.array_equal(tris, source[fn]):
+            say("   FAIL: %s moved when copied onto its own ganglion", fn)
+            exact = ok = False
+    say("   %s onto %s with no offsets: all 5 bodies bit-identical to STL_files/",
+        "PASS" if exact else "FAIL", rdl.NATIVE_TARGET)
+
+    # 2 and 3. every target: rigid, watertight, outward, and the right parity.
+    say("   %-4s %-6s %-9s %-9s %10s %10s %7s %s",
+        "tgt", "side", "det", "winding", "vol", "area", "edges", "verdict")
+    for tag in sorted(foramen["ganglia"]):
+        p = rdl.place(tag, foramen)
+        side = p["target_frame"]["side"]
+        want_mirror = side != p["source_frame"]["side"]
+        good = (p["orientation_ok"]
+                and p["mirrored"] == want_mirror
+                and abs(abs(p["det"]) - 1.0) < 1e-12
+                and all(r["winding_reversed"] == want_mirror for r in p["orientation"]))
+        worst = max(abs(abs(r["signed_volume_after"]) - abs(r["signed_volume_before"]))
+                    for r in p["orientation"])
+        worst_a = max(abs(r["area_after"] - r["area_before"]) for r in p["orientation"])
+        edges = max(r["open_edges"] for r in p["orientation"])
+        say("   %-4s %-6s %+9.6f %-9s %10.1e %10.1e %7d %s",
+            tag, side, p["det"], "reversed" if p["mirrored"] else "kept",
+            worst, worst_a, edges, "OK" if good else "FAILED")
+        ok = ok and good
+
+    # 4. determinism.
+    a = rdl.place("R2", foramen)
+    b = rdl.place("R2", foramen)
+    same = all(np.array_equal(x[3], y[3]) for x, y in zip(a["bodies"], b["bodies"]))
+    say("   placing R2 twice gives identical vertices: %s", "PASS" if same else "FAIL")
+    ok = ok and same
+    say("")
+    return ok
+
+
 def main():
     out = []
 
@@ -119,6 +214,14 @@ def main():
     sys.path.insert(0, HERE)
     import build_lead_config as blc
 
+    drg_ok = True
+    try:
+        drg_ok = check_drg(say)
+    except Exception as exc:                    # noqa: BLE001 -- report, do not crash
+        say("DRG fixture could not run: %s: %s", type(exc).__name__, exc)
+        say("")
+        drg_ok = False
+
     say("rebuilding %d committed leads and comparing every byte", len(CASES))
     say("committed under %s", os.path.relpath(blc.DEFAULT_OUT, REPO))
     say("")
@@ -126,13 +229,15 @@ def main():
     try:
         blc._geometry_modules()
     except ImportError as exc:
-        say("Building a lead needs FreeCAD, and this interpreter has none (%s).", exc)
+        say("Building a SWEPT lead needs FreeCAD, and this interpreter has none "
+            "(%s). The DRG fixture above does not, and its verdict stands.", exc)
         say("")
         say("    freecadcmd src/freecad/test_regression.py")
         say("")
-        say("RESULT: could not run")
+        say("RESULT: %s", "DRG PASS, swept leads not checked" if drg_ok
+            else "DRG FAIL")
         write(out)
-        return 2
+        return 0 if drg_ok else 1
 
     meshes = blc.load_meshes()
     import json
@@ -185,9 +290,12 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
 
     say("=" * 72)
-    if failed:
-        say("%d of %d leads did NOT reproduce: %s",
-            len(failed), len(CASES), ", ".join(failed))
+    if failed or not drg_ok:
+        if not drg_ok:
+            say("the DRG fixture FAILED -- see the top of this report")
+        if failed:
+            say("%d of %d swept leads did NOT reproduce: %s",
+                len(failed), len(CASES), ", ".join(failed))
         say("")
         say("Something in the lead geometry has changed. Either the change is")
         say("wrong, or it is right and the committed STLs need regenerating --")
@@ -197,7 +305,8 @@ def main():
         say("RESULT: FAIL")
         write(out)
         return 1
-    say("all %d leads reproduced their %d committed STLs byte for byte",
+    say("all %d swept leads reproduced their %d committed STLs byte for byte, "
+        "and the DRG fixture holds on all eight ganglia",
         len(CASES), len(CASES) * len(EXPECTED))
     say("")
     say("RESULT: PASS")
