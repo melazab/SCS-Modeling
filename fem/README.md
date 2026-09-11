@@ -31,16 +31,33 @@ scipy + pyamg.**
 
 The options and how they scored:
 
-| option | verdict |
-|---|---|
-| **Elmer `StatCurrentSolver` via FreeCAD FEM** | The *right* answer and still worth installing. FreeCAD ships a first-class wrapper for it (`src/Mod/Fem/femsolver/elmer/equations/staticcurrent_writer.py`) that emits `Equation = "Stat Current Solver"` with `Electric Conductivity` in S/m, a `Potential` Dirichlet BC in volts and a `Current Density` BC in A/m². That is this problem with no translation at all. **Elmer is not installed and is not in the Ubuntu archive** — it needs `ppa:elmer-csc-ubuntu/elmer-csc-ppa`. Blocked on that, not rejected. |
-| **CalculiX steady-state heat as an exact analogy** | Sound physics — ∇·(k∇T)=0 *is* ∇·(σ∇V)=0 — and `ccx` is installed. Used here, but as a **cross-check only** (`fem/scripts/crosscheck_ccx.py`), never as the field of record. The reason is exactly the trap named in the brief: a `.frd` whose nodal field is called `NDTEMP` but means volts is a landmine for whoever reads it next. Note that it is *not* rejected for the floating contacts — the high-conductivity-body treatment used here needs no special constraint and works in any solver, which the cross-check demonstrates by reproducing the same field. |
-| **P1 FEM in this repo** | Chosen. It solves the equation literally, in volts; it makes the floating contacts exact rather than approximate; it can hand the NEURON stage V at arbitrary points without a format round-trip; and — the actual point of this exercise — it shares no code with Ansys, so agreement between the two means something. Its risk is that it is new code, so it is verified against a closed-form solution before it is believed (see *Verification*). |
+| option                                             | verdict                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Elmer `StatCurrentSolver` via FreeCAD FEM**      | The _right_ answer and still worth installing. FreeCAD ships a first-class wrapper for it (`src/Mod/Fem/femsolver/elmer/equations/staticcurrent_writer.py`) that emits `Equation = "Stat Current Solver"` with `Electric Conductivity` in S/m, a `Potential` Dirichlet BC in volts and a `Current Density` BC in A/m². That is this problem with no translation at all. **Elmer IS now installed** — Mohamed built it from source on 2026-09-11 (the PPA does not cover his Ubuntu release). See *Running Elmer* below. Not yet used for a solve; the P1 field remains the field of record until it is.                                                     |
+| **CalculiX steady-state heat as an exact analogy** | Sound physics — ∇·(k∇T)=0 _is_ ∇·(σ∇V)=0 — and `ccx` is installed. Used here, but as a **cross-check only** (`fem/scripts/crosscheck_ccx.py`), never as the field of record. The reason is exactly the trap named in the brief: a `.frd` whose nodal field is called `NDTEMP` but means volts is a landmine for whoever reads it next. Note that it is _not_ rejected for the floating contacts — the high-conductivity-body treatment used here needs no special constraint and works in any solver, which the cross-check demonstrates by reproducing the same field. |
+| **P1 FEM in this repo**                            | Chosen. It solves the equation literally, in volts; it makes the floating contacts exact rather than approximate; it can hand the NEURON stage V at arbitrary points without a format round-trip; and — the actual point of this exercise — it shares no code with Ansys, so agreement between the two means something. Its risk is that it is new code, so it is verified against a closed-form solution before it is believed (see _Verification_).                                                                                                                   |
 
-### Please install Elmer anyway
+### Running Elmer
 
-    sudo add-apt-repository ppa:elmer-csc-ubuntu/elmer-csc-ppa
-    sudo apt update && sudo apt install elmerfem-csc
+Installed at **`/opt/elmerfem`**, version **26.2**, built from source (the
+`elmer-csc` PPA does not cover this Ubuntu release). It is NOT on `PATH` and
+nothing has been added to a shell profile, so every session needs:
+
+    export PATH=/opt/elmerfem/bin:$PATH
+
+That alone is sufficient — Elmer locates its own modules with no `ELMER_HOME`
+or `ELMER_SOLVER_HOME` set; verified by running a trivial `.sif`. Present and
+relevant:
+
+    /opt/elmerfem/bin/ElmerSolver          serial
+    /opt/elmerfem/bin/ElmerSolver_mpi      parallel
+    /opt/elmerfem/bin/ElmerGrid            mesh conversion
+    /opt/elmerfem/share/elmersolver/lib/StatCurrentSolve.so      <- the solver we want
+    /opt/elmerfem/share/elmersolver/lib/StatCurrentSolveVec.so
+
+FreeCAD's FEM workbench will not find it by itself: point
+**Edit → Preferences → FEM → Elmer** at `/opt/elmerfem/bin/ElmerSolver`, or
+drive it from a script with `PATH` set as above.
 
 `fem/out/mesh_tagged.msh` is written with one physical volume per tissue
 specifically so it can go straight into `ElmerGrid 14 2 mesh_tagged.msh` and
@@ -54,14 +71,14 @@ identical mesh.
 All six bodies of the stripped model are clean. Measured with
 `fem/scripts/stlio.py`:
 
-| body | triangles | closed | non-manifold edges | shells | volume (mm³) |
-|---|---|---|---|---|---|
-| `neuro_EpiduralSpace-1` | 3512 | yes | 0 | 1 | 11295.4 |
-| `neuro_Meninges-1` (dura) | 3560 | yes | 0 | 1 | 2151.0 |
-| `neuro_CSF-1` | 4276 | yes | 0 | 1 | 8835.8 |
-| `neuro_whitemater-1` | 10770 | yes | 0 | 1 | 2295.3 |
-| `neuro_GreyMater-1` | 8354 | yes | 0 | 1 | 995.6 |
-| lead (8 contacts + insulator) | 8×500 + 4500 | yes | 0 | 1 per contact, 9 for the insulator | 3.68–3.71 each, 23.4 |
+| body                          | triangles    | closed | non-manifold edges | shells                             | volume (mm³)         |
+| ----------------------------- | ------------ | ------ | ------------------ | ---------------------------------- | -------------------- |
+| `neuro_EpiduralSpace-1`       | 3512         | yes    | 0                  | 1                                  | 11295.4              |
+| `neuro_Meninges-1` (dura)     | 3560         | yes    | 0                  | 1                                  | 2151.0               |
+| `neuro_CSF-1`                 | 4276         | yes    | 0                  | 1                                  | 8835.8               |
+| `neuro_whitemater-1`          | 10770        | yes    | 0                  | 1                                  | 2295.3               |
+| `neuro_GreyMater-1`           | 8354         | yes    | 0                  | 1                                  | 995.6                |
+| lead (8 contacts + insulator) | 8×500 + 4500 | yes    | 0                  | 1 per contact, 9 for the insulator | 3.68–3.71 each, 23.4 |
 
 No non-manifold edges (every edge shared by exactly two facets), no boundary
 edges, no zero-area facets, and a divergence-theorem volume that agrees with a
@@ -125,7 +142,7 @@ that leakage explicitly rather than assuming it away (see RESULTS).
 
 ## Boundary conditions, as actually imposed
 
-* **+1 A into contact 3, −1 A out of contact 5**, numbered as the STL filenames
+- **+1 A into contact 3, −1 A out of contact 5**, numbered as the STL filenames
   run. That numbering runs caudal → rostral: contact 1 spans z = 123.25–126.41 mm
   and contact 8 spans z = 151.32–154.34 mm, so **contact 3 (z = 131.27–134.39) is
   the caudal member of the driven pair and contact 5 (z = 139.29–142.37) the
@@ -135,22 +152,22 @@ that leakage explicitly rather than assuming it away (see RESULTS).
   equipotential body and the distribution inside it does not affect the exterior
   field; the metal puts the current on its own surface. The equipotentiality is
   measured, not assumed.
-* **The six undriven contacts are exact floating conductors.** They are left as
+- **The six undriven contacts are exact floating conductors.** They are left as
   ordinary high-conductivity bodies with no source term. With no source inside,
   conservation forces the net current through each to be zero — that is exact,
   not an approximation — and the high conductivity makes each equipotential.
   Nothing was silently dropped. Both properties are reported per contact.
-* **Conductivity of the metal is clamped to 1×10⁴ S/m**, not the 4×10⁶ S/m in
+- **Conductivity of the metal is clamped to 1×10⁴ S/m**, not the 4×10⁶ S/m in
   `tissue_map.yaml`. A 10⁸ conductivity ratio against epidural fat wrecks the
   conditioning of the linear system for no physical gain: at 10⁴ S/m a contact
   is already equipotential to ~10⁻⁵ of the driving voltage, which the reported
   spread confirms. `config.SIGMA_METAL_TRUE` keeps the real value so the clamp
   is auditable. Nothing else departs from `tissue_map.yaml`.
-* **Outer boundary insulating.** Zero normal current is the natural ("do
+- **Outer boundary insulating.** Zero normal current is the natural ("do
   nothing") condition of the weak form, so it needs no code: every face with no
   neighbouring element carries zero current. The boundary sits at the outer
   surface of the epidural body, i.e. at the canal wall.
-* **The gauge.** A pure all-Neumann problem is singular up to an additive
+- **The gauge.** A pure all-Neumann problem is singular up to an additive
   constant. One node — the mesh node furthest from the lead axis — is pinned to
   0 V. Because the sources sum to exactly zero, that node draws no real
   current; the reaction there is reported as a fraction of 1 A, and is the check
@@ -158,7 +175,7 @@ that leakage explicitly rather than assuming it away (see RESULTS).
 
 ### Basis fields, for the NEURON stage
 
-Eight solves are done, one per contact: +1 A into contact *i*, −1 A spread over
+Eight solves are done, one per contact: +1 A into contact _i_, −1 A spread over
 the outer boundary weighted by nodal area. Any zero-net-current montage is then
 a linear combination, V = Σ Iᵢ φᵢ, in which the boundary return cancels
 identically. The requested bipolar case is φ₃ − φ₅ at 1 A. This matches the
@@ -215,15 +232,15 @@ cord, 0.70 mm at the canal wall, 2.5 mm in the discarded surround.
 
 Tet-sum volume against the STL's own divergence-theorem volume:
 
-| tissue | tets | meshed vol mm³ | STL vol mm³ | error |
-|---|---|---|---|---|
-| epidural | 584 563 | 11 247.34 | 11 295.4 | −0.43 % |
-| dura | 519 027 | 2 150.63 | 2 151.0 | −0.02 % |
-| CSF | 528 258 | 8 829.16 | 8 835.8 | −0.08 % |
-| white | 69 258 | 2 294.02 | 2 295.3 | −0.06 % |
-| grey | 30 154 | 997.94 | 995.6 | +0.23 % |
-| 8 contacts | 498–545 each | 3.67–3.79 each | 3.68–3.71 each | ≤ +2 % |
-| insulator | 3 335 | 23.55 | 23.4 | +0.6 % |
+| tissue     | tets         | meshed vol mm³ | STL vol mm³    | error   |
+| ---------- | ------------ | -------------- | -------------- | ------- |
+| epidural   | 584 563      | 11 247.34      | 11 295.4       | −0.43 % |
+| dura       | 519 027      | 2 150.63       | 2 151.0        | −0.02 % |
+| CSF        | 528 258      | 8 829.16       | 8 835.8        | −0.08 % |
+| white      | 69 258       | 2 294.02       | 2 295.3        | −0.06 % |
+| grey       | 30 154       | 997.94         | 995.6          | +0.23 % |
+| 8 contacts | 498–545 each | 3.67–3.79 each | 3.68–3.71 each | ≤ +2 %  |
+| insulator  | 3 335        | 23.55          | 23.4           | +0.6 %  |
 
 **The dura barrier leaks nowhere.** Of 13 893.7 mm² of resolved dura interface,
 the area of faces putting epidural fat or the lead directly against CSF, white
@@ -233,7 +250,7 @@ did not materialise; 519 k tets in a 0.5 mm shell is enough.
 
 **Classification noise is negligible.** `inside.py` decides with one +Z ray, and
 the lead-designer agent documented that single-ray parity can invert on a
-grazing edge. Counting tetrahedra whose tissue differs from *every* face
+grazing edge. Counting tetrahedra whose tissue differs from _every_ face
 neighbour — the signature of a miscount rather than anatomy — gives **37 out of
 1 738 750, or 0.0021 %**, the worst single tissue being white matter at
 0.023 %. Isolated elements at that rate cannot move a diffusion solution.
@@ -243,34 +260,34 @@ neighbour — the signature of a miscount rather than anatomy — gives **37 out
 Eight basis solves (one per contact), CG preconditioned by smoothed-aggregation
 AMG, ~35 s each, 300 s total including assembly.
 
-* Relative residual **2.6×10⁻⁸ to 1.4×10⁻⁷**. Every solve hit the 400-iteration
+- Relative residual **2.6×10⁻⁸ to 1.4×10⁻⁷**. Every solve hit the 400-iteration
   cap rather than the 10⁻¹¹ tolerance — the 5×10⁸ spread in σ (2×10⁻⁵ for the
   lead insulation up to 10⁴ for metal) makes the system stiff. 10⁻⁷ is far
   tighter than the discretisation error, so this is not a limitation on the
   answer, but it is not full convergence and is stated as such.
-* **Gauge pin reaction: ≤ 2.4×10⁻¹⁰ A** against a 1 A drive, across all eight
+- **Gauge pin reaction: ≤ 2.4×10⁻¹⁰ A** against a 1 A drive, across all eight
   solves. The pin is a gauge choice, not a current path, as intended.
-* Global sum of nodal currents 6.4×10⁻¹² A.
+- Global sum of nodal currents 6.4×10⁻¹² A.
 
 ### Boundary conditions, verified rather than asserted
 
-| contact | role | potential | equipotential spread | net current |
-|---|---|---|---|---|
-| 1 | floating | +34.10 V | 0.0002 % of drive | +0.000000 A |
-| 2 | floating | +204.29 V | 0.0010 % | +0.000000 A |
-| **3** | **source** | **+1297.67 V** | 0.0028 % | **+1.000000 A** |
-| 4 | floating | −31.79 V | 0.0032 % | +0.000000 A |
-| **5** | **sink** | **−1369.91 V** | 0.0023 % | **−1.000000 A** |
-| 6 | floating | −239.48 V | 0.0010 % | +0.000000 A |
-| 7 | floating | −80.84 V | 0.0002 % | +0.000000 A |
-| 8 | floating | −57.16 V | 0.0000 % | +0.000000 A |
+| contact | role       | potential      | equipotential spread | net current     |
+| ------- | ---------- | -------------- | -------------------- | --------------- |
+| 1       | floating   | +34.10 V       | 0.0002 % of drive    | +0.000000 A     |
+| 2       | floating   | +204.29 V      | 0.0010 %             | +0.000000 A     |
+| **3**   | **source** | **+1297.67 V** | 0.0028 %             | **+1.000000 A** |
+| 4       | floating   | −31.79 V       | 0.0032 %             | +0.000000 A     |
+| **5**   | **sink**   | **−1369.91 V** | 0.0023 %             | **−1.000000 A** |
+| 6       | floating   | −239.48 V      | 0.0010 %             | +0.000000 A     |
+| 7       | floating   | −80.84 V       | 0.0002 %             | +0.000000 A     |
+| 8       | floating   | −57.16 V       | 0.0000 %             | +0.000000 A     |
 
 The six floating contacts are equipotential to better than 0.004 % of the
 driving voltage. The 10⁴ S/m clamp is therefore doing its job and the 4×10⁶ S/m
 of the real metal would buy nothing.
 
 Read the net-current column for what it is. Zero net current through a floating
-contact is *imposed by construction* here — those bodies simply have no source
+contact is _imposed by construction_ here — those bodies simply have no source
 term — so the column is a convergence check on the linear solve, not an
 independent discovery. The equipotential-spread column is the one that measures
 something that could have come out badly, and it is the reason the clamp can be
@@ -285,11 +302,11 @@ no choice.
 Khadka et al. 2020 report, for the full 19-compartment model with anisotropic
 white matter at bipolar 1 A:
 
-| quantity | Khadka 2020 | this stripped model | ratio |
-|---|---|---|---|
-| peak \|E\| in white matter | 12 kV/m | **11.51 kV/m** (p99.9) | 0.96 |
-| peak \|E\| in grey matter | 4.2 kV/m | 7.91 kV/m (p99.9) | 1.88 |
-| peak surface voltage | 1.2 kV | 1.37 kV | 1.14 |
+| quantity                   | Khadka 2020 | this stripped model    | ratio |
+| -------------------------- | ----------- | ---------------------- | ----- |
+| peak \|E\| in white matter | 12 kV/m     | **11.51 kV/m** (p99.9) | 0.96  |
+| peak \|E\| in grey matter  | 4.2 kV/m    | 7.91 kV/m (p99.9)      | 1.88  |
+| peak surface voltage       | 1.2 kV      | 1.37 kV                | 1.14  |
 
 White matter and the electrode voltage land within 4 % and 14 % of the paper.
 That is closer than this model deserves and should not be read as validation of
@@ -330,12 +347,12 @@ reruns the identical mesh with the discarded surround kept and filled at the
 opposite extreme — a fully conductive bone block out to a rectangular box.
 The truth is in between. Written to `fem/out/solution_bg.npz`:
 
-| quantity | insulating at canal wall | 0.04 S/m surround | change | Khadka |
-|---|---|---|---|---|
-| bipolar transfer impedance | 2667.6 Ω | 2238.5 Ω | −16.1 % | — |
-| peak \|E\| white matter (p99.9) | 11.51 kV/m | 9.65 kV/m | −16.2 % | 12 kV/m |
-| peak \|E\| grey matter (p99.9) | 7.91 kV/m | 6.66 kV/m | −15.7 % | 4.2 kV/m |
-| peak surface voltage | 1.37 kV | 1.12 kV | −18.2 % | 1.2 kV |
+| quantity                        | insulating at canal wall | 0.04 S/m surround | change  | Khadka   |
+| ------------------------------- | ------------------------ | ----------------- | ------- | -------- |
+| bipolar transfer impedance      | 2667.6 Ω                 | 2238.5 Ω          | −16.1 % | —        |
+| peak \|E\| white matter (p99.9) | 11.51 kV/m               | 9.65 kV/m         | −16.2 % | 12 kV/m  |
+| peak \|E\| grey matter (p99.9)  | 7.91 kV/m                | 6.66 kV/m         | −15.7 % | 4.2 kV/m |
+| peak surface voltage            | 1.37 kV                  | 1.12 kV           | −18.2 % | 1.2 kV   |
 
 So the outer boundary treatment is worth about **16 %** on everything, and the
 two treatments bracket the paper on both published quantities — surface voltage
@@ -363,7 +380,7 @@ derivative is a set of jumps at element faces. Near the contacts the signal
 (≈3.5×10⁶ V/m²) dominates easily, but 10–20 mm away, where d²V/ds² falls to
 ≈10⁵ V/m², sampling at 0.5 mm produces visible sign flips between adjacent
 points. This is the failure mode `docs/neuron_plan.md` predicts ("if it is
-noisy, the FEM grid is too coarse"), and it is not fixed by a finer *sampling*
+noisy, the FEM grid is too coarse"), and it is not fixed by a finer _sampling_
 step — that makes it worse. The fixes, in order of preference: refine the cord
 mesh below the current 0.5 mm target; move to quadratic tetrahedra; or fit a
 smooth function to V along each trajectory before differencing. Worth settling
@@ -408,8 +425,8 @@ in chunk 5, before thresholds are computed on top of it.
    radicular arteries in particular sit right beside the electrodes at 0.66 S/m.
 4. **The domain stops at the canal wall** with an insulating boundary. Real
    return current spreads into bone and paraspinal soft tissue. Measured: this
-   choice is worth about 16 % on impedance and on the cord field — see *How much
-   does stopping at the canal wall cost?* above. The two treatments bracket the
+   choice is worth about 16 % on impedance and on the cord field — see _How much
+   does stopping at the canal wall cost?_ above. The two treatments bracket the
    paper's published numbers, so it is bounded, not unknown.
 5. **Metal conductivity clamped** to 1e4 S/m as described above.
 6. **The model is truncated in z** by RADO itself at z = 59.4 and 164.9 mm.
