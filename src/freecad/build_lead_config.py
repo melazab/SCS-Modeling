@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and VALIDATE any named lead configuration from lead_configs.yaml.
+"""Build and VALIDATE one SCS lead from its parameters. No named configurations.
 
 WHAT A CLINICIAN ASKS FOR, AND WHAT THIS TURNS IT INTO
 ------------------------------------------------------
@@ -9,8 +9,9 @@ ganglion". None of that is geometry. This module is the layer that turns it into
 geometry and then, more importantly, tells you whether the answer is
 anatomically possible in THIS model:
 
-    lead_configs.yaml  ->  resolve_set()   ->  a list of leads, each a flat set
-                                               of numbers
+    parameters         ->  resolve_lead()  ->  one lead, a flat set of numbers
+    (flags, or the         resolve_leads()     a set of them, capped at
+     panel's spinboxes)                        max_leads_per_type of each type
                        ->  validate_set()  ->  PASS/WARN/FAIL per lead AND for
                                                the set as a whole
                        ->  export_set()    ->  generated_leads/<name>/*.stl
@@ -19,14 +20,21 @@ anatomically possible in THIS model:
 
 src/freecad/lead_designer.FCMacro is the same thing with spinboxes on it.
 
-A CONFIGURATION IS A SET OF LEADS
----------------------------------
-Clinicians do not implant one lead and stop: two dorsal leads straddling the
-midline is routine, so is a dorsal lead plus a DRG lead, so is one DRG lead per
-side. A configuration here is therefore a SET, capped at `max_leads_per_type`
-leads of any one type (default 2). A configuration that describes its lead
-inline, with no `leads:` list, is a set of one -- which is why every entry that
-existed before sets did still resolves to exactly the geometry it always did.
+THERE IS NO CATALOGUE OF PLACEMENTS
+-----------------------------------
+There used to be a `configs:` section in the YAML, one entry per named
+placement, and it grew every time a lead was positioned. It is gone. A lead is
+its parameters; naming one costs an invented name, a paragraph explaining it,
+and a standing obligation to keep the two in step with the geometry. What
+survives is lead_defaults.yaml -- the starting values, the type-specific default
+blocks, the vertebral levels and max_leads_per_type -- which is small and stable
+because it describes what a lead IS, not where anyone once put one.
+
+Two placements ARE pinned, in src/freecad/test_regression.py rather than in the
+YAML: the dorsal and ventral 8-contact leads whose 18 STLs are committed under
+generated_leads/. That test holds their parameters explicitly and asserts the
+exported files come back byte for byte, which is what has twice caught this
+module drifting. It is a test, not a catalogue: nothing builds from it.
 
 THREE LEAD TYPES, AND DRG IS A DIFFERENT GEOMETRY PROBLEM
 ---------------------------------------------------------
@@ -52,10 +60,10 @@ WHY LATERAL OFFSETS RE-MEASURE THE CENTRELINE
 epidural_corridor.json holds the centreline y(z) measured at the MIDLINE. The
 channel centre moves as you go lateral -- about 1.1 mm of y at 4 mm off the
 midline -- so a lead swept along the midline curve at x = midline + 4 sits about
-half its clearance off centre before it has done anything else. Any configuration
-with a non-zero x_offset therefore gets its own centreline, ray cast and fitted
-at ITS x over ITS z span. At x_offset = 0 this reproduces the stored polynomial;
-the report prints the agreement so the two can never silently diverge.
+half its clearance off centre before it has done anything else. Any lead with a
+non-zero x_offset therefore gets its own centreline, ray cast and fitted at ITS
+x over ITS z span. At x_offset = 0 this reproduces the stored polynomial; the
+report prints the agreement so the two can never silently diverge.
 
 The DRG side does the same thing for the same reason: the stored quartic in
 foraminal_corridors.json is the reference, and the block is re-measured along
@@ -109,26 +117,25 @@ nothing in a per-lead check looks at the OTHER lead. Two 1.30 mm dorsal leads
 1.0 mm apart both fit the channel; they simply cannot both be there. So
 validate_set() measures every pair -- the exact shape-to-shape distance, and,
 when that is zero, the volume they share and how much of one lead's sampled
-surface is inside the other. `dorsal_pair_tight_FAILS` in the catalogue is the
-worked example, the way `ventral_z110_2mm_FAILS` is for the fit check.
+surface is inside the other.
 
-A configuration that fails is REPORTED, in clinical terms, and not exported. It
-is not carved into the anatomy to make it fit.
+A lead that fails is REPORTED, in clinical terms, and not exported. It is not
+carved into the anatomy to make it fit.
 
-ONE MODEL DOCUMENT
-------------------
-NBF_RADO-SCS.FCStd holds anatomy and nothing else. There is no .FCStd per
-configuration and no longer a .FCStd per study arm: the durable artefacts are
-the YAML entry and generated_leads/<name>/, both small and both text-ish, and
-the bodies in a FreeCAD document are a DISPOSABLE PREVIEW:
+ONE MODEL DOCUMENT, AND IT HOLDS NO LEAD
+----------------------------------------
+NBF_RADO-SCS.FCStd holds anatomy and nothing else -- 240 bodies in 11 groups,
+RADO's own 4-contact DRG lead removed by drop_rado_lead.py. There is no .FCStd
+per placement: the durable artefact is generated_leads/<name>/, and the bodies
+in a FreeCAD document are a DISPOSABLE PREVIEW:
 
-    preview_set(doc, leads)   adds every lead to the open document inside a
-                              group named SCS_LeadPreview, replacing any
-                              previous preview
-    clear_preview(doc)        deletes that group and everything in it
+    preview_set(doc, leads, results)  adds every lead to the open document
+                                      inside one group labelled "13 SCS Leads",
+                                      replacing any previous preview
+    clear_preview(doc)                deletes that group and everything in it
 
-Explore ten configurations, keep the one you want, export its STLs, and close
-the document WITHOUT SAVING.
+Try ten arrangements, export the one you want, and close the document WITHOUT
+SAVING.
 
 NEVER SAVE A DOCUMENT FROM HERE
 -------------------------------
@@ -142,27 +149,31 @@ tempt someone into saving it.
 
 USAGE
 -----
-The listing and resolving half needs no FreeCAD at all:
+Resolving parameters to numbers needs no FreeCAD at all:
 
-    python3 src/freecad/build_lead_config.py --list
-    python3 src/freecad/build_lead_config.py --name dorsal_pair_T11 --show
+    python3 src/freecad/build_lead_config.py --level T11 --x-offset 1.5 --show
 
-The measuring and building half does:
+Measuring and building does:
 
-    BUILD_LEAD_CONFIG_ARGS="--name drg_L3_4c --validate" \\
-        freecadcmd src/freecad/build_lead_config.py
-    BUILD_LEAD_CONFIG_ARGS="--all --validate" \\
-        freecadcmd src/freecad/build_lead_config.py
-    BUILD_LEAD_CONFIG_ARGS="--name dorsal_z110_8c --export" \\
-        freecadcmd src/freecad/build_lead_config.py
-    BUILD_LEAD_CONFIG_ARGS="--name rado_drg_L3_match --compare-rado" \\
+    BUILD_LEAD_CONFIG_ARGS="--level T11 --x-offset 1.5 --validate" \\
         freecadcmd src/freecad/build_lead_config.py
 
-Any parameter can be overridden on top of a named entry, which is how the macro
-drives it for a custom lead. Overrides apply to EVERY lead in the set, so they
-are for single-lead configurations and for sweeping one number across a pair:
+    BUILD_LEAD_CONFIG_ARGS="--type drg --target L3 --validate" \\
+        freecadcmd src/freecad/build_lead_config.py
 
-    BUILD_LEAD_CONFIG_ARGS="--name dorsal_z110_8c --level T10 --x-offset -2 --validate"
+    BUILD_LEAD_CONFIG_ARGS="--type ventral --z-center 110.432 --export \\
+        --tag ventral_T11" freecadcmd src/freecad/build_lead_config.py
+
+    # RADO's own 4-contact lead, as parameters -- the DRG trajectory's
+    # validation case, measured against the five STLs RADO ships:
+    BUILD_LEAD_CONFIG_ARGS="--type drg --target L3 --contacts 4 \\
+        --contact-length 1.25 --gap 3.50 --diameter 1.25 --tail 0 \\
+        --lateral-offset 2.93 --ganglion-clearance 0 --compare-rado" \\
+        freecadcmd src/freecad/build_lead_config.py
+
+Anything not given falls back to lead_defaults.yaml. One lead per run on the
+command line; the panel is what builds a SET of them, through the same
+resolve_leads() and validate_set().
 
 Options come from BUILD_LEAD_CONFIG_ARGS under any FreeCAD interpreter, because
 FreeCAD owns the command line; output goes to a report file because FreeCAD
@@ -177,7 +188,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-DEFAULT_CONFIGS = os.path.join(HERE, "lead_configs.yaml")
+DEFAULTS_YAML = os.path.join(HERE, "lead_defaults.yaml")
 DEFAULT_CORRIDOR = os.path.join(HERE, "epidural_corridor.json")
 DEFAULT_FORAMEN = os.path.join(HERE, "foraminal_corridors.json")
 DEFAULT_STL = os.path.join(REPO, "STL_files")
@@ -189,14 +200,25 @@ EPIDURAL_STL = "T8-10 - neuro_EpiduralSpace-1.STL"
 DURA_STL = "T8-10 - neuro_Meninges-1.STL"
 
 # RADO's own 4-contact DRG lead, as it ships in STL_files/. Not part of any
-# generated configuration -- it is the independent reference the DRG trajectory
-# is checked against by compare_rado(). See rado_drg_L3_match in the catalogue.
+# generated lead -- it is the independent reference the DRG trajectory is
+# checked against by compare_rado(); the parameters that reproduce it are in
+# this module's docstring, under USAGE.
 RADO_DRG_STLS = ["SCS Lead Electrode %d.stl" % i for i in (1, 2, 3, 4)]
 RADO_DRG_TARGET = "L3"
 
-# The name of the group every previewed body lives in. Matched on Name, not
-# Label, so retitling it in the tree does not orphan the preview.
+# The group every previewed body lives in -- ALL of them, however many leads,
+# contacts and insulators there are. Matched on Name, not Label, so retitling it
+# in the tree does not orphan the preview.
+#
+# The Label is numbered "13" on purpose: make_tissue_groups.py numbers the
+# anatomy groups by position and the anatomy document now ends at "11
+# Vasculature" (12 is soft tissue, which this model has no bodies for), with 13
+# and 14 having been the two lead-hardware groups before drop_rado_lead.py
+# removed them. So a previewed lead lands exactly where a lead has always sorted
+# in the tree, at the bottom, whether the tree is in creation order or
+# alphabetical. It does not say "preview": what is in the tree is leads.
 PREVIEW_GROUP = "SCS_LeadPreview"
+PREVIEW_GROUP_LABEL = "13 SCS Leads"
 
 # Clearance below which a fit is reported as tight rather than comfortable. Half
 # of it is the amount the lead can wander off the channel centre before it
@@ -213,8 +235,8 @@ TIGHT_LEAD_GAP_MM = 0.40
 
 # Every parameter a lead may carry, and how to read it. Anything not in here is
 # rejected by resolve_lead() rather than silently ignored -- a typo'd
-# "diamter: 2.0" that quietly kept the 1.3 mm default would be the worst kind of
-# bug here.
+# "diamter: 2.0" in lead_defaults.yaml that quietly kept the 1.3 mm default
+# would be the worst kind of bug here.
 PARAM_TYPES = {
     "type": str, "contacts": int, "contact_length": float, "gap": float,
     "diameter": float, "tail": float, "note": str, "label": str,
@@ -253,103 +275,64 @@ def script_args():
 
 
 # --------------------------------------------------------------------------
-# lead_configs.yaml
+# lead_defaults.yaml
 # --------------------------------------------------------------------------
-def parse_config_file(path):
-    """Read lead_configs.yaml.
+def parse_defaults_file(path=None):
+    """Read lead_defaults.yaml.
 
     Returns the top-level mapping: scalars like `max_leads_per_type` as scalars,
-    and `defaults`, `epidural_defaults`, `drg_defaults`, `levels` and `configs`
-    as mappings. A config entry is a mapping of scalars, optionally with a
-    `leads:` key holding a list of mappings.
+    and `defaults`, `epidural_defaults`, `drg_defaults` and `levels` as mappings
+    of scalars. That is the whole shape of the file -- there is no list in it and
+    no nesting deeper than two, because it holds STARTING VALUES and not
+    placements. The `configs:` catalogue this parser used to also read is gone;
+    see the module docstring.
 
     A hand-rolled parser, for the reason requirements.txt gives: PyYAML is
     deliberately not a dependency of this directory, so the scripts run on a bare
     interpreter with nothing installed. It accepts exactly the subset
-    lead_configs.yaml uses and nothing else -- no flow style, no anchors, no
-    multi-line scalars, and lists only in the one place they are needed.
-    Anything it cannot parse RAISES rather than being skipped, because a
-    silently dropped parameter is a wrong lead.
+    lead_defaults.yaml uses and nothing else -- no flow style, no anchors, no
+    multi-line scalars and no lists. Anything it cannot parse RAISES rather than
+    being skipped, because a silently dropped parameter is a wrong lead.
 
     The grammar, by indent:
 
         0   key: value          a top-level scalar
         0   key:                a section
         2   key: value          a scalar in the section
-        2   key:                an entry in the section
-        4   key: value          a scalar in the entry
-        4   leads:              the one list, and only under `configs`
-        6   - key: value        the first line of one lead in that list
-        8   key: value          a further line of that lead
     """
-    top, section, entry, leads, lead = {}, None, None, None, None
+    path = path or DEFAULTS_YAML
+    top, section = {}, None
     for n, raw in enumerate(open(path), 1):
         line = raw.rstrip("\n")
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         indent = len(line) - len(line.lstrip())
-
-        if indent == 6 and line.lstrip().startswith("- "):
-            if leads is None:
-                raise ValueError("%s:%d: list item outside a `leads:` list" % (path, n))
-            lead = {}
-            leads.append(lead)
-            body = line.lstrip()[2:]
-        elif indent == 8:
-            if lead is None:
-                raise ValueError("%s:%d: continuation outside a list item" % (path, n))
-            body = line.lstrip()
-        else:
-            body = line.lstrip()
+        body = line.lstrip()
 
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_.\-]*)\s*:\s*(.*)$", body)
         if not m:
             raise ValueError("%s:%d: cannot parse %r" % (path, n, line))
         key, rest = m.group(1), strip_comment(m.group(2))
 
-        if indent in (6, 8):
-            if rest == "":
-                raise ValueError("%s:%d: %r inside a lead must have a value"
-                                 % (path, n, key))
-            lead[key] = scalar(rest)
-            continue
-
-        lead = None
         if indent == 0:
-            leads = None
             if rest:
                 top[key] = scalar(rest)
-                section, entry = None, None
+                section = None
             else:
-                section, entry = {}, None
+                section = {}
                 top[key] = section
         elif indent == 2:
-            leads = None
             if section is None:
                 raise ValueError("%s:%d: %r is outside any section" % (path, n, key))
             if rest == "":
-                entry = {}
-                section[key] = entry
-            else:
-                section[key] = scalar(rest)
-                entry = None
-        elif indent == 4:
-            if entry is None:
-                raise ValueError("%s:%d: %r is outside any entry" % (path, n, key))
-            if key == "leads":
-                if rest:
-                    raise ValueError("%s:%d: `leads:` must be a list" % (path, n))
-                leads = []
-                entry["leads"] = leads
-            elif rest == "":
-                raise ValueError("%s:%d: %r has no value" % (path, n, key))
-            else:
-                leads = None
-                entry[key] = scalar(rest)
+                raise ValueError("%s:%d: %r has no value -- lead_defaults.yaml "
+                                 "holds starting values, not nested entries"
+                                 % (path, n, key))
+            section[key] = scalar(rest)
         else:
             raise ValueError("%s:%d: unexpected indent %d" % (path, n, indent))
 
-    for required in ("defaults", "levels", "configs"):
+    for required in ("defaults", "levels"):
         if required not in top:
             raise ValueError("%s: no %r section" % (path, required))
     top.setdefault("epidural_defaults", {})
@@ -392,45 +375,22 @@ def scalar(text):
 
 
 # --------------------------------------------------------------------------
-# resolving a configuration into leads
+# resolving parameters into leads
 # --------------------------------------------------------------------------
-def config_names(cfg):
-    return list(cfg["configs"])
+def resolve_leads(cfg, per_lead, overrides=None):
+    """Flatten a list of per-lead parameter dicts into resolved leads.
 
+    `per_lead` is one dict per lead -- the panel's tabs, or a single dict of CLI
+    flags. `overrides` is applied on top of EVERY lead, which is how one number
+    is swept across a pair from the command line.
 
-def lead_entries(cfg, name):
-    """The per-lead mappings of one configuration, and its shared keys.
-
-    Returns (shared, [lead, ...]). A configuration with no `leads:` list is a set
-    of one whose single lead is the entry itself -- which is what makes every
-    pre-existing single-lead entry resolve to exactly the geometry it always did.
+    Each lead is resolved independently through resolve_lead(); the rule enforced
+    here is the only one a lead cannot know on its own, which is how many leads
+    of its type are allowed at once.
     """
-    if name is None:
-        return {}, [{}]
-    if name not in cfg["configs"]:
-        raise ValueError("no configuration named %r (have: %s)"
-                         % (name, ", ".join(sorted(cfg["configs"]))))
-    entry = dict(cfg["configs"][name])
-    leads = entry.pop("leads", None)
-    if leads is None:
-        return {}, [entry]
-    if not leads:
-        raise ValueError("configuration %r has an empty `leads:` list" % name)
-    return entry, [dict(l) for l in leads]
-
-
-def resolve_set(name, cfg, overrides=None):
-    """Flatten one named configuration into a list of leads.
-
-    Each lead is resolved independently through resolve_lead(); the set-level
-    rule enforced here is the only thing a lead cannot know on its own, which is
-    how many leads of its type the configuration is allowed to hold.
-    """
-    shared, entries = lead_entries(cfg, name)
-    leads = []
-    for index, lead_entry in enumerate(entries, start=1):
-        leads.append(resolve_lead(cfg, name, shared, lead_entry, overrides, index,
-                                  len(entries)))
+    per_lead = list(per_lead) or [{}]
+    leads = [resolve_lead(cfg, entry, index, len(per_lead), overrides)
+             for index, entry in enumerate(per_lead, start=1)]
 
     cap = int(cfg.get("max_leads_per_type", DEFAULT_MAX_LEADS_PER_TYPE))
     counts = {}
@@ -439,20 +399,19 @@ def resolve_set(name, cfg, overrides=None):
     over = sorted(t for t, c in counts.items() if c > cap)
     if over:
         raise ValueError(
-            "configuration %r asks for %s, but max_leads_per_type is %d"
-            % (name or "custom",
-               " and ".join("%d %s leads" % (counts[t], t) for t in over), cap))
+            "that is %s, but max_leads_per_type is %d"
+            % (" and ".join("%d %s leads" % (counts[t], t) for t in over), cap))
     return leads
 
 
-def resolve_lead(cfg, name, shared, entry, overrides, index=1, of=1):
+def resolve_lead(cfg, entry, index=1, of=1, overrides=None):
     """Flatten ONE lead into the numbers the geometry needs.
 
     Layering, later wins:
 
-        defaults  ->  the type's own default block  ->  the configuration's
-        shared keys  ->  this lead's own keys  ->  overrides (CLI flags, or the
-        macro's spinboxes)
+        lead_defaults.yaml `defaults`  ->  the type's own default block  ->
+        this lead's own parameters (a panel tab, or the CLI flags)  ->
+        `overrides`, applied to every lead of a set
 
     The type is settled first, across every layer, because it decides which
     default block sits at position two and which parameters are even legal.
@@ -462,14 +421,15 @@ def resolve_lead(cfg, name, shared, entry, overrides, index=1, of=1):
     beats an earlier level, and vice versa, which is what lets the macro offer
     both controls without them fighting.
 
-    Returns a plain dict, plus "name", "index", "label", and for an epidural lead
+    Returns a plain dict, plus "index", "of", "label", and for an epidural lead
     "x" (absolute), for a DRG lead the ganglion "target".
     """
+    entry = {k: v for k, v in (entry or {}).items() if v is not None}
     ovr = {k: v for k, v in (overrides or {}).items() if v is not None}
 
-    kind = lead_type(cfg["defaults"], shared, entry, ovr)
+    kind = lead_type(cfg["defaults"], entry, ovr)
     type_defaults = cfg["drg_defaults"] if kind == "drg" else cfg["epidural_defaults"]
-    layers = [cfg["defaults"], type_defaults, shared, entry, ovr]
+    layers = [cfg["defaults"], type_defaults, entry, ovr]
 
     params = {}
     for layer in layers:
@@ -480,14 +440,13 @@ def resolve_lead(cfg, name, shared, entry, overrides, index=1, of=1):
     allowed = COMMON_PARAMS | (DRG_PARAMS if kind == "drg" else EPIDURAL_PARAMS)
     unknown = [k for k in params if k not in PARAM_TYPES]
     if unknown:
-        raise ValueError("unknown parameter(s) %s in configuration %r"
-                         % (", ".join(sorted(unknown)), name or "custom"))
+        raise ValueError("unknown lead parameter(s) %s" % ", ".join(sorted(unknown)))
     wrong = [k for k in params if k not in allowed]
     if wrong:
         other = "a DRG lead" if kind != "drg" else "a dorsal or ventral lead"
         raise ValueError(
-            "%s is a %s lead, so %s mean%s nothing to it -- %s belong%s to %s"
-            % (name or "custom", kind, ", ".join(sorted(wrong)),
+            "this is a %s lead, so %s mean%s nothing to it -- %s belong%s to %s"
+            % (kind, ", ".join(sorted(wrong)),
                "" if len(wrong) > 1 else "s", "they" if len(wrong) > 1 else "it",
                "" if len(wrong) > 1 else "s", other))
 
@@ -508,7 +467,6 @@ def resolve_lead(cfg, name, shared, entry, overrides, index=1, of=1):
                 params["z_center"] = float(cfg["levels"][level])
         params["x"] = MIDLINE_X + float(params["x_offset"])
 
-    params["name"] = name or "custom"
     params["index"] = index
     params["of"] = of
     params.setdefault("label", default_label(params, index, of))
@@ -519,10 +477,10 @@ def resolve_lead(cfg, name, shared, entry, overrides, index=1, of=1):
 def lead_type(*layers):
     """The lead's type, from the last layer that names one. Accepts `side:`.
 
-    `side: dorsal | ventral` was what the catalogue said before DRG leads
-    existed, and both the CLI and older entries may still use it, so it is
-    accepted as a spelling of `type` rather than becoming a confusing "unknown
-    parameter" error. It cannot spell `drg`: a DRG lead is not a side.
+    `side: dorsal | ventral` is what this repo said before DRG leads existed,
+    and `--side` is still a CLI flag, so it is accepted as a spelling of `type`
+    rather than becoming a confusing "unknown parameter" error. It cannot spell
+    `drg`: a DRG lead is not a side of the canal.
     """
     kind = "dorsal"
     for layer in layers:
@@ -542,9 +500,14 @@ def lead_type(*layers):
 
 
 def default_label(params, index, of):
-    """A short human name for one lead of a set, used in the tree and on disk."""
-    if of == 1:
-        return "%s lead" % params["type"]
+    """A short human name for one lead, used in the tree and on disk.
+
+    "lead 1 (dorsal)", which the preview turns into "lead 1 (dorsal) — contact
+    08" and "lead 1 (dorsal) — insulator". The same form whether there is one
+    lead or four: the number is what ties a body in the tree to a tab in the
+    panel and to a subdirectory under generated_leads/, and a lone lead that
+    called itself something else would break that tie for no gain.
+    """
     return "lead %d (%s)" % (index, params["type"])
 
 
@@ -812,8 +775,8 @@ def ganglion_standoff(params, corridor, drg, u_lo, u_hi, step=0.5):
     So the clinical parameter is not "shift the lead 1.4 mm up", it is "hold the
     lead this far off the ganglion", and the shift is solved for. It has to be,
     because the answer differs by foramen: holding 0.25 mm of clearance needs
-    +0.77 mm on L3 and +1.62 mm on R3, and either number written into the
-    catalogue would be wrong for the other side.
+    +0.77 mm on L3 and +1.62 mm on R3, and either number written down as a
+    parameter would be wrong for the other side.
 
     ROSTRALLY (+z, towards the pedicle above) rather than dorsally, for two
     reasons. It is where the room is -- the foraminal block is 13-14 mm tall in
@@ -1749,23 +1712,27 @@ def lead_dir_name(params):
     return "lead%d_%s" % (params["index"], params["type"])
 
 
-def export_set(name, leads, results, out_root=DEFAULT_OUT, tag=None):
-    """Write the STLs for a whole configuration. Returns (dir, [relative files]).
+def export_set(name, leads, results, out_root=DEFAULT_OUT):
+    """Write the STLs for a whole set of leads. Returns (dir, [relative files]).
+
+    `name` is just the directory: whatever the user typed in the panel's export
+    dialog or passed as --tag. It is a filing decision, not a configuration --
+    nothing reads it back.
 
     Layout, and it is deliberately not uniform:
 
-        one lead   generated_leads/<tag>/SCS Lead Electrode 1.stl, ...
-        several    generated_leads/<tag>/lead1_dorsal/SCS Lead Electrode 1.stl, ...
+        one lead   generated_leads/<name>/SCS Lead Electrode 1.stl, ...
+        several    generated_leads/<name>/lead1_dorsal/SCS Lead Electrode 1.stl, ...
 
-    A single-lead configuration keeps the flat layout it has always had, because
-    dorsal_z110_8c and ventral_z110_8c are committed at those exact paths and
-    are the regression test for this whole module; moving them would make
-    "reproduces its own STLs byte for byte" untestable. A set gets one
-    subdirectory per lead, plus a leads.txt manifest, because the FILENAMES
-    cannot carry the distinction: they are RADO's own -- "SCS Lead Electrode
-    1.stl", "SCS Lead Insulator.stl" -- and ../ansys/tissue_map.yaml matches the
-    object Names those sanitise to, so renaming them costs the contacts their
-    silver and the insulator its material. The directory carries it instead.
+    A single lead keeps the flat layout it has always had, because
+    generated_leads/dorsal_z110_8c/ and ventral_z110_8c/ are committed at those
+    exact paths and are what test_regression.py compares against byte for byte;
+    moving them would make that test untestable. A set gets one subdirectory per
+    lead, plus a leads.txt manifest, because the FILENAMES cannot carry the
+    distinction: they are RADO's own -- "SCS Lead Electrode 1.stl", "SCS Lead
+    Insulator.stl" -- and ../ansys/tissue_map.yaml matches the object Names
+    those sanitise to, so renaming them costs the contacts their silver and the
+    insulator its material. The directory carries it instead.
 
     Importing two leads into one FreeCAD document therefore gives the second
     lead's bodies uniquified Names (SCS_Lead_Electrode_001..; FreeCAD strips the
@@ -1778,14 +1745,14 @@ def export_set(name, leads, results, out_root=DEFAULT_OUT, tag=None):
     only because Mesh.export() takes document objects.
     """
     FreeCAD, Mesh, _p, msl, _mc, _mf = _geometry_modules()
-    root = os.path.join(out_root, tag or name)
+    root = os.path.join(out_root, name)
     if not os.path.isdir(root):
         os.makedirs(root)
     several = len(leads) > 1
 
     doc = FreeCAD.newDocument("scs_lead_export")
     written = []
-    manifest = ["%s -- %s" % (tag or name, describe_set(leads)), ""]
+    manifest = ["%s -- %s" % (name, describe_set(leads)), ""]
     try:
         for params, result in zip(leads, results):
             outdir = os.path.join(root, lead_dir_name(params)) if several else root
@@ -1834,13 +1801,20 @@ def clear_preview(doc):
     return len(names) + 1
 
 
-def preview_set(doc, name, leads, results, colours=None):
-    """Put a whole configuration into a live document as a disposable preview.
+def preview_set(doc, leads, results, colours=None):
+    """Put a whole set of leads into a live document as a disposable preview.
 
-    Replaces any previous preview, so exploring configurations does not silt the
+    They all land in ONE group, labelled "13 SCS Leads" -- every lead's contacts
+    and its insulator, however many leads there are. One group rather than one
+    per lead because that is what the tree is for: a lead is hardware, all the
+    hardware is in one place, and the lead number lives in each body's Label
+    ("lead 2 (drg) — contact 03") where it can be read without expanding
+    anything. The Label does not say "preview"; what is in the tree is leads.
+
+    Replaces any previous preview, so trying ten arrangements does not silt the
     tree up. The bodies are Part::Feature -- parametric shapes, a few kB -- not
     imported meshes, so a preview costs nothing and leaves nothing on disk. Which
-    is the whole point: the configuration is the artefact, the document is not.
+    is the whole point: the STLs are the artefact, the document is not.
 
     NAMES ARE PREFIXED PER LEAD, and that is not cosmetic. FreeCAD uniquifies a
     colliding Name by STRIPPING ITS TRAILING DIGITS and appending a 3-digit
@@ -1869,7 +1843,7 @@ def preview_set(doc, name, leads, results, colours=None):
 
     clear_preview(doc)
     group = doc.addObject("App::DocumentObjectGroup", PREVIEW_GROUP)
-    group.Label = "PREVIEW: %s" % name
+    group.Label = PREVIEW_GROUP_LABEL
 
     made = []
     for params, result in zip(leads, results):
@@ -1915,7 +1889,9 @@ def preview_rado_lead(doc, stl_dir=DEFAULT_STL, colours=None):
 
     Its own group, not the lead preview's, so previewing a generated lead beside
     RADO's does not delete RADO's -- looking at the two together is the whole
-    point. Cleared with clear_rado_lead().
+    point. Cleared with clear_rado_lead(). There is no button for it in the
+    panel; it is two lines in FreeCAD's Python console, and drop_rado_lead.py's
+    docstring has them.
     """
     FreeCAD, Mesh, _p, _msl, _mc, _mf = _geometry_modules()
     if not FreeCAD.GuiUp and getattr(doc, "FileName", ""):
@@ -1979,6 +1955,11 @@ def paint(vo, rgb):
 def lead_colours(map_path=None):
     """{tissue: [r, g, b]} for the two lead tissues, read from tissue_map.yaml.
 
+    The lead tissues stay in that map even though the anatomy document holds no
+    lead: a previewed lead needs its silver and its black, and an exported STL
+    needs its conductivity when it reaches Ansys. It is the DOCUMENT that has no
+    lead in it, not the model.
+
     Read-only, and via the repo's one parser, so a preview cannot show a colour
     that disagrees with what apply_colors.py would paint or what Ansys is told
     the material is. Returns {} rather than raising if the map is unreadable --
@@ -1999,16 +1980,15 @@ def lead_colours(map_path=None):
 
 # --------------------------------------------------------------------------
 def main():
+    """One lead, from flags. No names, no catalogue -- see the module docstring."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--configs", default=DEFAULT_CONFIGS)
+    ap.add_argument("--defaults", default=DEFAULTS_YAML,
+                    help="starting values; default lead_defaults.yaml")
     ap.add_argument("--corridor", default=DEFAULT_CORRIDOR)
     ap.add_argument("--foramen", default=DEFAULT_FORAMEN)
     ap.add_argument("--stl-dir", default=DEFAULT_STL)
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--report", default=DEFAULT_REPORT)
-    ap.add_argument("--name", help="a configuration from lead_configs.yaml")
-    ap.add_argument("--all", action="store_true", help="every configuration in the file")
-    ap.add_argument("--list", action="store_true", help="list them; no FreeCAD needed")
     ap.add_argument("--show", action="store_true",
                     help="resolve to numbers and stop; no FreeCAD needed")
     ap.add_argument("--validate", action="store_true", help="measure the fit")
@@ -2018,7 +1998,8 @@ def main():
                     help="validate, then write STLs if it passes")
     ap.add_argument("--force", action="store_true",
                     help="export even if validation failed (it will not fit)")
-    ap.add_argument("--tag", help="output directory name; defaults to the config name")
+    ap.add_argument("--tag", default="custom_lead",
+                    help="output directory name under generated_leads/")
     ap.add_argument("--max-samples", type=int, default=6000)
     for flag, kind in (("--type", str), ("--side", str), ("--contacts", int),
                        ("--contact-length", float), ("--gap", float),
@@ -2027,7 +2008,8 @@ def main():
                        ("--target", str), ("--lateral-offset", float),
                        ("--ganglion-clearance", float),
                        ("--y-offset", float), ("--z-offset", float)):
-        ap.add_argument(flag, type=kind, default=None, help="override the configuration")
+        ap.add_argument(flag, type=kind, default=None,
+                        help="lead parameter; unset means lead_defaults.yaml")
     args = ap.parse_args(script_args())
 
     out = []
@@ -2035,61 +2017,32 @@ def main():
     def say(fmt, *a):
         out.append(fmt % a if a else fmt)
 
-    cfg = parse_config_file(args.configs)
-    overrides = {k: getattr(args, k.replace("-", "_"))
-                 for k in ("type", "side", "contacts", "contact_length", "gap",
-                           "diameter", "x_offset", "z_center", "tail", "level",
-                           "target", "lateral_offset", "ganglion_clearance",
-                           "y_offset", "z_offset")}
+    cfg = parse_defaults_file(args.defaults)
+    params = {k: getattr(args, k.replace("-", "_"))
+              for k in ("type", "side", "contacts", "contact_length", "gap",
+                        "diameter", "x_offset", "z_center", "tail", "level",
+                        "target", "lateral_offset", "ganglion_clearance",
+                        "y_offset", "z_offset")}
 
-    if args.list:
-        say("configurations in %s", os.path.relpath(args.configs, REPO))
+    if not (args.show or args.validate or args.export or args.compare_rado):
+        say("Nothing to do. Say what you want done with the lead:")
         say("")
-        for name in config_names(cfg):
-            try:
-                leads = resolve_set(name, cfg)
-            except ValueError as exc:
-                say("%-24s CANNOT RESOLVE: %s", name, exc)
-                continue
-            say("%-24s %s", name, describe_set(leads))
-            if len(leads) > 1:
-                for lead in leads:
-                    say("%-24s    %s", "", describe(lead))
+        say("    --show           resolve the parameters to numbers and stop")
+        say("    --validate       measure whether it fits the anatomy")
+        say("    --export         validate, then write its STLs")
+        say("    --compare-rado   measure a DRG lead against RADO's own")
         say("")
-        say("at most %s leads of any one type per configuration",
-            cfg.get("max_leads_per_type", DEFAULT_MAX_LEADS_PER_TYPE))
-        say("")
-        say("vertebral levels (z of the body centre, mm)")
-        for level, z in cfg["levels"].items():
-            say("   %-14s %8.2f", level, float(z))
-        if os.path.exists(args.foramen):
-            foramen = json.load(open(args.foramen))
-            say("")
-            say("ganglia a DRG lead can target (rostral to caudal within each side)")
-            for tag in sorted(foramen["ganglia"]):
-                g = foramen["ganglia"][tag]
-                say("   %-6s %-6s side, core at z %7.2f, foramen measurable "
-                    "%.1f-%.1f mm from the midline",
-                    tag, g["side"], g["ganglion_centroid"][2],
-                    g["usable_u"][0], g["usable_u"][1])
-        else:
-            say("")
-            say("no foraminal corridor measurements yet -- run "
-                "`freecadcmd src/freecad/measure_foramen.py` before using a DRG lead")
-        say("")
-        say("RESULT: %d configurations", len(cfg["configs"]))
-        write_report(args.report, out)
-        return 0
-
-    names = config_names(cfg) if args.all else [args.name]
-    if names == [None]:
-        say("Nothing to do: give --name NAME, or --all, or --list.")
+        say("The lead itself is flags: --type, --contacts, --contact-length,")
+        say("--gap, --diameter, --tail, and then --level/--z-center/--x-offset")
+        say("for a dorsal or ventral lead, or --target and the nudges for a DRG")
+        say("one. Anything not given comes from %s.",
+            os.path.relpath(args.defaults, REPO))
         write_report(args.report, out)
         return 2
 
     # Fail here rather than three functions deep with an ImportError traceback:
     # measuring anything needs FreeCAD, and the fix is a different interpreter,
-    # not a different configuration.
+    # not a different lead.
     if args.validate or args.export or args.compare_rado:
         try:
             _geometry_modules()
@@ -2101,84 +2054,84 @@ def main():
             say('    BUILD_LEAD_CONFIG_ARGS="%s" freecadcmd src/freecad/%s',
                 " ".join(script_args()), os.path.basename(__file__))
             say("")
-            say("--list and --show need no FreeCAD and work here.")
+            say("--show needs no FreeCAD and works here.")
             say("")
             say("RESULT: aborted, no FreeCAD in this interpreter")
             write_report(args.report, out)
             return 2
 
-    meshes = load_meshes(args.stl_dir) if (args.validate or args.export
-                                           or args.compare_rado) else None
-    corridor = json.load(open(args.corridor)) if meshes is not None else None
+    try:
+        leads = resolve_leads(cfg, [params])
+    except (KeyError, ValueError) as exc:
+        # An impossible lead is a user mistake, not a bug: say what is wrong.
+        say("=" * 72)
+        say("cannot build that lead: %s", exc)
+        say("")
+        say("RESULT: the lead could not be used")
+        write_report(args.report, out)
+        return 2
+
+    say("=" * 72)
+    say("%s", describe_set(leads))
+    if args.show:
+        for lead in leads:
+            say("   -- %s", lead["label"])
+            for key in sorted(PARAM_TYPES):
+                if key in lead:
+                    say("      %-16s %s", key, lead[key])
+            if "x" in lead:
+                say("      %-16s %.2f", "x (absolute)", lead["x"])
+        say("")
+        say("RESULT: OK")
+        write_report(args.report, out)
+        return 0
+
+    meshes = load_meshes(args.stl_dir)
+    corridor = json.load(open(args.corridor))
     foramen = (load_foramen_corridors(args.foramen)
-               if meshes is not None and os.path.exists(args.foramen) else None)
+               if os.path.exists(args.foramen) else None)
 
     rc = 0
-    for name in names:
-        try:
-            leads = resolve_set(name, cfg, overrides)
-        except (KeyError, ValueError) as exc:
-            # A bad name or an impossible lead is a user mistake, not a bug:
-            # say what is wrong and move on to the next configuration.
-            say("=" * 72)
-            say("%s", name or "custom")
-            say("   cannot use this configuration: %s", exc)
-            say("")
-            rc = 2
-            continue
-        say("=" * 72)
-        say("%s", name or "custom")
-        say("%s", describe_set(leads))
-        if args.show:
-            for i, lead in enumerate(leads, start=1):
-                say("   -- %s", lead["label"])
-                for key in sorted(PARAM_TYPES):
-                    if key in lead:
-                        say("      %-16s %s", key, lead[key])
-                if "x" in lead:
-                    say("      %-16s %.2f", "x (absolute)", lead["x"])
-            say("")
-            continue
-
-        try:
-            outcome = validate_set(leads, meshes=meshes, corridor=corridor,
-                                   foramen=foramen, max_samples=args.max_samples,
-                                   stl_dir=args.stl_dir)
-        except ValueError as exc:
-            say("   could not validate: %s", exc)
-            say("")
-            rc = 2
-            continue
+    try:
+        outcome = validate_set(leads, meshes=meshes, corridor=corridor,
+                               foramen=foramen, max_samples=args.max_samples,
+                               stl_dir=args.stl_dir)
+    except ValueError as exc:
+        say("   could not validate: %s", exc)
         say("")
-        for line in report_set_lines(name or "custom", leads, outcome)[2:]:
-            say("%s", line)
-        if not outcome["ok"]:
-            rc = 1
+        say("RESULT: the lead could not be measured")
+        write_report(args.report, out)
+        return 2
 
-        if args.compare_rado:
-            for lead, result in zip(leads, outcome["leads"]):
-                if lead["type"] != "drg" or not result.get("shapes"):
-                    continue
-                say("")
-                say("-" * 72)
-                for line in compare_rado(lead, result, args.stl_dir):
-                    say("%s", line)
+    say("")
+    for line in report_set_lines(args.tag, leads, outcome)[2:]:
+        say("%s", line)
+    if not outcome["ok"]:
+        rc = 1
 
-        if args.export:
-            if not outcome["ok"] and not args.force:
-                say("")
-                say("NOT EXPORTED: this configuration does not fit. Fix it, or pass "
-                    "--force if you know what you are doing.")
-            else:
-                outdir, files = export_set(name or "custom", leads, outcome["leads"],
-                                           args.out, args.tag)
-                say("")
-                say("wrote %d files to %s", len(files), os.path.relpath(outdir, REPO))
-        say("")
+    if args.compare_rado:
+        for lead, result in zip(leads, outcome["leads"]):
+            if lead["type"] != "drg" or not result.get("shapes"):
+                continue
+            say("")
+            say("-" * 72)
+            for line in compare_rado(lead, result, args.stl_dir):
+                say("%s", line)
+
+    if args.export:
+        if not outcome["ok"] and not args.force:
+            say("")
+            say("NOT EXPORTED: this lead does not fit. Fix it, or pass --force if "
+                "you know what you are doing.")
+        else:
+            outdir, files = export_set(args.tag, leads, outcome["leads"], args.out)
+            say("")
+            say("wrote %d files to %s", len(files), os.path.relpath(outdir, REPO))
+    say("")
 
     say("RESULT: %s", {0: "OK",
-                       1: "one or more configurations do not fit",
-                       2: "one or more configurations could not be used"}[rc])
+                       1: "the lead does not fit",
+                       2: "the lead could not be used"}[rc])
     write_report(args.report, out)
     return rc
 

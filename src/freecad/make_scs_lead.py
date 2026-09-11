@@ -52,9 +52,9 @@ built a lead and wrote STLs as a side effect.
 freecadcmd also consumes its own argv, hence MAKE_LEAD_ARGS. And it swallows
 stdout, so results are written to a report file as well.
 
-For anything beyond a one-off lead -- named configurations, vertebral levels,
-lateral offsets, fit validation -- use src/freecad/build_lead_config.py and
-src/freecad/lead_configs.yaml, which drive this module.
+For anything beyond a one-off lead -- vertebral levels, lateral offsets, DRG
+trajectories, fit validation -- use src/freecad/build_lead_config.py and
+src/freecad/lead_defaults.yaml, which drive this module.
 """
 import json
 import math
@@ -97,9 +97,9 @@ def segment_plan(n_contacts, c_len, gap, tail, z_center):
     zero height is not a shape: Part.makeCylinder() would be handed a length of
     0 and a direction vector it cannot normalise, and the failure comes out as
     an OCC exception several frames away from the `tail: 0.0` that caused it.
-    Two configurations reach this: a lead with no tail (RADO's own DRG lead has
-    its insulator stop at the end contacts, so rado_drg_L3_match sets tail 0),
-    and the degenerate `gap: 0` where contacts would abut. Every lead that
+    Two leads reach this: one with no tail (RADO's own DRG lead has its
+    insulator stop at the end contacts, so reproducing it needs tail 0), and the
+    degenerate `gap: 0` where contacts would abut. Every lead that
     existed before this guard has tail 6.0 and gap 1.0, so none of them changes.
 
     z is the sweep PARAMETER, not necessarily a z coordinate: a DRG lead is

@@ -26,7 +26,7 @@ chain of imports exists to make impossible.
 
 WHY THE LABELS ARE NUMBERED
 ---------------------------
-Group Labels are "01 Vertebrae", "02 Discs", ... "13 Lead insulation" rather
+Group Labels are "01 Vertebrae", "02 Discs", ... "11 Vasculature" rather
 than plain names. FreeCAD's tree can be switched to alphabetical sort (right-
 click the document -> Tree view options), and several people leave it that way;
 without a prefix that sort scatters the anatomy -- CSF, Discs, DRG, Dura, Grey
@@ -36,6 +36,19 @@ outside in (vertebrae, discs, epidural space, dura, CSF, white, grey), then the
 peripheral structures, then the hardware last so the lead is always at the
 bottom of the tree where you can find it. Two digits, not one, because there are
 more than nine groups and "10" would otherwise sort between "1" and "2".
+
+A NUMBER WITH NO GROUP IS NORMAL
+--------------------------------
+The numbering comes from position in GROUP_ORDER, not from how many groups there
+are, so it has gaps: a tissue with no body in the document gets no group, and
+the next tissue keeps its own number rather than shuffling up. In the anatomy
+document today that is 12 (soft tissue, whose bodies are not in this model),
+13 (lead contacts) and 14 (lead insulation) -- the document holds ANATOMY ONLY
+and every lead is a disposable preview, so it ends at "11 Vasculature" with
+240 bodies in 11 groups. Existing empty groups are REMOVED on a re-run for the
+same reason. The lead tissues stay in tissue_map.yaml regardless; previews and
+exported STLs need their colours, and the preview puts its own bodies in a
+group of its own ("13 SCS Leads") which is not one of these.
 
 
 WHICH FREECAD THIS NEEDS -- READ THIS BEFORE REACHING FOR freecadcmd
@@ -255,10 +268,15 @@ def main():
     for _n, (_stem, t) in index.items():
         stl_counts[t["name"]] = stl_counts.get(t["name"], 0) + 1
 
+    say("Counted from the STL FILES, which is all a dry run can see. The anatomy")
+    say("document holds fewer: drop_rado_lead.py took RADO's five lead bodies out")
+    say("of it, so 13 and 14 below have no bodies THERE and a real run neither")
+    say("creates nor keeps them. The STLs stay on disk either way.")
+    say("")
     say("%-24s %-32s %s", "GROUP LABEL", "OBJECT NAME", "STL BODIES")
     for tissue, gname, glabel in plan:
         n = stl_counts.get(tissue, 0)
-        flag = "" if n else "   <-- no bodies, group not created"
+        flag = "" if n else "   <-- no bodies: not created, and removed if present"
         say("%-24s %-32s %5d%s", glabel, gname, n, flag)
     say("%-24s %-32s %5d", "TOTAL", "", sum(stl_counts.values()))
     say("")
@@ -366,6 +384,22 @@ def main():
         g.addObject(obj)
         moved += 1
 
+    # An EMPTY group in the plan is removed rather than left standing. The
+    # anatomy document holds no lead any more (drop_rado_lead.py), so
+    # "13 Lead contacts" and "14 Lead insulation" would otherwise sit in the
+    # tree announcing hardware that is not in the document -- the same lie the
+    # numbering exists to prevent. Only groups this script owns (NAME_PREFIX)
+    # and only when they hold nothing, so a group someone put a body in by hand
+    # survives. The tissues themselves stay in tissue_map.yaml: a previewed or
+    # exported lead still needs their colours.
+    emptied = []
+    for tissue, gname, glabel in plan:
+        g = doc.getObject(gname)
+        if g is not None and not g.Group and not counts.get(tissue):
+            emptied.append(glabel)
+            doc.removeObject(gname)
+            groups.pop(tissue, None)
+
     doc.recompute()
     after = snapshot(bodies)
     diffs = check_untouched(before, after)
@@ -383,6 +417,8 @@ def main():
     say("")
     say("groups created: %d  (%s)", len(created), ", ".join(created) or "-")
     say("groups reused:  %d  (%s)", len(reused), ", ".join(reused) or "-")
+    say("groups removed: %d  (%s)   empty, no body of that tissue in the document",
+        len(emptied), ", ".join(emptied) or "-")
     if relabelled:
         say("groups renamed: %s",
             ", ".join("%r -> %r" % (a, b) for a, b in relabelled))

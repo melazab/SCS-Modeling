@@ -1,0 +1,200 @@
+# Starting values for an SCS lead in RADO-SCS 3.0. NOT a catalogue.
+#
+# WHAT THIS FILE IS AND IS NOT
+# ----------------------------
+# It is the sane starting point a lead is dialled in FROM: what a lead is if you
+# say nothing -- eight 3 mm contacts 1 mm apart, 1.30 mm across -- plus the
+# vertebral levels and the two type-specific default blocks. It is small and it
+# stays small.
+#
+# It is NOT a list of named placements. There used to be a `configs:` section
+# holding one entry per placement, and it grew every time a lead was positioned;
+# a named placement is a worse artefact than the two numbers that produced it,
+# because the name has to be invented, explained and then kept in step with the
+# geometry it claims to describe. So: set the parameters, check the fit, export.
+# Everything is "custom", and nothing has to be christened first.
+#
+#     src/freecad/lead_designer.FCMacro        the same thing with spinboxes
+#     src/freecad/build_lead_config.py         the same thing with CLI flags
+#     src/freecad/test_regression.py           the two placements that ARE
+#                                              pinned, and why
+#
+# THE DURABLE ARTEFACTS
+# ---------------------
+# There is exactly ONE model document, NBF_RADO-SCS.FCStd, and it holds ANATOMY
+# ONLY -- 240 bodies in 11 groups, no lead of any kind. A lead is geometry
+# generated on demand: previewed into the open document as disposable bodies,
+# exported to src/freecad/generated_leads/<name>/ when it is worth keeping, and
+# the document closed WITHOUT SAVING.
+#
+# THREE LEAD TYPES, AND DRG IS NOT A VARIATION ON THE OTHER TWO
+# -------------------------------------------------------------
+#   type: dorsal    percutaneous lead in the DORSAL epidural space, running
+#   type: ventral   rostro-caudally along the canal. Positioned by z_center (or
+#                   a vertebral `level`) and x_offset from the midline, and swept
+#                   along the canal centreline measured in epidural_corridor.json.
+#
+#   type: drg       percutaneous lead in the lateral epidural space and the
+#                   NEUROFORAMEN, running LATERALLY out to one dorsal root
+#                   ganglion. It does not follow the canal centreline at all --
+#                   its long axis is x, and both y and z follow a curve. It is
+#                   positioned by naming a ganglion (`target: L3`), and swept
+#                   along the foraminal corridor measured in
+#                   foraminal_corridors.json by src/freecad/measure_foramen.py.
+#
+# The parameters are therefore NOT interchangeable, and build_lead_config.py
+# rejects rather than ignores a parameter that means nothing for the type:
+# `z_center` on a DRG lead, or `target` on a dorsal one, is an error.
+#
+# THE FRAME (src/freecad/check_laterality.py, src/freecad/epidural_corridor.json)
+# ------------------------------------------------------------------------------
+#   +X  anatomical LEFT      midline is x = 56.60 mm
+#   +Y  posterior / DORSAL
+#   +Z  rostral (towards the head)
+# Millimetres throughout, in the model's own coordinates -- these are absolute
+# positions in NBF_RADO-SCS.FCStd, not offsets from anything the user picks.
+#
+# x_offset (dorsal/ventral only) is SIGNED and measured from the midline:
+#
+#       x_offset = +1.0   ->  1 mm to the patient's LEFT   (x = 57.60)
+#       x_offset =  0.0   ->  on the midline               (x = 56.60)
+#       x_offset = -1.0   ->  1 mm to the patient's RIGHT  (x = 55.60)
+#
+# The epidural corridor was re-measured at +/-4 mm off the midline and is still a
+# single clean channel there (dorsal 2.29-2.32 mm, ventral 1.74-1.76 mm), but
+# the channel CENTRE moves as you go lateral -- about 1.1 mm of y at 4 mm off --
+# so build_lead_config.py re-measures the centreline at the requested x rather
+# than reusing the midline polynomial in epidural_corridor.json. Do not assume a
+# lateral variant can be had by shifting a midline lead sideways.
+#
+# LEAD DIAMETER: 1.25 OR 1.30 mm?
+# -------------------------------
+# Khadka et al. 2020 specify a 1.25 mm lead (8 contacts, 3 mm long, 1 mm apart).
+# The default here is 1.30 mm, which is the common clinical percutaneous
+# diameter and what make_scs_lead.py has used since the first lead was built --
+# the committed generated_leads/ STLs are 1.30 mm. Neither number is wrong and
+# the difference is 0.05 mm, about 2% of the dorsal channel; both clear the fit
+# check on both sides. To reproduce the paper's own lead numerically, pass
+# `--diameter 1.25 --level T10 --x-offset 1.0` (or set them in the panel); do
+# not "fix" the default, or the committed STLs stop matching what the defaults
+# build and test_regression.py starts failing.
+#
+# MAX LEADS PER TYPE
+# ------------------
+# Clinicians do not implant one lead and stop: two dorsal leads straddling the
+# midline is routine, so is a dorsal lead plus a DRG lead, or one DRG lead per
+# side. The panel's "Add lead" buttons stop at this many of ANY ONE type, so
+# with 2 the largest legal set is two dorsal + two ventral + two DRG.
+max_leads_per_type: 2
+
+# VERTEBRAL LEVELS -- READ THE CAVEAT
+# -----------------------------------
+# `levels` below is DERIVED FROM THE GEOMETRY, not invented. RADO names its four
+# intervertebral discs for the levels they separate -- T_disk_9_10x, T_disk_10_11x,
+# T_disk_11_12x, T_disk_12_Lx -- and their z positions come out in exactly the
+# order +Z-is-rostral demands (9/10 highest at z = 152.5, 12/L1 lowest at
+# z = 66.3), which is independent evidence that those names mean what they say.
+# A vertebral body is then the gap between two consecutive discs, and its centre
+# is the level's z. Cross-checked a second way: taking only the anterior mass of
+# each vertebra STL (y < 58, i.e. the body, not the posterior arch) gives centres
+# of 80.6 / 110.8 / 139.2 against the inter-disc 80.4 / 110.3 / 138.8 -- two
+# independent derivations agreeing to 0.6 mm.
+#
+# THE CAVEAT: those disc names imply the three vertebral bodies here are T10,
+# T11 and T12. The paper and CLAUDE.md describe the model as T9-T11, and RADO's
+# own filename prefix is "T8-10". All three disagree, and nothing in the geometry
+# can settle it -- there is no C2 to count down from. So the level names below
+# are RADO's disc names taken at face value, and if you are comparing against a
+# clinical target level, check which convention your collaborator means before
+# trusting the label. The z coordinates are solid; only the names are in doubt.
+#
+# Use a level by naming it instead of z_center:  `--level T10`, or the combo box.
+# z_center is the centre of the contact array (the tails are symmetric, so it is
+# also the centre of the whole lead).
+levels:
+  T10: 138.83             # body spans z 129.02 .. 148.63 (19.6 mm)
+  T11: 110.26             # body spans z 102.11 .. 118.41 (16.3 mm)
+  T12: 80.44              # body spans z  73.45 ..  87.42 (14.0 mm)
+  T9-T10_disc: 152.49
+  T10-T11_disc: 123.71
+  T11-T12_disc: 94.76
+  T12-L1_disc: 66.28
+
+# Applied to every lead, whatever its type.
+defaults:
+  type: dorsal            # dorsal | ventral | drg
+  contacts: 8             # number of cylindrical contacts
+  contact_length: 3.0     # mm, along the lead
+  gap: 1.0                # mm of insulator between adjacent contacts
+  diameter: 1.3           # mm, see the note above about 1.25 vs 1.30
+  tail: 6.0               # mm of plain insulator beyond the end contacts
+
+# Applied on top of `defaults` for a dorsal or ventral lead only.
+epidural_defaults:
+  x_offset: 0.0           # mm from midline, + is anatomical LEFT
+  z_center: 110.0         # mm, centre of the contact array
+
+# Applied on top of `defaults` for a DRG lead only. A DRG lead is a different
+# piece of hardware, not a dorsal lead pointed sideways: clinical percutaneous
+# DRG leads carry four SHORT contacts (about 1.25 mm) on a 4 mm pitch, against
+# the eight 3 mm contacts on a 4 mm pitch of a dorsal-column lead. RADO's own
+# 4-contact lead measures 1.25 mm contacts on a 4.75 mm pitch.
+drg_defaults:
+  contacts: 4
+  contact_length: 1.25
+  gap: 2.75               # -> 4.00 mm contact pitch
+  # 1.0 mm of plain insulator beyond the end contacts, and no more. The medial
+  # end of a DRG lead is heading back towards the canal, and a longer tail walks
+  # it into the dural sac -- measured, on every one of the eight foramina, a
+  # 2.5 mm tail puts the medial tip inside the thecal sac. (A real lead does of
+  # course continue back up the epidural space; this model stops at the foramen,
+  # the way RADO's own lead does, because the field near the contacts is what
+  # the solve is for.)
+  tail: 1.0
+
+  # GANGLION NAMES -- READ THIS CAVEAT
+  # A DRG lead names its target ganglion: L1..L4 on the patient's left, R1..R4
+  # on the right, counted ROSTRAL to CAUDAL within each side. They are the
+  # model's own ganglion numbering, taken from the ganglion cores' z, and they
+  # are NOT lumbar levels -- "L3" means "left, third from the top", which in
+  # this T8-T10 model is a thoracic ganglion at about z = 93. It is the same
+  # numbering the body labels use ("DRG L3 -- ganglion core"), derived the same
+  # way. The eight and their corridors are in foraminal_corridors.json; run
+  # `freecadcmd src/freecad/measure_foramen.py` to regenerate it.
+  target: L3
+
+  # How far along the corridor the CENTRE of the contact array sits, relative to
+  # the ganglion's own centre. + is further out along the root. The default is
+  # 1.0 rather than 0 for two measured reasons, not for taste:
+  #
+  #   - Medial of the ganglion the foraminal block flares vertically to meet the
+  #     canal -- on L3 it is 14 mm tall in z at 11 mm out -- and its centre
+  #     climbs 3-4 mm above the nerve root, so the corridor is a poor description
+  #     of where a lead goes there. RADO's own lead follows the root instead.
+  #     Pushing the array out keeps every contact clear of that flare.
+  #   - It is also the clinical placement and RADO's: the array is advanced past
+  #     the ganglion so the proximal contacts lie over it and the tip is distal.
+  #     RADO's own array centre is 2.93 mm out from the ganglion's.
+  #
+  # Not something bigger, because the foramen is only about 20 mm of usable
+  # channel and this lead is 15.25 mm long: pushed further out, the tip leaves
+  # the foraminal tissue. Checked on all eight -- with these defaults seven of
+  # the eight validate clean. R1, the tightest foramen in the model (5.3 x 6.2 mm
+  # at its narrowest), leaves the tissue with about 0.8% of its sampled surface
+  # whatever the lateral offset, and needs a y_offset or z_offset nudge of its
+  # own; the fit check says so and says where.
+  lateral_offset: 1.0
+
+  # How far the lead surface is held off the ganglion, mm. The lead is placed on
+  # the corridor centre and then shifted ROSTRALLY by however much it takes to
+  # keep this clearance -- the shift is SOLVED FOR, not written down, because it
+  # differs by foramen (0.77 mm on L3, 1.62 mm on R3 for 0.25 mm of clearance).
+  # See build_lead_config.ganglion_standoff for why rostrally and why at all;
+  # the short version is that the corridor centre runs along the top of the
+  # ganglion to within 0.1 mm, so without this a lead is a coin toss between
+  # touching it and cutting into it. 0.0 means "sit on the corridor centre",
+  # which is what RADO's own lead does.
+  ganglion_clearance: 0.5
+
+  y_offset: 0.0           # further nudge from the corridor centre, + is DORSAL
+  z_offset: 0.0           # further nudge from the corridor centre, + is ROSTRAL

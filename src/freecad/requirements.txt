@@ -9,7 +9,8 @@
 #   needs FreeCAD  ->  run with `freecadcmd <script>` (headless FreeCAD)
 #       apply_labels.py      apply_colors.py
 #       make_scs_lead.py     measure_corridor.py    measure_foramen.py
-#       build_lead_config.py     (its --list/--show run on plain python too)
+#       test_regression.py
+#       build_lead_config.py     (its --show runs on plain python too)
 #
 #   needs a RUNNING FreeCAD GUI -- these two save a document, and a headless
 #   save drops GuiDocument.xml and every tissue colour with it
