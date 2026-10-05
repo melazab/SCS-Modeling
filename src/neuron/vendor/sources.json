@@ -1,0 +1,72 @@
+[
+  {
+    "path": "mrg/AXNODE.mod",
+    "url": "https://github.com/ModelDBRepository/3810",
+    "commit": "b15daeda6ea368df0198d257f339cf5e840cf31c",
+    "upstream_path": "AXNODE.mod",
+    "sha256": "e0fa400a469aa2beba491fabffaa4f6bc03c629015a2c0f2ddc471fb3e687bd3"
+  },
+  {
+    "path": "mrg/MRGaxon.hoc",
+    "url": "https://github.com/ModelDBRepository/3810",
+    "commit": "b15daeda6ea368df0198d257f339cf5e840cf31c",
+    "upstream_path": "MRGaxon.hoc",
+    "sha256": "73da0790cdbbb1a7db036e9806729a74fcc0606e62d716daabeddbe8c1999014"
+  },
+  {
+    "path": "mrg/README",
+    "url": "https://github.com/ModelDBRepository/3810",
+    "commit": "b15daeda6ea368df0198d257f339cf5e840cf31c",
+    "upstream_path": "README",
+    "sha256": "847ce5ac51b3b1be75d0d34a7003ce7a7e14ec06a5cf47acbf545274b5ec369a"
+  },
+  {
+    "path": "adelta/mods/ttxs.mod",
+    "url": "https://github.com/dbjaffe67/DRGsims",
+    "commit": "108b5b10cbbefa1dd9f2e15c6e72b92436fdb8a4",
+    "upstream_path": "mods/ttxs.mod",
+    "sha256": "a70abed9a5e57e682ef1718b9610a6fb9b0fb611471bf27dd69673a478857e9f"
+  },
+  {
+    "path": "adelta/AfiberPropagation.hoc",
+    "url": "https://github.com/dbjaffe67/DRGsims",
+    "commit": "108b5b10cbbefa1dd9f2e15c6e72b92436fdb8a4",
+    "upstream_path": "AfiberPropagation.hoc",
+    "sha256": "ad02315b52a48e49e0ee2853e3872bed08ec00b631bfc7986949ca311694b6ca"
+  },
+  {
+    "path": "adelta/README.md",
+    "url": "https://github.com/dbjaffe67/DRGsims",
+    "commit": "108b5b10cbbefa1dd9f2e15c6e72b92436fdb8a4",
+    "upstream_path": "README.md",
+    "sha256": "9c8577ab32d5e5dec7f283a665dbdbebd1d94e17e8a183bb8cc721fb5d315256"
+  },
+  {
+    "path": "sundt/mods/nahh.mod",
+    "url": "https://github.com/ModelDBRepository/187473",
+    "commit": "846baef1bb0e5593a3e3a11c981f359275c79eb8",
+    "upstream_path": "mods/nahh.mod",
+    "sha256": "054c63ea91d78a34a45ba34d26c4c5f8910538fd37dfd22682090e54625f6d19"
+  },
+  {
+    "path": "sundt/mods/kdr.mod",
+    "url": "https://github.com/ModelDBRepository/187473",
+    "commit": "846baef1bb0e5593a3e3a11c981f359275c79eb8",
+    "upstream_path": "mods/kdr.mod",
+    "sha256": "df76a170dc3d6ad3694f8d1a5e2fcf4201a1420e076a69a80b29e7c827af1945"
+  },
+  {
+    "path": "sundt/Figure5d/Figure5d.hoc",
+    "url": "https://github.com/ModelDBRepository/187473",
+    "commit": "846baef1bb0e5593a3e3a11c981f359275c79eb8",
+    "upstream_path": "Figure5d/Figure5d.hoc",
+    "sha256": "068e3b629245c27550f25a2b8b131184e8b57c3571f0e87722b731d875e69c59"
+  },
+  {
+    "path": "sundt/README.md",
+    "url": "https://github.com/ModelDBRepository/187473",
+    "commit": "846baef1bb0e5593a3e3a11c981f359275c79eb8",
+    "upstream_path": "README.md",
+    "sha256": "0b9f63a491bca72e547bb077773191c3010522182d2d9866eba2aa286dfac857"
+  }
+]

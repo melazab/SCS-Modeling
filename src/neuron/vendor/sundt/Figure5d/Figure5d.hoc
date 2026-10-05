@@ -1,0 +1,144 @@
+celsius = 35
+
+//
+// C fiber model - Figure 5d - Effect of M current on spike failure at T-juntion
+//
+// Sundt et. al JNP 2015
+//
+
+//////////////////// VARIABLES /////////////////////
+
+tstop = 250
+KCNQ = .0004			// kcnq channel density S/cm2
+
+FREQ = 50		 	// Stimulation frequency in Hz
+NPULSES = 21			// Number of pulses for stimulation
+
+NAV = .04 			// Na channel density
+KV = .04 			// K channel density
+
+CENTRAL_DIAM = 0.4
+
+/////////////////   MORPHOLOGY ///////////////////////
+
+create peri, tjcentral, tjperi, stem, soma, central
+
+peri {nseg=100 L=5000 diam = .8}			// peripherial axon
+tjperi {nseg=100 L=100 diam = .8}		   	// tjunction axon
+tjcentral {nseg=100 L=100 diam = CENTRAL_DIAM}		// tjunction axon
+central {nseg=100 L=5000 diam = CENTRAL_DIAM}		// central axon
+stem {nseg=100 L=75 diam = 1.4}				// stem axon
+soma {nseg=1 L=25 diam =25}				// soma
+
+
+//////// Connectivity //////////
+
+peri connect tjperi(0),1
+tjperi connect stem(0),1
+stem connect soma(0),1
+tjperi connect tjcentral(0),1
+tjcentral connect central(0),1
+
+objref DRG   					// create new object called DRG
+DRG = new SectionList()				// Define DRG as a list of sections
+
+tjperi DRG.append()				// DRG sections: tjunction, stem, and soma   
+tjcentral DRG.append()  
+stem DRG.append()				
+soma DRG.append()
+
+/////////////////// INITIALIZATION /////////////////
+ 
+
+///// GENERAL INITIALIZATION /////////
+
+forall {				// for all compartments
+
+       insert nahh
+       gnabar_nahh = NAV
+       mshift_nahh = -6		        // NaV1.7/1.8 channelshift
+       hshift_nahh = 6		        // NaV1.7/1.8 channelshift
+
+	insert borgkdr			// insert delayed rectifier K channels
+	gkdrbar_borgkdr = KV		// density of K channels
+	ek = -90	  		// K equilibrium potential
+
+	insert pas			// insert leak channels	
+	g_pas = 1/10000			// set Rm = 10000 ohms-cm2
+	v = -60				// set Vrest
+
+	Ra = 100			// intracellular resistance
+}
+
+access soma				// work only with the soma
+gnabar_nahh = .02			// 50% lower Na channel density
+
+forsec DRG{	
+       insert iM			// add KCNQ channels to DRG sections
+       vshift_iM = -5			// Control conditions
+}
+
+proc init(){				// INITIALIZATION FUNCTION
+
+  forsec DRG{
+   	 gkbar_iM = KCNQ		// set KCNQ channel density
+  }
+
+  forall {
+       v=-60				// VREST FOR ALL COMPARTMENTS
+
+       finitialize(v)			// reset all state variables
+       fcurrent()     			// calculate all currents
+
+       e_pas = v + (ina + ik)/g_pas	// calculate leak equilibrium potential
+  }
+
+ 
+
+}			/// end of initialization
+
+init()				    // initialize
+
+wopen("Fig5doutput.dat")		    // Open file to write results
+
+///////////////////////// STIMULATE PERIPHERAL AXON /////////////////////
+
+access peri		  	    // Work with peripheral axon
+objectvar stim			    // create object called stim
+stim = new IClamp(.2)		    // Define stim as a current clamp (IClamp) at position 0.2
+stim.del = 5			    // Stimulus delay
+stim.dur = tstop		    // Duration of the stimulus
+stim.amp = 0			    // Amplitude of the stimulus starts as zero.
+
+PERIOD = 1000/FREQ		    // Define period between stimuli
+countdown = 0			    // Spike interval variable
+pulsecount = NPULSES		    // Spike number variable
+
+t=0	     			    // Set time variable (t) to zero
+dt = 0.025			    // Time step in msec
+
+
+while (t<tstop){		       	   		 // Simulation Loop starts here
+
+      stim.amp = 0					 // Stimulation amplitude is set to zero
+
+      if ((t>=50) && (pulsecount > 0)){			 // After 50 msec, start stimulating
+
+       	 if ((countdown <= 0) && (countdown > -1)) stim.amp = .2     // Stimulate 1 ms pulse
+
+	 if (countdown <= -1){	 // done with this pulse      	     // End of 1 ms pulse
+	 	  countdown = PERIOD	      	   		     // Reset interval variable
+	  	  pulsecount -= 1				     // Decrement count of pulses
+	 }
+      }
+
+     countdown -= dt		// Decrement interval variable
+
+     // Output data is in the form of 4 columns of data
+     // time, 350 um from the Tjunction, 100 um from the Tjunction, and in the central axon
+
+     fprint("%g %g %g %g %g\n",t,peri.v(0), peri.v(.95), tjperi.v(0), central.v(.8))
+
+
+     fadvance()	      	 	// Advance simulation one time step	    
+}

@@ -16,11 +16,11 @@
 
 # The simulator. Provides both the `neuron` python package and the nrnivmodl /
 # nrniv binaries in the venv's bin/.
-neuron>=9.0
+neuron==9.0.2
 
 # Threshold bisection, recruitment statistics, and reading the field grid the
 # Ansys side exports.
-numpy>=1.20
+numpy>=2.0
 
 # Strength-duration curves, activating-function plots, recruitment curves.
 matplotlib>=3.5

@@ -1,0 +1,81 @@
+{
+  "name": "vz_lat1_depth0.5",
+  "units": "mm",
+  "points": [
+    [
+      57.2604,
+      81.9,
+      126.0
+    ],
+    [
+      57.235,
+      81.9,
+      128.0
+    ],
+    [
+      57.2948,
+      82.2,
+      130.0
+    ],
+    [
+      57.3453,
+      82.5,
+      132.0
+    ],
+    [
+      57.2937,
+      82.8,
+      134.0
+    ],
+    [
+      57.2684,
+      82.8,
+      136.0
+    ],
+    [
+      57.2481,
+      83.1,
+      138.0
+    ],
+    [
+      57.2684,
+      83.1,
+      140.0
+    ],
+    [
+      57.2553,
+      83.4,
+      142.0
+    ],
+    [
+      57.3231,
+      83.4,
+      144.0
+    ],
+    [
+      57.3407,
+      83.4,
+      146.0
+    ],
+    [
+      57.2478,
+      83.7,
+      148.0
+    ],
+    [
+      57.2588,
+      83.7,
+      150.0
+    ],
+    [
+      57.3566,
+      83.7,
+      152.0
+    ]
+  ],
+  "allowed_tissues": [
+    "white"
+  ],
+  "anatomically_validated": false,
+  "purpose": "Dorsal-column Abeta path at the VENTRAL lead's rostrocaudal level (contacts z 135.3-142.4), 1.0 mm lateral of the per-slice DC midline, 0.5 mm below the dorsal WM surface, 26.1 mm long, 14 vertices tracking the cord. Matches dc_* paths in construction; differs only in z so the axon spans its own model's contacts. Geometry-verified; anatomical review pending."
+}

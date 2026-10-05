@@ -1,0 +1,21 @@
+{
+  "name": "dorsal_white_matter_engineering_fixture",
+  "units": "mm",
+  "points": [
+    [
+      55.5,
+      70.0,
+      75.0
+    ],
+    [
+      55.5,
+      73.135,
+      86.0
+    ]
+  ],
+  "allowed_tissues": [
+    "white"
+  ],
+  "anatomically_validated": false,
+  "purpose": "FEM-coupling test only; not an A-delta or C anatomical trajectory"
+}

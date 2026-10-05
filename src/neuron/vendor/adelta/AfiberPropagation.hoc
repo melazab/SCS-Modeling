@@ -1,0 +1,221 @@
+//////////  A-fiber DRG Propagation Model
+//////////
+//////////  D.B. Jaffe, Ph.D.
+//////////
+//////////  Last revised 11/28/22
+
+
+/////////////////////////// PARAMETERS
+
+GABAG = .005                            // GABA-A receptor density
+GNABAR = 0.6                            // DRG Na channel density 
+GK = .02                                // K channel density
+STEMDIAM = 2                            // Stem axon diameter
+NSTEM = 4                               // Number of stem axon segments/internodes
+INODEL = 100                            // Stem axon internode distance
+
+INTERNODEDistance = 150                 // SR/DR internode distance 
+NNODE = 120                             // Number of internodes in SR/DR axon
+
+TSTOP = 30
+
+SOMADIAM = 40                           // Soma diameter
+
+NODERM = 5000               // Node Rm (ohm-cm2)
+INODEL=NSTEM*100/(NSTEM+1)  // Internode length (um)
+
+
+celsius = 37
+
+/////////////////////////// Morphology
+
+
+create node[NNODE],internode[NNODE], stemnode[NSTEM], soma, istem[NSTEM], ais
+
+MIDNODE = NNODE/2                                           // midpoint node --- location of T-junction (TJ)
+
+soma {nseg = 1 L=SOMADIAM diam=SOMADIAM}                    // soma and ais dimensions
+ais {nseg=5 L=(INODEL) diam=STEMDIAM}
+
+
+for i=0, NSTEM-1 {                                          // stem node and internode dimensions
+    stemnode[i] {nseg=5 L=1.5 diam=STEMDIAM}                 
+    istem[i] {nseg=25 L=INODEL diam=STEMDIAM}
+}
+
+for i=0,NNODE-1 {                                           // SN and DR axon internode and node dimensions
+   node[i] {nseg = 5 L = 1.5 diam = 3}
+   if (i < MIDNODE) {
+       internode[i] {nseg=25 L=INTERNODEDistance diam=4}
+    }  else {
+        internode[i] {nseg=25 L=INTERNODEDistance diam=3}
+    
+    }
+}
+
+TJdimensions = 2                                            // TJ dimensions
+node[MIDNODE].L = 1.5
+node[MIDNODE].diam = TJdimensions
+
+for i=0,NNODE-2 {                                           // connect/construct SN and DR axon 
+    node[i] connect internode[i](0),1
+    internode[i] connect node[i+1](0),1
+}
+node[119] connect internode[119](0),1                       // add final internode to the end (not required)
+
+node[MIDNODE] connect istem[0](0),.5                        // TJ === connect MIDNODE to first internode
+
+
+for i=0,NSTEM-2 {                                           // construct stem axon
+        istem[i] connect stemnode[i](0),1           
+        stemnode[i] connect istem[i+1](0),1
+}
+istem[NSTEM-1] connect stemnode[NSTEM-1](0),1              
+stemnode[NSTEM-1] connect ais(0),1                          // last heminode connects to AIS
+ais connect soma(0),1                                       // AIS connects to soma
+
+objref somaais, DRG                                            // Defining SOMA/AIS properties or DRG properties
+
+/////////////////// define soma + axon initial segment
+
+somaais = new SectionList()
+    soma somaais.append()
+    ais somaais.append()
+
+
+////////////////////////// define DRG for GABA-A receptor expression
+
+DRG = new SectionList()
+    soma DRG.append()
+    ais DRG.append()
+    
+/* Un-comment to express GABA-A receptors in both stem and SR/DR axons
+    for i=0,NSTEM-1{
+        stemnode[i] DRG.append()                                      
+    }
+
+    for i=30,90{
+    node[i] DRG.append()
+    }  */
+
+
+/////////////////////////// Channels
+
+forall {                                                      // initialize Ra and Vrest for all compartments
+    Ra = 100
+     v = -60
+}
+
+
+forsec somaais{                                               // Soma and AIS properties
+
+    insert ttxs                                               // ttx-sensitive Na channel                                  
+    gbar_ttxs = 1.1 
+    
+    insert kdrSheets
+    gbar_kdrSheets = GK
+    
+    insert pas
+    g_pas = 1/5000
+    
+    v = -60
+    finitialize(v)	
+    fcurrent()
+    
+    e_pas = v + (ina+ik)/g_pas
+   
+}
+
+
+for i=0,NNODE-1{                                            /// Define internode and node properties
+    
+    access internode[i]
+    insert pas
+    v = -60
+    g_pas = 1/100000            
+    e_pas = v
+    cm = .01
+
+    access node[i]                                            // SN and DR nodes of Ranvier
+    insert ttxs
+    gbar_ttxs = GNABAR			
+
+    insert pas                                               // Node passive properties
+    g_pas = 1/NODERM
+    cm = .5                                                 
+
+    v = -60
+    finitialize(v)	
+    fcurrent()
+    
+    e_pas = v + (ina)/g_pas                                  // sets resting potential
+    
+}
+
+for i=0,NSTEM-1{		                                    //  stem node properites
+    access stemnode[i]
+   
+    insert ttxs
+    gbar_ttxs = GNABAR			
+
+    insert pas
+    g_pas = 1/NODERM
+    cm = .5
+
+    v = -60
+    finitialize(v)	
+    fcurrent()
+    
+    e_pas = v + (ina)/g_pas
+}  
+
+for i=0,NSTEM-1{	                                        // stem internode properties
+    access istem[i]
+    cm = .01
+    insert pas
+    g_pas =1/100000
+    e_pas = -60
+    v = -60
+}
+
+
+//////////////////////////////
+
+forsec DRG{                             // express GABA-A receptors in DRG (defined above)
+    insert gaba
+    gbar_gaba = GABAG
+    erev_gaba = -40
+}  
+
+/////////////////////////////  Stead-state GABA-A receptor activation
+
+t=0
+for i=0,1e4 fadvance()    
+
+
+////////////////// Stimulate peripheral SR
+
+access node[0]
+objref stim
+stim = new IClamp(.5)
+stim.del = 10
+stim.amp = .2
+stim.dur = 1
+
+
+////////////////// Main simulation loop
+
+t=0
+
+wopen("output.dat")
+fprint("Time,Soma,SN,TJ,DR\n")
+
+while (t<TSTOP){ 
+
+    fprint("%g, %g, %g, %g, %g\n",t,soma.v,node[10].v(0), node[60].v(.5), node[110].v(1))
+
+    fadvance()
+}
+
+
+
