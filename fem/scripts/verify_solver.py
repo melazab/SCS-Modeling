@@ -94,4 +94,4 @@ if __name__ == "__main__":
     for h, grow in [(0.60, 0.16), (0.40, 0.11), (0.28, 0.08)]:
         print("\n=== target h at r=a: %.2f mm, growth %.2f ===" % (h, grow))
         codes.append(main(h, grow))
-    sys.exit(min(codes))
+    sys.exit(max(codes))

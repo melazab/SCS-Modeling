@@ -30,12 +30,15 @@ class TetField:
         out = np.full(len(pts), -1, dtype=np.int64)
         bw = np.zeros((len(pts), 4))
         todo = np.arange(len(pts))
-        k = 8
-        while todo.size and k <= kmax:
+        if not len(self.tets) or not len(pts):
+            return out, bw
+        limit = min(kmax, len(self.tets))
+        k = min(8, limit)
+        while todo.size and k > 0:
             _, cand = self.tree.query(pts[todo], k=k, workers=-1)
-            cand = np.atleast_2d(cand)
+            cand = np.asarray(cand).reshape(len(todo), k)
             found = np.zeros(todo.size, dtype=bool)
-            for c in range(cand.shape[1] if k == 8 else cand.shape[1]):
+            for c in range(cand.shape[1]):
                 if found.all():
                     break
                 sel = ~found
@@ -47,7 +50,9 @@ class TetField:
                 bw[todo[gi]] = w[ok]
                 found[gi] = True
             todo = todo[~found]
-            k *= 3
+            if k == limit:
+                break
+            k = min(k * 3, limit)
         return out, bw
 
     def _bary(self, p, ti):
@@ -80,7 +85,8 @@ def structured_export(sol_npz, out_npz, origin, spacing, shape):
     ax = [origin[i] + spacing * np.arange(shape[i]) for i in range(3)]
     gx, gy, gz = np.meshgrid(*ax, indexing="ij")
     P = np.stack([gx.ravel(), gy.ravel(), gz.ravel()], axis=1)
-    phi = np.full((8, len(P)), np.nan)
+    nfields = d["phi"].shape[0]
+    phi = np.full((nfields, len(P)), np.nan)
     for s in range(0, len(P), 200_000):
         sl = slice(s, s + 200_000)
         phi[:, sl] = f(P[sl])
@@ -92,7 +98,7 @@ def structured_export(sol_npz, out_npz, origin, spacing, shape):
         out_npz,
         origin=np.asarray(origin, float), spacing=float(spacing),
         shape=np.asarray(shape, int),
-        phi=phi.reshape((8,) + tuple(shape)).astype(np.float32),
+        phi=phi.reshape((nfields,) + tuple(shape)).astype(np.float32),
         label=lab.reshape(shape), order=d["order"],
         units_coords="mm", units_phi="V/A (transfer impedance, ohm)",
         note=("phi[i] is the potential for +1 A into contact i+1 and -1 A spread "
