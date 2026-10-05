@@ -15,6 +15,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config as C
+from artifacts import result_path
 
 
 def elem_gradients(nodes, tets):
@@ -68,7 +69,7 @@ def speckle_report(nodes, tets, lab, order):
                   % (name, n, 100 * n / max((lab == i).sum(), 1)))
 
 def main():
-    name = sys.argv[1] if len(sys.argv) > 1 else "solution.npz"
+    name = sys.argv[1] if len(sys.argv) > 1 else result_path("solution.npz")
     print("=== %s ===" % name)
     d = np.load(os.path.join(C.OUT, name), allow_pickle=True)
     nodes, tets, lab = d["nodes"], d["tets"], d["label"]

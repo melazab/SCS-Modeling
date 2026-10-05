@@ -1,29 +1,35 @@
 # `src/` — code for the NBF_RADO-SCS study
 
-Split by which tool the code talks to, not by what stage of the pipeline it
-belongs to. Anything that manipulates geometry — the STL set, the FreeCAD
-document, lead construction — is under `freecad/`. Anything that talks to the
-finite-element solver — MAPDL decks, SLURM job trees, result plotting — is under
-`ansys/`.
+## Current pipeline — September 30, 2026
 
-| directory | runs where | what it does |
-|---|---|---|
-| [`freecad/`](freecad/) | your machine, under `freecadcmd` or plain `python3` | labels bodies, measures the epidural corridor, builds parametric SCS leads, colours the model |
-| [`ansys/`](ansys/) | CWRU Pioneer, via `sbatch` | electric-conduction solves of the head/spine model, and post-processing |
+FreeCAD geometry → Gmsh mesh → Elmer MPI potential solution → matched dorsal/
+ventral field figures. Python orchestrates the compiled mesher and solver.
+NEURON axon coupling is implemented as a software milestone and remains future
+work for the current FEM-only poster. Remote SSH/SLURM execution of this pipeline
+is planned; the completed poster runs used the local workstation.
 
-Each directory has its own `requirements.txt` and `README.md`, because the two
-halves have genuinely different dependencies: `freecad/` needs a FreeCAD install
-and cannot use pip for it, while `ansys/` needs a licensed Ansys module on a
-cluster and only uses Python for checking inputs and plotting outputs. Install
-whichever half you actually intend to run.
+| directory | purpose |
+|---|---|
+| [`freecad/`](freecad/README.md) | anatomy utilities and parametric multi-lead design |
+| [`../fem/`](../fem/README.md) | Gmsh, Elmer, persistent FreeCAD visualization and Job Manager |
+| [`neuron/`](neuron/README.md) | representative Aβ, Aδ and C axons and cached-field coupling |
+| [`ansys/`](ansys/README.md) | historical MAPDL/SLURM experiments and shared tissue map |
 
-## The one file both halves share
+Start with the [poster workflow](../docs/poster_fast_workflow.md),
+[poster outline](../docs/poster_outline.md), and
+[post-poster roadmap](../fem/TODO.md). Install the requirements of the component
+you use; FreeCAD and Elmer are separate native installations.
+
+## Shared tissue definitions
 
 `ansys/tissue_map.yaml` maps every STL filename to a tissue class, an Ansys
 Engineering Data material name, a conductivity, and a colour. It is the single
 source of truth for "what is this body made of". `ansys/` uses it to assign
 materials in Mechanical; `freecad/` reads it (as `../ansys/tissue_map.yaml`) to
 colour the document so a body looks the same in FreeCAD as it does in Mechanical.
+The production FEM configuration also reads this file; mesh sizing groups do
+not replace material classes. Filename coverage alone does not verify spatial
+coverage inside the mesh.
 It lives on the Ansys side because the material values are a mirror of Mohamed's
 Engineering Data and must not drift from it.
 

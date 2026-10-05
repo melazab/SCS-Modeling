@@ -67,3 +67,24 @@ fem/out/
 fem/NBF_RADO-SCS_fem.FCStd
 fem/leads/
 fem/scripts/__pycache__/
+
+# ---------------------------------------------------------------------------
+# Published papers. Kept on disk for reference, never committed: this repo is
+# public and these are copyrighted. docs/README.md lists the DOIs instead.
+docs/*.pdf
+
+# Lead-variant documents. NBF_RADO-SCS.FCStd (anatomy only) is the one tracked
+# model; every variant is reproducible from its Lead Designer parameters, so
+# tracking 80 MB binaries per placement buys nothing.
+NBF_RADO-SCS_*.FCStd
+
+# The poster itself lives in Box; poster.pptx is a symlink to it and would be a
+# dangling link in any clone. Review copies and exports are one-offs.
+poster.pptx
+poster_review.pdf
+poster_assets/
+poster_backups/
+
+# Saved HPC node-availability page; a snapshot, not a source file.
+hpc_cluster_resource_info.html
+AGENTS_log_archive_*.md

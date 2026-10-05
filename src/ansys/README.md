@@ -3,6 +3,16 @@
 The electric-conduction finite-element work: MAPDL decks, the SLURM job trees
 they ran under, the tissue/material map, and post-processing of results.
 
+## Status — historical ANSYS route
+
+The current poster uses FreeCAD + Gmsh + Elmer locally; see
+[the production FEM documentation](../../fem/README.md). Keep the experiments
+below as historical evidence, not instructions for the current poster solve.
+The documented full ANSYS run had **12,889,916 elements**, including a model
+with contact elements; this is not a verified volume-tetrahedron count.
+See [the original report](bigdeck_stripped/RESULTS.md). Element counts alone
+cannot establish equivalent resolution across formulations and domains.
+
 ## Install
 
     pip install -r requirements.txt      # only needed for plot_voltage_slice.py

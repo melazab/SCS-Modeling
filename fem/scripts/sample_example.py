@@ -20,6 +20,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config as C
+from artifacts import result_path
 from field import TetField
 
 
@@ -50,11 +51,11 @@ def main():
     z = np.arange(112.0, 156.0, 0.5)
     pts = np.stack([np.full_like(z, 55.6), np.full_like(z, 82.3), z], axis=1)
 
-    g = np.load(os.path.join(C.OUT, "field_grid.npz"), allow_pickle=True)
+    g = np.load(result_path("field_grid.npz"), allow_pickle=True)
     phi_grid = trilinear(g, pts)
     Vgrid = phi_grid[C.SOURCE_CONTACT - 1] - phi_grid[C.SINK_CONTACT - 1]
 
-    d = np.load(os.path.join(C.OUT, "solution.npz"), allow_pickle=True)
+    d = np.load(result_path("solution.npz"), allow_pickle=True)
     f = TetField(d["nodes"], d["tets"], d["phi"].astype(np.float64))
     phi_tet = f(pts)
     Vtet = phi_tet[C.SOURCE_CONTACT - 1] - phi_tet[C.SINK_CONTACT - 1]

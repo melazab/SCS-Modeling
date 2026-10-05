@@ -15,6 +15,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config as C
+from artifacts import result_path
 import field as F
 
 GRID_SPACING = 0.25   # mm, the coarse end of neuron_plan chunk 3's 0.1-0.25 mm
@@ -28,7 +29,7 @@ def write_vtu(d, path):
         path, d["nodes"], cells,
         point_data={"V_volts": d["V"].astype(np.float64),
                     **{"phi_c%d_ohm" % (i + 1): d["phi"][i].astype(np.float64)
-                       for i in range(8)}},
+                       for i in range(d["phi"].shape[0])}},
         cell_data={"sigma_S_per_m": [d["sigma"]],
                    "tissue_id": [lab.astype(np.int32)]})
 
@@ -56,11 +57,11 @@ def write_tagged_msh(d, path):
 
 
 def main():
-    sol = os.path.join(C.OUT, "solution.npz")
+    sol = result_path("solution.npz")
     d = np.load(sol, allow_pickle=True)
-    write_vtu(d, os.path.join(C.OUT, "solution.vtu"))
+    write_vtu(d, result_path("solution.vtu"))
     print("wrote solution.vtu")
-    write_tagged_msh(d, os.path.join(C.OUT, "mesh_tagged.msh"))
+    write_tagged_msh(d, result_path("mesh_tagged.msh"))
     print("wrote mesh_tagged.msh")
 
     # structured grid over cord + surrounding sac, spanning the lead generously
@@ -71,13 +72,13 @@ def main():
     lo = np.array([45.0, 71.5, 104.0])
     hi = np.array([68.0, 90.5, 164.5])
     shape = tuple(int(np.floor((hi[i] - lo[i]) / GRID_SPACING)) + 1 for i in range(3))
-    cov = F.structured_export(sol, os.path.join(C.OUT, "field_grid.npz"),
+    cov = F.structured_export(sol, result_path("field_grid.npz"),
                               lo, GRID_SPACING, shape)
     print("wrote field_grid.npz  shape=%s  spacing=%.2f mm  in-mesh coverage %.1f %%"
           % (shape, GRID_SPACING, 100 * cov))
 
     # sanity check demanded by neuron_plan chunk 3: phi must fall off with r
-    g = np.load(os.path.join(C.OUT, "field_grid.npz"), allow_pickle=True)
+    g = np.load(result_path("field_grid.npz"), allow_pickle=True)
     phi = g["phi"][C.SOURCE_CONTACT - 1]
     ax = [lo[i] + GRID_SPACING * np.arange(shape[i]) for i in range(3)]
     X, Y, Z = np.meshgrid(*ax, indexing="ij")

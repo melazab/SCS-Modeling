@@ -5,15 +5,46 @@ document: labelling bodies, measuring the epidural space and the neuroforamina,
 building parametric SCS leads, and colouring the model to match Ansys
 Engineering Data.
 
-**There is one model document, and it contains no lead.** `NBF_RADO-SCS.FCStd`
-holds anatomy and nothing else — **240 bodies in 11 groups**, RADO's own
-4-contact DRG lead removed by `drop_rado_lead.py`. A lead is not baked into a
-copy of it and is not an entry in any list: it is a handful of parameters plus a
-directory of STLs, previewed into the open document on demand and thrown away.
-The former `NBF_RADO-SCS_dorsal.FCStd` and `_ventral.FCStd`, and the
-`make_lead_variants.py` that built them, are gone.
+## Current poster documents — September 30, 2026
+
+`NBF_RADO-SCS.FCStd` is the base working model. The separate
+`NBF_RADO-SCS_poster_dorsal.FCStd` and `NBF_RADO-SCS_poster_ventral.FCStd`
+documents contain the two poster configurations, each with two eight-contact
+leads. Mesh and solution artifacts live outside the documents under
+`fem/out/lead_runs`; normal GUI saves preserve references and montage settings.
+See the [poster workflow](../../docs/poster_fast_workflow.md) for verified run
+counts, timings and figure capture. The former single-anatomy-document workflow
+below is historical where it conflicts with this section.
+
+Both poster side views were matched on September 30 using orthographic camera
+height **118.1749725 mm** at a **1520 × 809 pixel** viewport, preserving their
+existing common orientation. For repeatable figures, match projection, camera
+orientation, scale and framing; export equal pixel dimensions and preserve equal
+physical scaling when placing images on the poster. Cropping alone does not
+change scale, but independently resizing cropped images to fit frames does.
+Changing only the view does not require another mesh or solve.
 
 ## Install
+
+### Contact projection
+
+Lead Designer has **Contact thickness** immediately below **Diameter** for
+generated dorsal/ventral leads. It is how far the electrode surface projects
+radially beyond the insulated lead body, in mm, with
+`contact outer diameter = diameter + 2 * contact_thickness`. CLI/config equivalent:
+`--contact-thickness 0.10` / `contact_thickness: 0.10`.
+
+Valid values are zero or greater. Omitting the parameter preserves legacy flush
+contacts (thickness = 0). Copied RADO
+DRG hardware remains fixed. Rebuild the lead using the existing Show leads
+workflow before generating a new mesh. Geometry fingerprints change when the
+projection changes, so previous mesh/solution caches are not reused for that geometry.
+The fit check uses the larger contact diameter. Protruding contacts require
+adequate mesh resolution. No current CAD lead or
+completed mesh is automatically replaced by editing this control.
+
+`test_contact_thickness.main()` in FreeCAD checks contact diameter and volume,
+parameter limits and exact legacy shape preservation.
 
     pip install -r requirements.txt
 
@@ -449,7 +480,13 @@ appears in the list, with no error to tell you why. The path moves with the
 FreeCAD version, so ask rather than hardcode:
 
     MDIR=$(python3 -c 'import FreeCAD, os; print(os.path.join(FreeCAD.getUserAppDataDir(), "Macro"))')
-    cp src/freecad/*.FCMacro "$MDIR"
+    mkdir -p "$MDIR"
+    for macro in "$PWD"/src/freecad/*.FCMacro; do
+        ln -sfn "$macro" "$MDIR/$(basename "$macro")"
+    done
+
+Symlinking keeps FreeCAD's installed entry on the project source, so a source
+edit cannot leave the toolbar running an older copied macro.
 
 Then in FreeCAD: **Macro → Macros…**, select it, **Execute**. That is all that is
 needed to run one.

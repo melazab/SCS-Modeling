@@ -1,4 +1,205 @@
-# FreeCAD-side FEM route — bipolar 1 A dorsal epidural stimulation
+# FreeCAD-side FEM route — spinal cord stimulation
+
+The visualizer and `run_all.sh` now use **Elmer StatCurrentSolver with
+MPI, Hypre/BoomerAMG and conjugate gradients**. The dedicated **SCS Job Manager**
+configures future local jobs: mesh maximum threads, physical-core-capped Elmer
+MPI processes and solve memory budget. Older open panels may still show legacy
+local controls. These do not read FreeCAD's native Elmer preferences.
+SSH/SLURM submission remains planned; the remote profile is setup/probe only.
+See [Job Manager](../docs/job_manager.md) and [TODO.md](TODO.md).
+
+Element preparation, sparse reference assembly and independent equation
+checks use bounded batches. Production solves avoid building a second global
+Python stiffness matrix. The NumPy/SciPy/PyAMG implementation remains a test
+reference, not an alternative backend in the visualizer or batch workflow.
+
+See [ELMER_BACKEND.md](ELMER_BACKEND.md) for setup, resource controls,
+validation and the preserved pre-Hypre installation.
+
+## Current poster status — September 30, 2026
+
+Both two-lead/16-contact poster models completed local background-inclusive
+Elmer solves: dorsal **17,334,566 tets / 9,497.2 s**, ventral
+**17,322,431 tets / 9,073.4 s**, each with 14 MPI processes. Mesh workflows took
+991.0 and 902.5 s respectively. See the [poster workflow](../docs/poster_fast_workflow.md)
+for run IDs, actual mesh controls, counts, residuals and matched-scale figures.
+The GUI shows potential in volts; E-field requires gradient post-processing.
+Static matched figures are the immediate priority; animation and NEURON results
+are not required for this poster.
+
+The roughly 5.6 M classified tets are anatomy/lead only. The other roughly
+11.7 M background tets remain in the volume mesh and are included in these
+solves. Background is uniform 0.04 S/m, not segmented surrounding tissue.
+Unexpected internal unassigned regions have not yet been ruled out. Spatial
+classification verification, mesh convergence and background/domain sensitivity
+are deferred until after the poster, explicitly recorded in [TODO.md](TODO.md).
+Historical validation below must not be generalized to these full models.
+
+## Current workflow and reliability fixes
+
+### Saved FreeCAD documents
+
+Install the lightweight `fem/freecad_startup` directory as a symlink named
+`SCSModeling` in FreeCAD's user `Mod` directory (for this installation,
+`~/.local/share/FreeCAD/v26-3/Mod/`). Its `Init.py` makes the montage module
+loaded before document restoration; `InitGui.py` registers repair callbacks
+for older files. Set `SCS_MODELING_REPO` if the checkout moves. The FEM virtual
+environment must remain installed with the same Python major/minor as FreeCAD.
+Path discovery lives in the imported `scs_bootstrap` module: FreeCAD's addon
+loader can execute `Init.py` with its own `__file__`. Loading the callback module
+at addon startup also satisfies FreeCAD's document-restore import policy without
+changing the trusted-directory list. `test_freecad_startup.py` covers this loader
+behavior. A GUI save-copy/reopen check verifies callback and cache restoration.
+
+The generated per-tissue preview surfaces can contain non-manifold edges and
+produce “The mesh data structure has some defects” when FreeCAD restores them.
+These warnings concern the display surfaces, not a check of the external volume
+mesh or Elmer solution. Do not repair these surfaces automatically or interpret
+the absence of a solve error as a volume-mesh quality assessment.
+
+Normal File → Save persists currents, the solution path, and mesh cache path/
+parameters on the mesh-preview group. Closing and reopening the document then
+allows tree current edits followed by Recompute without opening a macro or
+running Elmer. The macros target the active document, including suffixed models.
+Mesh settings come from that document rather than another model's last run.
+
+Numerical arrays remain in `fem/out/lead_runs/<run>/`; they are **not embedded
+in the FCStd file**. Keep that directory alongside the checkout. A missing
+solution produces an explicit missing-cache message. This is persistence on
+the configured machine, not a self-contained portable FEM archive.
+
+Reuse still checks mesh/solution manifests and current labelled lead geometry.
+The comparison tolerates vertex renumbering, binary-STL rounding up to 0.00002 mm,
+and alternate triangulations of planar patches with identical boundaries.
+It rejects changed mesh settings, missing faces, nonplanar retriangulation, and
+meaningful lead movement. Original numerical cache manifests are not rewritten.
+
+Validation: `test_document_cache.py` and `test_montage_persistence.py`, plus a
+GUI save-copy/open/recompute test. The reopened object restored both proxies,
+matched the existing mesh, and reversed potential signs exactly after reversing
+currents, without modifying the solution NPZ.
+
+### Numerical workflow
+
+**The numerical tables below are historical benchmarks.** The default mesher
+now covers the union of all anatomical STLs and the selected lead, plus the
+configured margin. It no longer reproduces the old canal-only field. This
+larger model still needs a mesh-convergence study and independent solver checks
+before its fields are used for axon thresholds.
+
+- **SCS Mesh Generator:** mesh sizes, resource estimate, Generate/Abort Mesh,
+  tissue classification, dura-interface check and per-tissue preview.
+- **SCS Potential Visualizer:** requires a completed matching mesh; owns
+  Solve / Plot Field, background-tissue selection, cancellation and montage
+  currents. It does not launch a mesher. Changing only currents reuses the
+  accepted per-contact basis fields.
+- The local solve CPU allocation is capped at available **physical cores** (14
+  on the i9-13900H), respecting process affinity. Saved higher values are clamped.
+- Closing/reopening the visualizer preserves `SCS_Montage` currents, colour
+  clamp, background selection and verified solution path. With the panel closed,
+  edit its `ContactN_mA` properties in the tree, then recompute the object to
+  update the plots. No Elmer solve is launched by recompute. Geometry or solution
+  provenance mismatches are rejected; changing the background scenario can
+  require a separate solve. The cached NPZ and run inputs must remain on disk.
+- Potential plots include the selected run's contact and insulator surfaces,
+  alongside all eleven anatomical classes. Contacts and insulation are grouped
+  under Lead 1, Lead 2, … in the potential-field tree. Those lead materials
+  were already in the FEM solve. Adding these surfaces changes only plotting;
+  it does not invalidate a completed solution. The bulk-tissue colour clamp
+  also applies to the lead; `V_volts` retains the unclamped values.
+- Choose the potential legend style manually in FreeCAD's legend options.
+  The macro does not set the style automatically.
+- Size regions include all dura/sheaths, white/grey matter, epidural/CSF,
+  roots/DRG/vessels/sympathetic structures, bone/discs and lead hardware.
+  `H_Min` and `H_Max` clamp every region's target. They are in **mm**;
+  Ansys's displayed metres and its patch-independent refinement settings are
+  not interchangeable with these distance-field controls.
+- Run keys include anatomy, tissue map, mesh/classification code, dependency requirements,
+  lead geometry and mesh parameters. Separate SHA-256 manifests validate
+  completed artifacts. Old unmarked runs remain on disk but are not cache hits.
+  Lead STLs are stored in each run's own `lead/` directory.
+  Solver-code changes invalidate solutions without forcing a remesh.
+- Each worker preserves its stdout/stderr in `<run_dir>/<script>.log`, including
+  exit status. Silence is logged without killing a potentially healthy worker.
+  Abort remains available. An interrupted preview can resume from a matching
+  completed volume mesh.
+
+### Memory estimates and interactive display
+
+Meshing uses 80% of currently available RAM as its safety budget; the Job
+Manager's explicit memory setting controls the solve, not that mesh gate.
+The mesh estimate reports both available RAM and the usable budget and refreshes
+while the panel is visible. Closed documents release unused in-memory basis
+caches; saved NPZ solutions are retained. A memory estimate is not an OOM guarantee.
+
+Dense mesh and field picking can slow rotation/hover. Disable viewport picking
+for these display objects when inspecting dense results; tree visibility still
+works. Plot visibility does not change the numerical domain.
+
+### Historical: the 85% abort
+
+The September 15 10:38 kernel log records an OOM kill of the Python worker
+at 27,819,292 KiB anonymous resident memory. The saved mesh has **7,630,740
+nodes and 47,511,833 tetrahedra**. At 85%, the worker had finished classification
+and was about to inspect dura interfaces. The previous code materialized all
+tet faces, several sorted copies, and coordinates of all interior faces at once.
+Face matching is now partitioned on disk with bounded sort memory, and only
+relevant material interfaces need coordinate arrays. Classification also forms
+centroids in chunks. Temporary face partitions use `fem/out/`, because `/tmp`
+is RAM-backed on this workstation.
+
+Resource estimates now cover mesh **and preview**, compare against currently
+available RAM, and are checked again in the worker before meshing. A separate
+solve-memory check prevents starting the substantially larger FEM assembly on
+an oversized mesh. Full-anatomy count/RAM estimates are provisional, not a
+guarantee that every parameter set fits.
+
+### The 60% crash during edge meshing
+
+The September 15 18:38 failure was a segmentation fault during Gmsh 4.15.2
+edge meshing, without a corresponding OOM kill. It was reproduced with the
+saved Structured size field and 20 boundary-meshing threads (heap corruption).
+The mesher now uses one thread for edges and surfaces, retaining the selected
+thread count for HXT volume meshing. With those settings, a large reproduction
+using that same field completed with 18.65 million tetrahedra and 20 HXT threads.
+The exact native race has not been isolated upstream; this is a tested workaround.
+
+`fem/tests/test_gmsh_structured.py` exercises a real Structured field and HXT in
+an isolated process and checks positive element volumes and total box volume:
+
+```bash
+fem/.venv/bin/python -m unittest discover -s fem/tests -p test_gmsh_structured.py -v
+```
+
+### Result acceptance and scenario selection
+
+The solver checks the **true** relative residual for every contact and rejects
+nonfinite fields or residuals above **1e-6**. This is an explicit acceptance
+tolerance, separate from the requested CG target of **1e-11**. Both tolerances,
+contact IDs and measured residuals are stored in the solution; accepted fields
+are stored as float64. Disconnected active meshes fail with an actionable error
+instead of using one gauge for several independent components. The analytic
+verification command fails if **any** resolution fails.
+AMG setup uses a fixed random seed. CG continues in batches of 400 iterations
+when necessary, up to 1600, without relaxing the acceptance tolerance.
+
+`SCS_BACKGROUND=1 bash fem/run_all.sh` now consistently reads/writes
+`solution_bg.npz`, `solution_bg.vtu`, `mesh_tagged_bg.msh`, `field_grid_bg.npz`
+and `voltage_slices_bg.png`. It does not export the default scenario by mistake.
+Structured-grid and VTU exports support the actual number of basis fields.
+
+Run focused checks with:
+
+```bash
+fem/.venv/bin/python -m unittest discover -s fem/tests -v
+fem/.venv/bin/python fem/scripts/verify_solver.py
+```
+
+Still outstanding: anisotropic white matter, the ambiguous root “Middle” tissue
+assignment, anatomical resolution/convergence checks and NEURON coupling.
+No conductivity was changed in this reliability work.
+
+## Historical canal-only workflow and validation
 
 An independent second opinion on the RADO-SCS current-flow problem, built with
 open tools only (gmsh + a P1 finite-element solver in this repo), deliberately
@@ -10,10 +211,25 @@ informative.
 Everything in this directory is generated by scripts. Nothing was done by GUI
 clicking, and nothing outside `fem/` was modified.
 
+## Setup
+
+`requirements.txt`'s packages (scipy, gmsh, pyamg, meshio) have no wheels yet
+for the system Python (3.14 as of 2026-09), and `pip install --user` is
+refused outright (PEP 668, "externally managed environment") since this is
+Ubuntu's own Python, not a user one. Needs its own venv, once:
+
+    python3 -m venv fem/.venv
+    fem/.venv/bin/pip install -r fem/requirements.txt
+
+`fem/run_all.sh` picks up `fem/.venv` automatically if it exists (set `PY=`
+to override). No `sudo` needed anywhere in this.
+
     bash fem/run_all.sh
 
 **Result: a voltage field, solved and cross-checked. Peak |E| in white matter
-comes out at 11.5 kV/m against Khadka's published 12 kV/m. See RESULTS.**
+came out at 11.5 kV/m against Khadka's published 12 kV/m on the five-compartment
+model; 10.0 kV/m since all 240 anatomical bodies were added on 2026-09-15. See
+RESULTS, which opens with what that change moved.**
 
 ![voltage on a sagittal and axial slice through the lead](out/voltage_slices.png)
 
@@ -33,7 +249,7 @@ The options and how they scored:
 
 | option                                             | verdict                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Elmer `StatCurrentSolver` via FreeCAD FEM**      | The _right_ answer and still worth installing. FreeCAD ships a first-class wrapper for it (`src/Mod/Fem/femsolver/elmer/equations/staticcurrent_writer.py`) that emits `Equation = "Stat Current Solver"` with `Electric Conductivity` in S/m, a `Potential` Dirichlet BC in volts and a `Current Density` BC in A/m². That is this problem with no translation at all. **Elmer IS now installed** — Mohamed built it from source on 2026-09-11 (the PPA does not cover his Ubuntu release). See *Running Elmer* below. Not yet used for a solve; the P1 field remains the field of record until it is.                                                     |
+| **Elmer `StatCurrentSolver`**                       | The _right_ answer, run directly (not through FreeCAD's GUI) via `fem/scripts/crosscheck_elmer.py`: `ElmerGrid` converts `mesh_tagged.msh` to Elmer's native format, then `ElmerSolver` solves the real electric-conduction equation with no analogy at all — `Electric Conductivity` per body in S/m, a volumetric `Current Source` in A/m³ on the driven contacts, the same single-node gauge pin as the P1 solve. **Run 2026-09-11: agrees with the P1 field to 9.1e-3 V max, 0.0003 % of the 2667.6 V range.** See *Running Elmer* below and RESULTS.                                                     |
 | **CalculiX steady-state heat as an exact analogy** | Sound physics — ∇·(k∇T)=0 _is_ ∇·(σ∇V)=0 — and `ccx` is installed. Used here, but as a **cross-check only** (`fem/scripts/crosscheck_ccx.py`), never as the field of record. The reason is exactly the trap named in the brief: a `.frd` whose nodal field is called `NDTEMP` but means volts is a landmine for whoever reads it next. Note that it is _not_ rejected for the floating contacts — the high-conductivity-body treatment used here needs no special constraint and works in any solver, which the cross-check demonstrates by reproducing the same field. |
 | **P1 FEM in this repo**                            | Chosen. It solves the equation literally, in volts; it makes the floating contacts exact rather than approximate; it can hand the NEURON stage V at arbitrary points without a format round-trip; and — the actual point of this exercise — it shares no code with Ansys, so agreement between the two means something. Its risk is that it is new code, so it is verified against a closed-form solution before it is believed (see _Verification_).                                                                                                                   |
 
@@ -44,25 +260,44 @@ Installed at **`/opt/elmerfem`**, version **26.2**, built from source (the
 nothing has been added to a shell profile, so every session needs:
 
     export PATH=/opt/elmerfem/bin:$PATH
+    export ELMER_HOME=/opt/elmerfem
+    export ELMER_SOLVER_HOME=/opt/elmerfem/share/elmersolver
 
-That alone is sufficient — Elmer locates its own modules with no `ELMER_HOME`
-or `ELMER_SOLVER_HOME` set; verified by running a trivial `.sif`. Present and
-relevant:
+**Correction to what was believed here before actually running it: `PATH`
+alone is NOT sufficient.** Without `ELMER_SOLVER_HOME`, `ElmerSolver` fails
+immediately with `InitializeElementDescriptions: elements.def not found` —
+it does not fall back to a path relative to the binary. All three variables
+above are needed; `fem/scripts/crosscheck_elmer.py` sets them itself so no
+shell setup is required to reproduce the run. Present and relevant:
 
-    /opt/elmerfem/bin/ElmerSolver          serial
-    /opt/elmerfem/bin/ElmerSolver_mpi      parallel
+    /opt/elmerfem/bin/ElmerSolver          serial (symlinked to ElmerSolver_mpi)
     /opt/elmerfem/bin/ElmerGrid            mesh conversion
-    /opt/elmerfem/share/elmersolver/lib/StatCurrentSolve.so      <- the solver we want
-    /opt/elmerfem/share/elmersolver/lib/StatCurrentSolveVec.so
+    /opt/elmerfem/share/elmersolver/lib/StatCurrentSolve.so      <- the solver used
+    /opt/elmerfem/share/elmersolver/lib/elements.def             <- needs ELMER_SOLVER_HOME to be found
 
-FreeCAD's FEM workbench will not find it by itself: point
-**Edit → Preferences → FEM → Elmer** at `/opt/elmerfem/bin/ElmerSolver`, or
-drive it from a script with `PATH` set as above.
+FreeCAD's FEM workbench will not find Elmer by itself: point
+**Edit → Preferences → FEM → Elmer** at `/opt/elmerfem/bin/ElmerSolver` if
+driving it from the GUI. This repo does not — see below.
 
 `fem/out/mesh_tagged.msh` is written with one physical volume per tissue
-specifically so it can go straight into `ElmerGrid 14 2 mesh_tagged.msh` and
-then a `StatCurrentSolver` run, giving a **third** independent solve on the
-identical mesh.
+specifically so it can go straight into `ElmerGrid 14 2 mesh_tagged.msh`,
+which is exactly what `crosscheck_elmer.py` does before writing a `.sif` and
+running `ElmerSolver` — the **third** independent solve on the identical
+mesh. `ElmerGrid` reported "No lower dimensional elements present!" because
+`mesh_tagged.msh` carries only 3D physical volumes, no 2D physical surfaces —
+so `mesh.boundary` comes out empty and there is nothing to attach a surface
+BC to. That is not a problem here: the outer canal wall is insulating by
+Elmer's default (zero-flux Neumann, the same "do nothing" boundary the P1
+solve relies on), the driven contacts get a volumetric `Current Source`
+instead of a surface condition, and the gauge pin targets a node directly
+(`Target Nodes`) rather than a boundary. MUMPS (linked into this build) is
+used as a direct solver rather than iterative CG/ILU, given the ~5×10⁸
+conductivity contrast between the clamped metal and the lead insulation —
+Elmer's own timer reports 79 s for the solve (CPU time summed across MUMPS's
+internal threads), but wall time for the whole script — mesh conversion,
+assembly and solve — was 20 s. Reproduce with:
+
+    python fem/scripts/crosscheck_elmer.py
 
 ## Geometry, and what fought
 
@@ -215,6 +450,69 @@ this.
 A voltage field was obtained. Everything below is measured output from
 `fem/out/`, not an estimate.
 
+### 2026-09-15 — the model is no longer five compartments, and the numbers moved
+
+Everything in the rest of RESULTS describes the **five-compartment** model
+(epidural, dura, CSF, white, grey) that `fem/out/solution.npz` still holds, and
+that the CalculiX and Elmer cross-checks were run against. It is kept because
+that is what those committed files are.
+
+`config.TISSUE_BODIES` now classifies **all 240 anatomical STLs** in
+`STL_files/` into the eleven tissue classes `src/ansys/tissue_map.yaml` defines
+— vertebrae, discs, vasculature, nerve roots, DRG and the sympathetic chain
+included — each with its own conductivity read from that file. See
+*What is approximate* item 3. `bash fem/run_all.sh` therefore no longer
+reproduces the table below; it reproduces this one. Both were produced by the
+identical `assign_and_solve.main()`, on the identical `fem/out/mesh.npz`, and
+differ only in how many bodies the tets were classified against:
+
+| quantity                        | 5 compartments | all 11 tissue classes | change  |
+| ------------------------------- | -------------- | --------------------- | ------- |
+| active nodes                    | 289 136        | 301 693               | +4.3 %  |
+| active tets                     | 1 738 750      | 1 825 346             | +5.0 %  |
+| tets dropped as background      | 148 943        | 62 347                | −58 %   |
+| dura leak                       | 0.000 %        | **0.000 %**           | —       |
+| bipolar transfer impedance      | 2667.6 Ω       | **1737.1 Ω**          | −34.9 % |
+| peak \|E\| white matter (p99.9) | 11.51 kV/m     | 10.02 kV/m            | −12.9 % |
+| peak \|E\| grey matter (p99.9)  | 7.91 kV/m      | 7.04 kV/m             | −11.0 % |
+| peak surface voltage            | 1.37 kV        | 0.90 kV               | −34 %   |
+| classification noise            | 0.0021 %       | 0.0608 %              | ×29     |
+| field-grid in-mesh coverage     | 52.4 %         | 79.9 %                | —       |
+
+Tets by tissue, and what that says about whether a structure is really there:
+
+| tissue            | tets    | mm³      | note                                   |
+| ----------------- | ------- | -------- | -------------------------------------- |
+| epidural          | 468 782 | 8 958.3  |                                        |
+| dura              | 622 299 | 5 543.1  | main meninges **+ 24 root sheaths**     |
+| CSF               | 512 910 | 8 384.1  | main CSF + 8 DRG coatings              |
+| white             | 69 258  | 2 294.0  | unchanged                              |
+| grey              | 30 154  | 997.9    | unchanged                              |
+| vertebra          | 60 311  | 34 295.5 | was background; drives most of the −35 % |
+| root              | 22 651  | 496.8    |                                        |
+| blood             | 18 481  | 333.8    | radicular arteries, 0.66 S/m            |
+| disc              | 12 884  | 8 938.8  |                                        |
+| DRG               | **126** | 11.3     | **barely resolved** — see below         |
+| sympathetic chain | **0**   | 0        | **entirely outside the mesh box**       |
+
+The impedance drop is the expected direction and is larger than the ±16 % the
+`SCS_BACKGROUND=1` variant measured, for the same reason and more of it: the
+return current now has 34 295 mm³ of vertebral bone at 0.04 S/m, plus roots,
+discs and vessels, to spread into instead of stopping at the canal wall. The
+two published quantities move apart from Khadka rather than towards him (white
+matter 0.96 → 0.84 of the paper, surface voltage 1.14 → 0.75); that is not
+evidence the richer model is worse, because this is still isotropic white
+matter and a very coarsely resolved periphery — but it is the honest reading
+and it should not be dressed up. The CalculiX and Elmer cross-checks have
+**not** been re-run against this model.
+
+**The DRG and the sympathetic chain are present in name only.** The mesh box is
+the epidural envelope + 1 mm, so the sympathetic chain lies entirely outside it
+and gets zero tets; and the size field still grades on only four regions (dura,
+lead, white, canal), so a DRG that occupies 11 mm³ collects 126 tets and has
+5.6 % of them isolated from every face neighbour — noise, not anatomy. See
+*What is approximate* items 3 and 10.
+
 ### The mesh
 
 gmsh 4.15 (HXT parallel Delaunay), one box graded by four distance fields,
@@ -338,6 +636,37 @@ Two independently written FEM codes, same mesh, agreeing to two parts in a
 million. Combined with the analytic sphere test above, the solver is not the
 weak link in this pipeline; the geometry and the stripped compartment list are.
 
+### Historical independent cross-check — Elmer
+
+`fem/scripts/crosscheck_elmer.py` re-solves the identical mesh in **Elmer
+26.2's own `StatCurrentSolver`** — unlike the CalculiX check, this is the real
+electric-conduction equation in Elmer's own solver, not a physics analogy.
+MUMPS direct solve, 20 s wall time including mesh conversion:
+
+    nodes compared   289 136
+    max |ΔV|         9.12e-03 V   = 0.0003 % of the 2667.6 V range
+    rms |ΔV|         7.94e-03 V   = 0.0003 %
+    VERDICT          AGREE
+
+and, computing the field the same way `analyze.py` does (element-constant
+`E = -∇V`, p99.9 to avoid the singular contact edges):
+
+| quantity                   | Khadka 2020 | P1 (this repo) | Elmer      |
+| --------------------------- | ----------- | --------------- | ---------- |
+| peak \|E\| in white matter | 12 kV/m     | 11.51 kV/m      | 11.51 kV/m |
+| peak \|E\| in grey matter  | 4.2 kV/m    | 7.91 kV/m       | 7.91 kV/m  |
+| peak surface voltage       | 1.2 kV      | 1.37 kV         | 1.37 kV    |
+
+Three independently written codes — this repo's P1 solver, CalculiX via the
+heat analogy, and now Elmer's native electric-conduction solver — land on the
+same field to 4-5 significant figures. That is not "roughly similar," it is
+the same linear system solved three different ways. It closes the loop
+`HANDOFF.md` opened: Elmer was installed specifically to give a solve
+with no analogy and no shared code, and it reproduces the P1 field, not just
+its ballpark. The disagreement with Khadka's grey-matter number is real
+physics (isotropic white matter, see above and the anisotropy item in "What
+is approximate"), not a solver artifact — all three solvers agree on it.
+
 ### How much does stopping at the canal wall cost?
 
 The insulating boundary sits at the outer surface of the epidural body, so no
@@ -391,18 +720,37 @@ in chunk 5, before thresholds are computed on top of it.
     fem/README.md                  this file
     fem/run_all.sh                 reproduce everything
     fem/requirements.txt           pip deps (no root needed)
-    fem/scripts/config.py          paths, conductivities (from tissue_map.yaml), BC spec
+    fem/scripts/config.py          paths, the tissue set + classification priority and
+                                   every conductivity (all READ from tissue_map.yaml), BC spec
     fem/scripts/stlio.py           binary/ASCII STL reader + topology audit
     fem/scripts/inside.py          point-in-closed-mesh test, XY-grid accelerated
-    fem/scripts/build_mesh.py      gmsh graded tet mesh of the stripped domain
-    fem/scripts/assign_and_solve.py  tissue assignment, P1 assembly, 8 basis solves
+    fem/scripts/build_mesh.py      Gmsh graded tet mesh of the anatomical domain
+    fem/scripts/assign_and_solve.py tissue classification and Python regression reference
+    fem/scripts/element_batches.py bounded element calculations, reference assembly, matrix action
+    fem/scripts/elmer_backend.py   production Elmer/Hypre MPI solver and independent checks
+    fem/scripts/solve_resources.py local CPU/memory budget and process-tree monitor
+    fem/scripts/solve_lead.py       live-lead worker with provenance validation
+    fem/scripts/run_elmer.py        batch-workflow entry for the same Elmer backend
     fem/scripts/field.py           tet-mesh sampling at arbitrary points; grid export
     fem/scripts/export_results.py  VTU + tagged .msh + field_grid.npz
     fem/scripts/analyze.py         per-tissue |E| stats, Khadka comparison, noise
     fem/scripts/sample_example.py  worked handover to the NEURON stage
     fem/scripts/plot_slices.py     the figure
     fem/scripts/verify_solver.py   analytic sphere verification
-    fem/scripts/crosscheck_ccx.py  independent CalculiX second opinion
+    fem/scripts/crosscheck_ccx.py    independent CalculiX second opinion (heat analogy)
+    fem/scripts/crosscheck_elmer.py  independent Elmer third opinion (real electric-conduction solver)
+
+  interactive (FreeCAD) half -- see each file's own docstring
+    fem/scripts/SCS_Mesh_Generator.FCMacro       size-field dock: live cost estimate,
+                                                 Generate Mesh and per-tissue preview
+    fem/scripts/SCS_Potential_Visualizer.FCMacro montage dock: Plot Field on the live lead
+    fem/scripts/live_lead.py       finds/tessellates/fingerprints the lead in the document tree
+    fem/scripts/async_runner.py    one QProcess + stall watchdog + progress parser, shared
+    fem/scripts/mesh_preview.py    Stage 1 subprocess: build, classify, dura check, preview.vtp
+    fem/scripts/solve_lead.py      local Elmer/Hypre worker for the selected lead
+    fem/scripts/mesh_cost.py       predicts tets/RAM/time for a parameter set (calibrated)
+    fem/scripts/mesh_cost_server.py  keeps one CostModel alive and answers over a pipe
+    fem/scripts/scs_montage.py, scs_montage_feature.py  superposition + the document object
     fem/out/voltage_slices.png     THE FIGURE: sagittal + axial through the lead
     fem/out/solution.npz           nodes, tets, tissue, sigma, phi[8], V -- field of record
     fem/out/field_grid.npz         structured phi grid for NEURON (see field.py)
@@ -410,6 +758,7 @@ in chunk 5, before thresholds are computed on top of it.
     fem/out/mesh_tagged.msh        gmsh 2.2, one physical volume per tissue (for Elmer)
     fem/out/mesh.msh, mesh.npz     the raw mesh
     fem/out/sizefield.npz/.dat     cached size field -- delete to force a rebuild
+    fem/out/elmer/                 ElmerGrid mesh + case.sif + results/case_t0001.vtu
 
 ## What is approximate, in one list
 
@@ -420,24 +769,77 @@ in chunk 5, before thresholds are computed on top of it.
    Khadka's paper uses 0.1432 transverse / 0.6 longitudinal. For dorsal-column
    fibre recruitment this matters and should be added before any comparison with
    the paper's thresholds is taken seriously.
-3. **Stripped model.** Vertebrae, discs, vasculature, roots, rootlets, DRG and
-   the sympathetic chain are absent. Their omission is not neutral: the
-   radicular arteries in particular sit right beside the electrodes at 0.66 S/m.
-4. **The domain stops at the canal wall** with an insulating boundary. Real
-   return current spreads into bone and paraspinal soft tissue. Measured: this
-   choice is worth about 16 % on impedance and on the cord field — see _How much
-   does stopping at the canal wall cost?_ above. The two treatments bracket the
-   paper's published numbers, so it is bounded, not unknown.
-5. **Metal conductivity clamped** to 1e4 S/m as described above.
-6. **The model is truncated in z** by RADO itself at z = 59.4 and 164.9 mm.
+3. **~~Stripped model.~~ FIXED 2026-09-15 — but read the two caveats.** All 240
+   anatomical STLs are now classified, into the eleven tissue classes
+   `src/ansys/tissue_map.yaml` defines, each with that file's own conductivity
+   (`config.TISSUE_BODIES` / `config.ANATOMY_CLASS`). Vertebrae, discs,
+   vasculature, nerve roots, DRG and the sympathetic chain are in. What that
+   cost and what it changed is in RESULTS, first subsection. Two caveats:
+   - **The mesh box is still only the epidural envelope + 1 mm**, so structures
+     outside the canal are clipped or absent entirely — the sympathetic chain
+     gets **zero** tets. "Classified" is not the same as "meshed". TODO:
+     size the box to the union of the bodies actually being classified.
+   - **Only four regions drive element SIZE** — see item 10.
+4. **TODO, UNRESOLVED, and it sits right next to the electrodes: are the roots'
+   "…Middle…" bodies CSF or nerve?** RADO models each root as
+   Inside / Middle / OutsidMenging, mirroring the DRG's
+   in_middle / csf_coating / menging_coating triple. If that analogy holds, the
+   Middle bodies are CSF at 1.7 S/m, not nerve at 0.1432 S/m — a **12×**
+   conductivity difference in bodies a few millimetres from the contacts.
+   `src/ansys/tissue_map.yaml` raises this question itself and currently assigns
+   them `nerve_root`; `fem/scripts/config.py` follows tissue_map.yaml and
+   deliberately does **not** invent an answer. Settle it in tissue_map.yaml, by
+   measurement or by asking whoever built the CAD, not in the FEM code.
+5. **The domain stops at the canal wall** with an insulating boundary. Real
+   return current spreads into bone and paraspinal soft tissue. Measured on the
+   five-compartment model: this choice is worth about 16 % on impedance and on
+   the cord field — see _How much does stopping at the canal wall cost?_ above.
+   The two treatments bracket the paper's published numbers, so it is bounded,
+   not unknown. Item 3 has now put real vertebrae inside that boundary, which
+   moved the impedance by −35 %; the boundary itself has not moved.
+6. **Metal conductivity clamped** to 1e4 S/m as described above.
+7. **The model is truncated in z** by RADO itself at z = 59.4 and 164.9 mm.
    Contact 8 ends 10.6 mm from the rostral cut and the insulator 4.6 mm from it,
    so the rostral boundary is close enough to the lead to matter for contact 8.
    Contacts 3 and 5, the pair actually driven, are 30+ mm away from either cut.
-7. **The activating function is noisy far from the contacts.** A P1 field is
+8. **The activating function is noisy far from the contacts.** A P1 field is
    C⁰, so its second derivative is a set of jumps at element faces. Near the
    contacts this is invisible; 10–20 mm away it is not. See the warning at the
    end of RESULTS, and settle it before thresholds are computed on top of it.
-8. **The eight basis solves stopped on an iteration cap**, at 10⁻⁷ relative
+9. **The eight basis solves stopped on an iteration cap**, at 10⁻⁷ relative
    residual rather than the 10⁻¹¹ requested. That is well below the
    discretisation error, but it is not full convergence.
-9. **No axon model, no thresholds.** This stage produces the field only.
+10. **All tissues are classified; only FOUR regions drive element size.**
+    `build_mesh.py`'s size field is graded against exactly four hardcoded
+    surfaces — dura, lead, white matter, canal wall — and `config.ORDER` /
+    `classify_tets()` is a separate mechanism that decides which σ each
+    tetrahedron gets. So every tissue added in item 3 is meshed at whatever
+    ambient size those four regions happen to produce nearby, with no
+    refinement of its own. For a thin or small structure that means
+    under-resolution, or being missed outright by centroid classification when
+    the local element is bigger than the structure: measured on the
+    field-of-record mesh, the DRG gets 126 tets for 11 mm³ with 5.6 % of them
+    isolated from every neighbour, the radicular arteries 18 481 tets with
+    0.54 % isolated, against 0.02 % for white matter. The radicular arteries
+    sit right beside the electrodes at 0.66 S/m, so this is not academic.
+    TODO: per-tissue-group size control in tiers, replacing the four fixed
+    regions — Mohamed's own Ansys setup already scopes a meshing method per
+    Named Selection (Fine/Moderate/Coarse-grained Tissue, SCS Lead, Meninges),
+    each with its own max element size, and that is the shape to copy.
+11. **No axon model, no thresholds.** This stage produces the field only.
+
+## Multi-lead FAST-style poster workflow
+
+The macros now discover all Lead Designer leads in the active document, preserve
+lead/contact identity, and support matched total-current scaling. The Potential
+Visualizer includes editable waveform frequency (90 Hz default), phase width,
+assumed gap, phase snapshots, and a self-contained animation/PNG export viewer.
+See [poster workflow](../docs/poster_fast_workflow.md) for instructions and limits.
+
+## SCS Job Manager
+
+Open `SCS_JobManager.FCMacro` in FreeCAD to configure local mesh threads and
+Elmer resources and monitor jobs across models. Updated modeling macros use
+these shared execution profiles. HPC profile setup and a read-only SSH probe
+are included; remote submission is not enabled yet. See
+[Job Manager workflow and limitations](../docs/job_manager.md).

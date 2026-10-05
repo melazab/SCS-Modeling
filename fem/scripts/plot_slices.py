@@ -10,6 +10,7 @@ from matplotlib.colors import SymLogNorm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import config as C
+from artifacts import result_path
 from field import TetField
 
 # Outline colours for the tissue boundaries drawn over the field. Chosen for
@@ -40,7 +41,7 @@ def slab(f, lab_vals, fixed_axis, fixed, u_rng, v_rng, n=420):
 
 
 def main():
-    d = np.load(os.path.join(C.OUT, "solution.npz"), allow_pickle=True)
+    d = np.load(result_path("solution.npz"), allow_pickle=True)
     order = list(d["order"])
     f = TetField(d["nodes"], d["tets"], d["V"].astype(np.float64)[None, :])
     lab = d["label"]
@@ -105,7 +106,7 @@ def main():
     cb.set_label("potential  V  (volts, bipolar 1 A: +1 A c3, −1 A c5)")
     fig.suptitle("RADO-SCS stripped model — gmsh + P1 FEM, div(σ∇V)=0, "
                  "bipolar 1 A dorsal epidural", fontsize=11)
-    out = os.path.join(C.OUT, "voltage_slices.png")
+    out = result_path("voltage_slices.png")
     fig.savefig(out, dpi=155, bbox_inches="tight")
     print("wrote", out)
 

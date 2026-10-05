@@ -1,5 +1,11 @@
 # Ansys on CWRU HPC (Pioneer): training notes for the NBF_RADO-SCS model
 
+> Historical ANSYS/HPC investigation. As of September 30, 2026, the poster uses
+> completed **local FreeCAD/Gmsh/Elmer** dorsal and ventral runs. Current methods,
+> timings and limitations are in [poster_fast_workflow.md](poster_fast_workflow.md).
+> The run outcomes below remain historical evidence, not current Elmer status.
+
+
 ## Read this first (summary of the 2026-09-08/09 overnight session)
 
 **What you have now**
