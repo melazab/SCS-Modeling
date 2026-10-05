@@ -1,0 +1,1187 @@
+"""Generate and inspect a mesh for the live FreeCAD lead.
+
+Size controls are in mm and apply to the entire anatomical domain. The
+background worker meshes, classifies, checks the dura barrier and publishes a
+per-tissue preview. SCS Potential Visualizer owns electrical solving.
+Completed artifacts are reused only with matching provenance. Re-running this
+macro reloads Python helpers; it never saves the FreeCAD document.
+"""
+import json
+import os
+import signal
+import sys
+
+import FreeCAD
+import FreeCADGui
+
+try:
+    from PySide import QtCore, QtGui, QtWidgets
+except ImportError:                                     # pragma: no cover
+    try:
+        from PySide6 import QtCore, QtGui, QtWidgets
+    except ImportError:
+        from PySide2 import QtCore, QtGui, QtWidgets
+
+# Fixed, not derived from __file__: this macro is routinely copied or
+# symlinked into FreeCAD's Macro directory (~/.local/share/FreeCAD/v26-3/
+# Macro/) to appear in the Macro menu/toolbar, and __file__ then points
+# THERE, not at fem/scripts/ -- deriving the repo root from it silently
+# computed a bogus venv path the one time this was tried from a copy. A
+# symlink wouldn't have helped either: os.path.abspath() doesn't resolve
+# symlinks. NEVER hard-link this file into the Macro directory -- always a
+# symlink (`ln -s`); a hard link silently desyncs from any editor that saves
+# by writing a new file and renaming it over the old one.
+REPO_ROOT = "/home/mohamed/Projects/SCS-Modeling"
+FEM_SCRIPTS_DIR = os.path.join(REPO_ROOT, "fem", "scripts")
+sys.path.insert(0, FEM_SCRIPTS_DIR)
+import async_runner
+import build_mesh
+import config as C
+import live_lead
+import artifacts
+import scs_job_service
+
+# 2026-09-15: this file used to import check_tissue_map.parse_tissue_map to
+# colour the preview per tissue. The preview is a single flat colour now
+# (see the top of this docstring), so that import is gone from here.
+# config.py still reads tissue_map.yaml -- through that same parser -- for
+# the tissue set, the priority order and every conductivity.
+
+# Reloaded on every run, same reason src/freecad/lead_designer.FCMacro's own
+# load_builder() reloads build_lead_config: FreeCAD keeps these modules in
+# sys.modules across macro re-runs (and across OTHER macros importing the
+# same fem/scripts/ modules earlier in the same session), so editing
+# config.py/build_mesh.py/live_lead.py and re-running this macro would
+# otherwise keep running the OLD code with no error.
+import importlib
+for _m in (C, artifacts, build_mesh, live_lead, async_runner):
+    try:
+        importlib.reload(_m)
+    except Exception:
+        pass
+
+FEM_VENV_PY = os.path.join(REPO_ROOT, "fem", ".venv", "bin", "python")
+MESH_PREVIEW_SCRIPT = os.path.join(FEM_SCRIPTS_DIR, "mesh_preview.py")
+COST_SERVER_SCRIPT = os.path.join(FEM_SCRIPTS_DIR, "mesh_cost_server.py")
+
+PREFERRED_DOC = "NBF_RADO_SCS"
+
+PREVIEW_GROUP_NAME = "SCS_MeshPreviewGroup"
+PREVIEW_GROUP_LABEL = "SCS mesh preview (by tissue)"
+PREVIEW_PREFIX = "SCS_MeshPreview_"        # + <order name> + "_mesh"
+LEGACY_PIPE_NAME = "SCS_MeshPreview"       # the single fused preview mesh, superseded
+LEGACY_PARAMS_NAME = "SCS_MeshParams"      # pre-dock version's doc object; cleaned up on open
+OBJECT_NAME = "SCS_MeshGeneratorDock"      # QDockWidget identity, so re-running finds it
+
+# Where the cost estimator's copy of the live lead's STLs goes. NOT
+# live_lead.LIVE_LEAD_DIR: that one is read by a running mesh_preview.py
+# subprocess (build_mesh reads the lead STLs up front, classify_tets reads
+# them again later), so rewriting it from the poll timer while a build is in
+# flight could change that build's own inputs halfway through.
+COST_LEAD_DIR = os.path.join(C.LEAD_RUNS, "_cost")
+
+# mesh_cost.describe()'s severity -> an async_runner.STATUS_COLORS level.
+# Deliberately reusing the existing palette rather than inventing a third
+# set of greens and reds for this one label.
+COST_SEVERITY_LEVEL = {"ok": "done", "warn": "gated", "danger": "failed"}
+
+LIVE_LEAD_POLL_MS = 1500   # cheap name-scan only -- see correction section above
+
+# (region key in build_mesh.DEFAULT_PARAMS FIELDS) -> (property label, default, tooltip)
+REGION_SPINS = [
+    ("dura",  "Dura Near",  0.25,
+     "Element size right at the dura surface -- the ~0.5mm-thick barrier "
+     "between epidural fat and CSF. This is what sets whether the dura-leak "
+     "check below comes back clean."),
+    ("lead",  "Lead Near",  0.30,
+     "Element size right at the CURRENT lead's own surface (contacts + "
+     "insulator)."),
+    ("white", "White Near", 0.50,
+     "Element size right at the white-matter surface (the cord)."),
+    ("canal", "Canal Near", 0.70,
+     "Element size right at the epidural/canal-wall surface."),    ("fine", "Roots / DRG / vessels", 0.30,
+     "Target size at nerve roots, ganglia, vessels and sympathetic structures, mm."),
+    ("coarse", "Bone / discs", 3.0,
+     "Target size at vertebrae and discs, mm; capped by H_Max."),
+
+]
+
+def tissue_tree_label(doc, order_name):
+    """The human-readable name this tissue already goes by in the tree.
+
+    Read off the live `TissueGroup_<class>` object that
+    src/freecad/make_tissue_groups.py created ("01 Vertebrae",
+    "04 Epidural space", "09 Nerve roots", ...) rather than restated here, so
+    the preview's per-tissue meshes are labelled exactly like the geometry
+    they mirror and cannot drift from it if those groups are ever renumbered.
+    Falls back to the tissue_map class name if that group is not in this
+    document."""
+    if order_name.startswith("contact"):
+        info = live_lead.find_live_lead(doc)
+        i = int(order_name[len('contact'):])
+        if info['status'] == live_lead.LiveLeadStatus.OK and i in info['contacts']:
+            return live_lead.contact_label(info, i)
+        return "Lead contact %d" % i
+    if order_name == "insulator":
+        return "Lead insulation"
+    cls = C.ORDER_TO_TISSUE_CLASS.get(order_name)
+    if cls:
+        grp = doc.getObject("TissueGroup_" + cls)
+        if grp is not None and grp.Label:
+            return grp.Label
+        return cls.replace("_", " ").capitalize()
+    return order_name
+
+THREAD_ENV_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+# One flat colour for every preview mesh. Not a tissue colour and not
+# derived from tissue_map.yaml -- see the top of this file's docstring:
+# tissue identity is carried by the tree row you toggle, not by a hue.
+PREVIEW_RGB = (1.0, 0.0, 1.0)   # magenta, Mohamed's own example
+
+
+def get_target_document():
+    if FreeCAD.ActiveDocument is not None:
+        return FreeCAD.ActiveDocument
+    if PREFERRED_DOC in FreeCAD.listDocuments():
+        return FreeCAD.getDocument(PREFERRED_DOC)
+    if FreeCAD.ActiveDocument is not None:
+        print("'%s' not open; using active document '%s' instead"
+              % (PREFERRED_DOC, FreeCAD.ActiveDocument.Name))
+        return FreeCAD.ActiveDocument
+    print("no document open; creating a new one")
+    return FreeCAD.newDocument("MeshGeneratorPreview")
+
+
+def cleanup_legacy_objects(doc):
+    """Remove this macro's own superseded document objects. Both are objects
+    THIS pipeline created, so they are this macro's to delete; nothing under
+    the "01"-"12" tissue groups or the Lead Designer's objects is touched.
+
+    SCS_MeshParams -- the pre-dock version kept an App::FeaturePython as a
+    property/report holder. That state lives in the Qt widget now (matching
+    lead_designer.FCMacro, which creates no data object for its parameters).
+
+    SCS_MeshPreview -- the single fused preview mesh, superseded 2026-09-15
+    by SCS_MeshPreviewGroup's one-Mesh::Feature-per-tissue layout. Leaving it
+    would show the whole preview twice, with the old copy frozen at whatever
+    the last run before this change produced."""
+    for name in (LEGACY_PARAMS_NAME, LEGACY_PIPE_NAME):
+        old = doc.getObject(name)
+        if old is not None:
+            doc.removeObject(old.Name)
+
+
+# ---------------------------------------------------------------------------
+# Tissue colours -- read once per process, from tissue_map.yaml, via the
+# repo's own dependency-free parser. Cached per `order` tuple (not just
+# once, ever): a live lead's own order (config.order_for(contact_stl)) has
+# an N-contact-long block that differs between leads of different contact
+# counts, so the SAME positional tissue_id (e.g. 5) means "grey matter" for
+# one lead's order and "contact6" for another's -- see mesh_preview.py's
+# report["order"], which is what tissue_ids' positions are actually indices
+# into for THAT run.
+# ---------------------------------------------------------------------------
+def flat_material(rgb=PREVIEW_RGB):
+    """One FLAT, MATTE FreeCAD.Material of colour `rgb`.
+
+    The zero specular and zero shininess are not cosmetic preference and
+    must not be dropped: FreeCAD.Material()'s defaults are a near-maximum
+    Shininess (~0.9) and a bright grey SpecularColor, which on a mesh of
+    ~100k tiny facets throws a sharp glint off some facet at every viewing
+    angle. Found live 2026-09-14 (Mohamed: "is the mesh coloring off?") --
+    the diffuse colours were correct the whole time, read back off the
+    ViewObject to prove it, but the specular highlights visually drowned
+    them into plain grey/silver glitter. That is a legibility problem with
+    the material, not with the palette, so it survives the 2026-09-15
+    decision to stop colouring the preview by tissue at all."""
+    m = FreeCAD.Material()
+    m.DiffuseColor = rgb
+    m.AmbientColor = rgb
+    m.SpecularColor = (0.0, 0.0, 0.0, 1.0)
+    m.Shininess = 0.0
+    return m
+
+
+def _read_preview_vtp(vtp_path):
+    """(points (n,3), triangles (m,3), tissue_id (m,)) from mesh_preview.py's
+    preview.vtp."""
+    import vtk
+    from vtk.util import numpy_support as vnp
+
+    reader = vtk.vtkXMLPolyDataReader()
+    reader.SetFileName(vtp_path)
+    reader.Update()
+    poly = reader.GetOutput()
+
+    pts = vnp.vtk_to_numpy(poly.GetPoints().GetData())
+    polys = poly.GetPolys()
+    conn = vnp.vtk_to_numpy(polys.GetConnectivityArray())
+    offsets = vnp.vtk_to_numpy(polys.GetOffsetsArray())
+    n_facets = len(offsets) - 1
+    tri_sizes = offsets[1:] - offsets[:-1]
+    if n_facets and not (tri_sizes == 3).all():
+        raise RuntimeError("SCS Mesh Generator: %s has non-triangular facets -- "
+                            "the preview loader assumes triangles" % vtp_path)
+    tris = conn.reshape(n_facets, 3)
+
+    tissue_id = vnp.vtk_to_numpy(poly.GetCellData().GetArray("tissue_id"))
+    if tissue_id is None or len(tissue_id) != n_facets:
+        raise RuntimeError("SCS Mesh Generator: %s has no per-facet 'tissue_id' "
+                            "cell array -- was this written by a different "
+                            "mesh_preview.py?" % vtp_path)
+    return pts, tris, tissue_id
+
+
+def preview_object_name(order_name):
+    """Internal object Name for one tissue's preview mesh. The trailing
+    "_mesh" is load-bearing, not decoration: FreeCAD's name uniquifier
+    rewrites a requested Name that ENDS IN DIGITS (so "..._contact3" could
+    silently come back as "..._contact4" and break lookup-by-name reuse on
+    the next run). Ending every name in a letter sidesteps that entirely."""
+    return PREVIEW_PREFIX + order_name + "_mesh"
+
+
+def load_preview_by_tissue(doc, vtp_path, order):
+    """Read mesh_preview.py's .vtp and show it as a GROUP of per-tissue
+    `Mesh::Feature`s, one per tissue actually present, each independently
+    visibility-toggleable in the tree -- matching how the anatomy itself is
+    grouped ("01 Vertebrae", "04 Epidural space", ...). Replaces the single
+    fused SCS_MeshPreview mesh this macro used to build. All of them are one
+    flat PREVIEW_RGB; the tree row is what identifies the tissue.
+
+    `order` must be THIS run's own report["order"] -- callers pass it
+    through from the mesh_report.json/finished_ok report, never config.ORDER
+    directly, so an N-contact live lead's preview is labelled correctly for
+    whatever N it actually has.
+
+    EXISTING OBJECTS ARE REUSED BY NAME, not deleted and recreated: a
+    Mesh::Feature's Visibility is exactly the state Mohamed has just been
+    toggling, and rebuilding from scratch would silently reset every toggle
+    on each Generate Mesh. Tissues that are no longer present in the new
+    preview ARE removed, so the group never accumulates stale members.
+    Returns (group, {order name: object})."""
+    import Mesh
+
+    pts, tris, tissue_id = _read_preview_vtp(vtp_path)
+
+    grp = doc.getObject(PREVIEW_GROUP_NAME)
+    if grp is not None and grp.TypeId != "App::DocumentObjectGroup":
+        doc.removeObject(grp.Name)
+        grp = None
+    if grp is None:
+        grp = doc.addObject("App::DocumentObjectGroup", PREVIEW_GROUP_NAME)
+    grp.Label = PREVIEW_GROUP_LABEL
+
+    present = sorted({int(t) for t in tissue_id})
+    made = {}
+    for tid in present:
+        if not (0 <= tid < len(order)):
+            print("SCS Mesh Generator: WARNING -- preview.vtp carries tissue_id "
+                  "%d, outside this run's %d-name order; skipping those facets."
+                  % (tid, len(order)))
+            continue
+        name = order[tid]
+        sel = tris[tissue_id == tid]
+        flat = []
+        for a, b, c in sel:
+            flat.append(FreeCAD.Vector(*pts[a]))
+            flat.append(FreeCAD.Vector(*pts[b]))
+            flat.append(FreeCAD.Vector(*pts[c]))
+        mesh = Mesh.Mesh(flat)
+
+        obj_name = preview_object_name(name)
+        obj = doc.getObject(obj_name)
+        if obj is not None and obj.TypeId != "Mesh::Feature":
+            doc.removeObject(obj.Name)
+            obj = None
+        if obj is None:
+            obj = doc.addObject("Mesh::Feature", obj_name)
+            obj.ViewObject.Visibility = True
+        obj.Label = "%s (mesh)" % tissue_tree_label(doc, name)
+        obj.Mesh = mesh
+        # ONE material for the whole object. The fused preview needed a
+        # per-facet ShapeAppearance list (one Material per facet) because it
+        # mixed every tissue into a single mesh; splitting by tissue removes
+        # that need entirely. The flat/matte settings are still required --
+        # see flat_material().
+        obj.ViewObject.ShapeAppearance = [flat_material()]
+        if obj not in grp.Group:
+            grp.addObject(obj)
+        made[name] = obj
+
+    # drop members for tissues this preview no longer contains
+    for obj in list(grp.Group):
+        if obj.Name.startswith(PREVIEW_PREFIX) and obj not in made.values():
+            doc.removeObject(obj.Name)
+
+    grp.ViewObject.Visibility = True
+    doc.recompute(list(made.values()) + [grp])
+    return grp, made
+
+
+class CostEstimator(QtCore.QObject):
+    """Owns one long-lived `mesh_cost_server.py` process and turns spinbox
+    values into "3.5 M tets, ~519-864 MB RAM, ~3 min meshing" + a severity.
+
+    Lifecycle, driven entirely by the panel:
+      * `rebuild(lead_dir)` (re)starts the child for one lead's geometry.
+        The child spends ~5 s building its CostModel -- IN ITS OWN PROCESS,
+        so the GUI thread never blocks -- then prints a `ready` line.
+        `state` is "starting" until then.
+      * `request(params)` writes one JSON line and returns; the reply comes
+        back on `readyReadStandardOutput` and is emitted as `result`.
+      * Replies carry the request id they answer. Only the newest id is
+        accepted, so a burst of spinbox changes cannot paint a stale
+        estimate over a newer one.
+      * `stop()` closes stdin, which makes the child exit its read loop.
+
+    A failure here is NEVER fatal and never blocks a build: if fem/.venv is
+    missing or the child dies, `state` goes to "unavailable", the panel says
+    so in one line, and Generate Mesh stays enabled. Only a real "danger"
+    estimate gates the button -- an ABSENT estimate must not.
+    """
+    result = QtCore.Signal(str, str)     # severity, text
+    state_changed = QtCore.Signal(str)   # "idle"|"starting"|"ready"|"unavailable"
+
+    def __init__(self, parent):
+        super(CostEstimator, self).__init__(parent)
+        self.proc = None
+        self.state = "idle"
+        self.lead_dir = None
+        self._child_pid = None      # the child's OWN os.getpid(); see stop()
+        self._buf = ""
+        self._next_id = 0
+        self._want_id = None
+        self._pending_params = None
+
+    def _set_state(self, s):
+        self.state = s
+        self.state_changed.emit(s)
+
+    @staticmethod
+    def server_pids(exclude=(), lead_dir=None):
+        """Every mesh_cost_server.py process that is a CHILD OF THIS FreeCAD
+        process, read straight out of /proc.
+
+        There should only ever be one, and it should be the one this object
+        holds a QProcess for. In practice it is not that simple: re-running
+        the macro replaces the dock's widget but leaves the OLD panel object
+        alive in the interpreter, and a panel that is torn down while its
+        QProcess bookkeeping has already been cleared leaves a ~100 MB
+        server sitting on stdin forever, parented to FreeCAD, with nothing
+        watching it. Three of those were found stacked up during this
+        session's own live testing.
+
+        Scoping to ppid == os.getpid() is what keeps this safe: it can only
+        ever match a server THIS FreeCAD session started, never one belonging
+        to a terminal, another FreeCAD, or another user."""
+        me = os.getpid()
+        target = COST_SERVER_SCRIPT.encode()
+        found = []
+        try:
+            entries = os.listdir("/proc")
+        except OSError:                                     # pragma: no cover
+            return found
+        for e in entries:
+            if not e.isdigit():
+                continue
+            pid = int(e)
+            if pid == me or pid in exclude:
+                continue
+            try:
+                with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                    cmd = fh.read().split(b"\0")
+                with open("/proc/%d/stat" % pid, "rb") as fh:
+                    ppid = int(fh.read().rsplit(b")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue                                    # process went away
+            if ppid == me and target in cmd and (lead_dir is None or lead_dir.encode() in cmd):
+                found.append(pid)
+        return found
+
+    def reap_orphan_servers(self, exclude=()):
+        """Reap only this document's estimator, preserving other documents' jobs."""
+        killed = []
+        if self.lead_dir is None:
+            return killed
+        for pid in self.server_pids(exclude=exclude, lead_dir=self.lead_dir):
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed.append(pid)
+            except OSError:
+                pass
+        if killed:
+            print("SCS Mesh Generator: reaped %d orphaned mesh_cost_server "
+                  "process(es): %s" % (len(killed), killed))
+        return killed
+
+    def rebuild(self, lead_dir):
+        """Start (or restart) the child for `lead_dir`'s geometry. Called
+        only when the live lead's own fingerprint changes -- the CostModel
+        depends on geometry and the estimator's sampling grid, never on the
+        size-field parameters, which is exactly what makes a 1.5 ms
+        per-spinbox re-estimate possible."""
+        self.stop()
+        # Nothing of ours may still be running at this point; anything that
+        # is belongs to a torn-down panel. See reap_orphan_servers().
+        self.reap_orphan_servers()
+        if not os.path.isfile(FEM_VENV_PY):
+            self._set_state("unavailable")
+            return
+        self.lead_dir = lead_dir
+        self._buf = ""
+        self._want_id = None
+        self._child_pid = None
+        proc = QtCore.QProcess(self)
+        proc.setProgram(FEM_VENV_PY)
+        proc.setArguments([COST_SERVER_SCRIPT, lead_dir or "-"])
+        proc.readyReadStandardOutput.connect(self._on_stdout)
+        proc.errorOccurred.connect(lambda *_: self._set_state("unavailable"))
+        proc.finished.connect(self._on_finished)
+        self.proc = proc
+        # start() BEFORE _set_state(): the state_changed handler asks for an
+        # estimate straight away, and QProcess.state() is still NotRunning
+        # until start() has been called. Caught live 2026-09-15 with the real
+        # panel -- the panel sat on "estimating..." forever after the child
+        # came ready, because that very first request was dropped by
+        # request()'s is_running() check and so was never queued as pending.
+        proc.start()
+        self._set_state("starting")
+
+    def stop(self, reap=True):
+        """Shut the child down and VERIFY AGAINST THE OS that it is gone.
+
+        The polite path is QUIT + closeWriteChannel (EOF ends the child's
+        read loop), then SIGKILL if it has not gone in 2 s -- a child that
+        is still in the ~5 s CostModel build is not reading stdin yet and
+        will not see either, so the kill is the normal case there, not an
+        exception.
+
+        The pid check afterwards is not paranoia. This repo has already
+        been bitten by a FreeCAD-spawned subprocess running away with
+        nothing watching it, and on 2026-09-15 a mesh_cost_server child was
+        found still alive, parented to FreeCAD, after a stop() that had
+        reported success -- QProcess's own state()/processId() bookkeeping
+        did not match the process table (processId() named a pid that did
+        not exist at all). So: trust `ps`, not QProcess. `_pid_alive` is
+        async_runner's, deliberately reused rather than rewritten.
+
+        `reap` also sweeps any estimator server this FreeCAD process owns
+        but this object has lost track of -- the case where `self.proc` is
+        already None while a real child is still alive, which is exactly how
+        a torn-down panel leaks one. Pass reap=False only if another
+        estimator in this process is genuinely meant to keep running."""
+        if self.proc is None:
+            if reap:
+                self.reap_orphan_servers()
+            self._set_state("idle")
+            return
+        proc, self.proc = self.proc, None
+        pids = {p for p in (proc.processId(), self._child_pid) if p}
+        try:
+            if proc.state() != QtCore.QProcess.NotRunning:
+                proc.write(b"QUIT\n")
+                proc.closeWriteChannel()
+                if not proc.waitForFinished(2000):
+                    proc.kill()
+                    proc.waitForFinished(2000)
+        except Exception as exc:                            # pragma: no cover
+            # Never silently: a swallowed exception here is exactly how a
+            # child gets orphaned with the UI believing it stopped it.
+            print("SCS Mesh Generator: cost estimator shutdown raised %r -- "
+                  "falling through to the pid check" % (exc,))
+        for pid in pids:
+            if async_runner.AsyncProcessRunner._pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    print("SCS Mesh Generator: cost estimator pid %d survived "
+                          "QProcess shutdown; SIGKILLed it directly." % pid)
+                except OSError as exc:
+                    print("SCS Mesh Generator: cost estimator pid %d is still "
+                          "alive and could not be killed (%s) -- check by hand "
+                          "(ps -p %d)" % (pid, exc, pid))
+        if reap:
+            self.reap_orphan_servers()
+        self._child_pid = None
+        self._set_state("idle")
+
+    def is_running(self):
+        return self.proc is not None and self.proc.state() != QtCore.QProcess.NotRunning
+
+    def request(self, params):
+        """Ask for an estimate of `params` (a build_mesh.DEFAULT_PARAMS-shaped
+        dict). Held until the child is ready if it is still building its
+        model, so neither the opening request nor a spinbox change made
+        during those ~5 seconds is simply lost.
+
+        The "still starting" test is `self.state != "ready"`, NOT
+        `not self.is_running()`: a child that has been start()ed but has not
+        yet been scheduled by Qt reads as NotRunning, and treating that as
+        "no child, drop the request" is exactly the bug found live on
+        2026-09-15 (see rebuild())."""
+        if self.proc is None or self.state == "unavailable":
+            return
+        if self.state != "ready":
+            self._pending_params = params
+            return
+        if not self.is_running():
+            return
+        self._next_id += 1
+        self._want_id = self._next_id
+        req = dict(id=self._next_id, H_MIN=params["H_MIN"], H_MAX=params["H_MAX"],
+                   FIELDS=[list(f) for f in params["FIELDS"]])
+        self.proc.write((json.dumps(req) + "\n").encode("utf-8"))
+
+    def _on_finished(self, *_):
+        if self.proc is not None:
+            self._set_state("unavailable")
+
+    def _on_stdout(self):
+        if self.proc is None:
+            return
+        self._buf += bytes(self.proc.readAllStandardOutput()).decode("utf-8", "replace")
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                print("SCS Mesh Generator: mesh_cost_server said %r" % line[:200])
+                continue
+            if msg.get("ready"):
+                self._child_pid = msg.get("pid")
+                self._set_state("ready")
+                if self._pending_params is not None:
+                    p, self._pending_params = self._pending_params, None
+                    self.request(p)
+                continue
+            if msg.get("error"):
+                print("SCS Mesh Generator: cost estimate failed: %s" % msg["error"])
+                continue
+            if self._want_id is not None and msg.get("id") != self._want_id:
+                continue      # a superseded request's reply
+            self.result.emit(msg.get("sev", "ok"), msg.get("text", ""))
+
+
+def mono_textedit(min_height=90):
+    w = QtWidgets.QTextEdit()
+    w.setReadOnly(True)
+    w.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
+    w.setMinimumHeight(min_height)
+    mono = QtGui.QFont("monospace")
+    mono.setStyleHint(QtGui.QFont.TypeWriter)
+    w.setFont(mono)
+    return w
+
+
+class MeshGeneratorPanel(QtWidgets.QWidget):
+    """Mesh controls, resource estimate and per-tissue preview."""
+
+    def __init__(self, doc):
+        super(MeshGeneratorPanel, self).__init__()
+        self.doc = doc
+        self.mesh_state = "idle"
+        self.job_owner = None
+        self._cost_lead_dir = os.path.join(COST_LEAD_DIR, doc.Name)
+        self._live_lead_info = dict(status=live_lead.LiveLeadStatus.NONE, reason="")
+        self._cost_fp = None          # lead fingerprint the CostModel was built for
+        self._cost_sev = None         # None = no estimate; never blocks the build
+        self._cost_text = ""
+        self._syncing_cost = False    # see sync_cost_model()'s re-entrancy note
+        self._geom_fp = None
+        self._lead_arrays = None
+
+        self.cost = CostEstimator(self)
+        self.cost.result.connect(self.on_cost_result)
+        self.cost.state_changed.connect(self.on_cost_state)
+
+        self.mesh_runner = async_runner.AsyncProcessRunner(
+            self, FEM_VENV_PY, MESH_PREVIEW_SCRIPT, "MESH_PREVIEW_JSON ")
+        self.mesh_runner.tick.connect(self.on_mesh_tick)
+        self.mesh_runner.progress.connect(self._set_mesh_progress)
+        self.mesh_runner.finished_ok.connect(self.on_mesh_finished)
+        self.mesh_runner.failed.connect(self.on_mesh_failed)
+        self.mesh_runner.aborted.connect(self.on_mesh_aborted)
+
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(6)
+
+        # -- live lead status (replaces the old combo box + Refresh) -------
+        self.lead_status = QtWidgets.QLabel("")
+        self.lead_status.setAlignment(QtCore.Qt.AlignCenter)
+        self.lead_status.setMinimumHeight(24)
+        self.lead_status.setWordWrap(True)
+        self.lead_status.setToolTip(
+            "The leads currently in this document's tree (placed by Lead "
+            "Designer), found by object name -- no export, no picker. "
+            "Rechecked automatically every %.1fs." % (LIVE_LEAD_POLL_MS / 1000.0))
+        outer.addWidget(self.lead_status)
+
+        # -- size field -------------------------------------------------
+        size_box = QtWidgets.QGroupBox("Mesh size field (mm)")
+        form = QtWidgets.QFormLayout(size_box)
+        form.setLabelAlignment(QtCore.Qt.AlignRight)
+
+        self.h_min = self.spin(
+            "Lower clamp on all region sizes, mm. A smaller Near value is raised to this limit.", 0.05, 2.0, 0.05, 2,
+            build_mesh.DEFAULT_PARAMS["H_MIN"])
+        form.addRow("H_Min", self.h_min)
+        self.h_max = self.spin(
+            "Upper clamp on every region size, mm. Reducing this refines the entire anatomical box.",
+            0.5, 10.0, 0.25, 2, build_mesh.DEFAULT_PARAMS["H_MAX"])
+        form.addRow("H_Max", self.h_max)
+
+        self._region_defaults = {name: (near, plateau, growth)
+                                 for name, near, plateau, growth in build_mesh.DEFAULT_PARAMS["FIELDS"]}
+        self.region_spins = {}
+        for region, caption, default, tip in REGION_SPINS:
+            spin = self.spin(tip, 0.05, 5.0, 0.05, 2, self._region_defaults[region][0])
+            self.region_spins[region] = spin
+            form.addRow(caption, spin)
+        outer.addWidget(size_box)
+        import scs_document_cache
+        saved = scs_document_cache.document_params(self.doc)
+        self._saved_mesh_params = saved or build_mesh.DEFAULT_PARAMS
+        if saved:
+            self.h_min.setValue(saved['H_MIN'])
+            self.h_max.setValue(saved['H_MAX'])
+            self._region_defaults = {name: (near, plateau, growth)
+                                     for name, near, plateau, growth in saved['FIELDS']}
+            for name, spin in self.region_spins.items():
+                if name in self._region_defaults:
+                    spin.setValue(self._region_defaults[name][0])
+
+        # -- what this parameter set will cost, one line -------------------
+        self.cost_status = QtWidgets.QLabel("")
+        self.cost_status.setAlignment(QtCore.Qt.AlignCenter)
+        self.cost_status.setMinimumHeight(24)
+        self.cost_status.setWordWrap(True)
+        self.cost_status.setToolTip(
+            "Estimated tetrahedron count, mesh/preview peak RAM and meshing time "
+            "for the parameters above, from fem/scripts/mesh_cost.py -- "
+            "using a volume estimate. Full-anatomy counts are not yet calibrated. RAM is a conservative range, "
+            "including classification and preview sorting, not a measurement. Time covers gmsh only -- "
+            "the size-field precomputation before it is usually the longer "
+            "half. Red means the upper estimate exceeds 80% of currently available RAM and "
+            "Generate Mesh is disabled.")
+        outer.addWidget(self.cost_status)
+        async_runner.set_status(self.cost_status, "idle", "cost: -")
+
+        # Direct connections, no debounce: an estimate is ~1.5 ms in the
+        # child process and replies carry a request id, so a superseded one
+        # is discarded rather than racing. Debounce only if that ever stops
+        # being true and it is actually measured.
+        for w in (self.h_min, self.h_max):
+            w.valueChanged.connect(self.refresh_gates)
+            w.valueChanged.connect(self.request_cost)
+        for w in self.region_spins.values():
+            w.valueChanged.connect(self.refresh_gates)
+            w.valueChanged.connect(self.request_cost)
+
+        # Execution settings belong to the shared Job Manager.
+        self.execution_status = QtWidgets.QLabel()
+        outer.addWidget(self.execution_status)
+        manager = QtWidgets.QPushButton("Open Job Manager…")
+        manager.clicked.connect(lambda: __import__('scs_job_manager').show())
+        outer.addWidget(manager)
+
+        # -- Stage 1: mesh --------------------------------------------------
+        row1 = QtWidgets.QHBoxLayout()
+        self.btn_mesh = QtWidgets.QPushButton("Generate Mesh")
+        self.btn_mesh.clicked.connect(self.toggle_mesh)
+        row1.addWidget(self.btn_mesh, 1)
+        outer.addLayout(row1)
+
+        self.mesh_progress = QtWidgets.QProgressBar()
+        self.mesh_progress.setRange(0, 100)
+        self.mesh_progress.setValue(0)
+        self.mesh_progress.setFormat("%p%")
+        outer.addWidget(self.mesh_progress)
+
+        self.mesh_status = QtWidgets.QLabel("")
+        self.mesh_status.setAlignment(QtCore.Qt.AlignCenter)
+        self.mesh_status.setMinimumHeight(24)
+        outer.addWidget(self.mesh_status)
+        async_runner.set_status(self.mesh_status, "idle", "Not run yet")
+
+        mesh_report_form = QtWidgets.QFormLayout()
+        self.mesh_report_labels = {}
+        for key, caption in (("nodes", "Nodes"), ("tets_classified", "Tets"),
+                             ("tets_background_dropped", "Background (excluded from preview)"),
+                             ("dura_leak_pct", "Dura leak %"),
+                             ("elapsed_s", "Build time (s)")):
+            lbl = QtWidgets.QLabel("-")
+            self.mesh_report_labels[key] = lbl
+            mesh_report_form.addRow(caption, lbl)
+        outer.addLayout(mesh_report_form)
+
+        self.mesh_detail = mono_textedit()
+        outer.addWidget(self.mesh_detail)
+
+        self.pick_preview = QtWidgets.QCheckBox("Pick mesh in viewport (slower for dense meshes)")
+        self.pick_preview.setToolTip(
+            "Off: avoid testing millions of triangles under the mouse. "
+            "Use the model tree to select tissues and toggle visibility. "
+            "This only affects interaction, not mesh resolution or the solver.")
+        self.pick_preview.toggled.connect(self.set_preview_picking)
+        outer.addWidget(self.pick_preview)
+        self.set_preview_picking(False)
+
+        hint = QtWidgets.QLabel("Next: open SCS Potential Visualizer to solve and plot this mesh.")
+        hint.setWordWrap(True)
+        outer.addWidget(hint)
+
+        outer.addStretch(1)
+
+        self._poll_timer = QtCore.QTimer(self)
+        self._poll_timer.timeout.connect(self.poll_status)
+        self._poll_timer.start(LIVE_LEAD_POLL_MS)
+        self.restore_mesh_report()
+        self.refresh_gates()
+
+    def set_mesh_state(self, state):
+        # Worker callbacks own lifecycle transitions; rendering derives from state.
+        self.mesh_state = state
+        self.btn_mesh.setText({"running": "Abort Mesh", "aborting": "Aborting…"}.get(
+            state, "Generate Mesh"))
+
+    def toggle_mesh(self):
+        if self.mesh_state == "aborting":
+            return
+        if self.mesh_runner.is_running():
+            self.set_mesh_state("aborting")
+            self.btn_mesh.setEnabled(False)
+            self.mesh_runner.abort()
+        else:
+            self.start_mesh()
+
+    def restore_mesh_report(self):
+        """Restore statistics only; never rebuild or reload a large preview on tab switch."""
+        import scs_document_cache
+        run = scs_document_cache.document_run(self.doc)
+        report = live_lead.load_report(run, "mesh_report") if run else None
+        if not report:
+            return
+        for key, label in self.mesh_report_labels.items():
+            value = report.get("dura", {}).get("leak_pct") if key == "dura_leak_pct" else report.get(key)
+            label.setText(str(value) if value is not None else "-")
+        self.mesh_progress.setValue(100)
+        self.set_mesh_state("completed")
+        async_runner.set_status(self.mesh_status, "done", "Saved mesh for " + self.doc.Label)
+
+    # -- widget helpers ------------------------------------------------
+    def set_preview_picking(self, enabled):
+        group = self.doc.getObject(PREVIEW_GROUP_NAME)
+        if group is not None:
+            for obj in group.Group:
+                if obj.Name.startswith(PREVIEW_PREFIX) and hasattr(obj.ViewObject, "Selectable"):
+                    obj.ViewObject.Selectable = bool(enabled)
+
+    def spin(self, tip, lo, hi, step, decimals, value):
+        w = QtWidgets.QDoubleSpinBox()
+        w.setRange(lo, hi)
+        w.setSingleStep(step)
+        w.setDecimals(decimals)
+        w.setSuffix(" mm")
+        w.setToolTip(tip)
+        w.setValue(value)
+        return w
+
+    def _set_mesh_progress(self, pct):
+        self.mesh_progress.setValue(pct)
+
+    # -- live lead / cache resolution -------------------------------------
+    def mesh_params(self):
+        return dict(H_MIN=self.h_min.value(), H_MAX=self.h_max.value(),
+                    FIELDS=[(region, self.region_spins[region].value(),
+                            self._region_defaults[region][1], self._region_defaults[region][2])
+                           for region in self.region_spins],
+                    GRID=self._saved_mesh_params["GRID"],
+                    MARGIN=self._saved_mesh_params["MARGIN"])
+
+    def resolve_run(self):
+        """(lead_info, run_dir) for the CURRENT live lead + CURRENT
+        size-field spinbox values, or (lead_info, None) if there is no
+        usable lead. Tessellating 9 small shapes and hashing them is cheap
+        (sub-100ms, measured) so this is safe to call from the poll timer,
+        not just from a button click. Also stashes the geometry fingerprint
+        on self, since the cost estimator keys its (5 s) model rebuild on
+        that and not on the run_key -- the run_key changes with every
+        spinbox nudge, the geometry does not."""
+        info = live_lead.find_live_lead(self.doc)
+        self._live_lead_info = info
+        if info["status"] != live_lead.LiveLeadStatus.OK:
+            self._geom_fp = None
+            return info, None
+        arrays = live_lead.tessellate_lead_arrays(info)
+        geom_fp = live_lead.fingerprint_from_arrays(arrays)
+        self._geom_fp = geom_fp
+        self._lead_arrays = arrays
+        import scs_document_cache
+        run_dir = scs_document_cache.resolve_run(self.doc, arrays, self.mesh_params())
+        return info, run_dir
+
+    # -- cost estimate ---------------------------------------------------
+    def sync_cost_model(self):
+        """Keep the estimator's CostModel matched to the live lead. Restarts
+        the child ONLY when the lead's own geometry fingerprint changes (it
+        moved, was replaced, appeared, or went away) -- never on a parameter
+        change, and never on a poll tick that found nothing new.
+
+        The re-entrancy guard is not belt-and-braces, it is required:
+        CostEstimator.rebuild() emits state_changed, whose handler calls
+        refresh_gates(), which calls this. Without the flag that is an
+        unbounded recursion the first time a lead appears (found by reading
+        the call graph, before it could be hit at runtime)."""
+        if self._syncing_cost:
+            return
+        fp = self._geom_fp
+        # "Have I already asked for a model for THIS geometry?" -- answered
+        # from the estimator's OWN state machine, which this code sets
+        # synchronously, NOT from QProcess.state(). Keying it on
+        # is_running() looked equivalent and was not: measured live
+        # 2026-09-15, a child that had been start()ed and was busy importing
+        # scipy could read as NotRunning on a poll tick, so this fired again
+        # and left the first child orphaned -- two live mesh_cost_servers,
+        # ~100 MB each, for one lead. The state check also stops a broken
+        # fem/.venv turning the 1.5 s poll into a process-spawning loop:
+        # "unavailable" for this fingerprint is remembered, not retried.
+        if fp == self._cost_fp and (fp is None or self.cost.state != "idle"):
+            return
+        self._syncing_cost = True
+        try:
+            self._cost_fp = fp
+            if fp is None:
+                self.cost.stop()
+                self._cost_sev, self._cost_text = None, ""
+                async_runner.set_status(self.cost_status, "idle", "cost: -")
+                return
+            # The estimator gets its OWN copy of the lead STLs, never
+            # _live/'s -- see COST_LEAD_DIR's comment for why.
+            live_lead.write_stls(self._lead_arrays, self._cost_lead_dir)
+            self.cost.rebuild(self._cost_lead_dir)
+        finally:
+            self._syncing_cost = False
+
+    def poll_status(self):
+        if not self.isVisible():
+            return
+        self.refresh_gates()
+        # Available RAM changes even when geometry and controls do not.
+        if not self.mesh_runner.is_running():
+            self.request_cost()
+
+    def request_cost(self):
+        self.cost.request(self.mesh_params())
+
+    def on_cost_state(self, state):
+        if state == "starting":
+            self._cost_sev, self._cost_text = None, ""
+            async_runner.set_status(self.cost_status, "running", "estimating...")
+            self.request_cost()
+        elif state == "unavailable":
+            self._cost_sev, self._cost_text = None, ""
+            async_runner.set_status(self.cost_status, "idle",
+                                    "cost estimate unavailable (fem/.venv)")
+        self.refresh_gates()
+
+    def on_cost_result(self, sev, text):
+        self._cost_sev, self._cost_text = sev, text
+        async_runner.set_status(self.cost_status,
+                                COST_SEVERITY_LEVEL.get(sev, "idle"), text)
+        self.refresh_gates()
+
+    def refresh_gates(self):
+        """Gate meshing on live geometry, worker state and available RAM."""
+        busy = self.mesh_runner.is_running()
+        try:
+            profile = scs_job_service.service().profile(self.doc)
+            self.execution_status.setText('Execution: ' + profile['name'] + ' — settings in Job Manager')
+        except ValueError as exc:
+            self.execution_status.setText(str(exc))
+        info, run_dir = self.resolve_run()
+        self._current_run_dir = run_dir
+        self.sync_cost_model()
+
+        if info["status"] == live_lead.LiveLeadStatus.OK:
+            async_runner.set_status(self.lead_status, "active",
+                                    live_lead.ready_text(info))
+        elif info["status"] == live_lead.LiveLeadStatus.NONE:
+            async_runner.set_status(self.lead_status, "idle", info["reason"])
+        else:
+            async_runner.set_status(self.lead_status, "gated", info["reason"])
+
+        valid_lead = run_dir is not None
+        # A "danger" cost estimate BLOCKS the build; "warn" only informs; no
+        # estimate at all (no lead yet, estimator still starting, fem/.venv
+        # missing) never blocks -- an absent prediction is not a bad one.
+        too_big = self._cost_sev == "danger"
+        other_busy = self.job_owner is not None and self.job_owner.other_job_running(self)
+        self.btn_mesh.setEnabled(self.mesh_state != "aborting" and
+                                 (busy or (valid_lead and not too_big and not other_busy)))
+        if busy:
+            self.btn_mesh.setToolTip("Abort this document's mesh worker; existing completed artifacts are preserved.")
+        elif other_busy:
+            self.btn_mesh.setToolTip("A mesh is running in another document. Switch to that document to monitor or abort it.")
+        elif not valid_lead:
+            self.btn_mesh.setToolTip(self._live_lead_info["reason"])
+        elif too_big:
+            self.btn_mesh.setToolTip(
+                "These parameters are predicted to need more memory than "
+                "is currently available on this machine, so this would fail after a long wait "
+                "rather than produce a mesh: %s. Raise H_Max, or raise the "
+                "per-region Near sizes, until this line is no longer red."
+                % self._cost_text)
+        elif busy:
+            self.btn_mesh.setToolTip("A mesh build or solve is already running.")
+        else:
+            self.btn_mesh.setToolTip(
+                "Runs fem/scripts/mesh_preview.py in fem/.venv as a background "
+                "process, classified against the CURRENT live lead's own "
+                "contact/insulator geometry. Default-resolution parameters "
+                "genuinely take ~12-17 minutes -- that is not a hang. "
+                "FreeCAD stays responsive the whole time. If a mesh for this "
+                "exact lead position and these exact parameters already "
+                "exists, this is near-instant instead.")
+
+        for w in (self.h_min, self.h_max):
+            w.setEnabled(not busy)
+        for w in self.region_spins.values():
+            w.setEnabled(not busy)
+
+    def env_overrides(self):
+        n = scs_job_service.service().local_settings(self.doc)['mesh_threads']
+        return {v: n for v in THREAD_ENV_VARS}
+
+    # -- Stage 1: mesh ------------------------------------------------
+    def start_mesh(self):
+        if self.mesh_runner.is_running() or (self.job_owner is not None and self.job_owner.other_job_running(self)):
+            return
+        try:
+            scs_job_service.service().local_settings(self.doc)
+        except ValueError as exc:
+            async_runner.set_status(self.mesh_status, "failed", str(exc))
+            return
+        info, run_dir = self.resolve_run()
+        if run_dir is None:
+            self.refresh_gates()
+            return
+        if self._cost_sev == "danger":
+            # Second, independent refusal. refresh_gates() already disables
+            # the button, but this is the point of the whole feature and a
+            # disabled button is a UI state, not an invariant -- a stale
+            # gate, a keyboard activation or a programmatic click must not
+            # be able to start a 20-minute build that cannot finish.
+            async_runner.set_status(self.mesh_status, "failed",
+                                    "refused: " + self._cost_text)
+            self.refresh_gates()
+            return
+        os.makedirs(run_dir, exist_ok=True)
+
+        # Tessellate + write the live lead's STLs into the hidden scratch
+        # dir -- resolve_run() only tessellated in-memory (for the
+        # fingerprint); this is the one place that actually commits them to
+        # disk, right before they're needed.
+        arrays = live_lead.tessellate_lead_arrays(info)
+        live_dir = live_lead.write_stls(arrays, os.path.join(run_dir, "lead"))
+
+        mesh_npz = os.path.join(run_dir, "mesh.npz")
+        if artifacts.preview_ready(run_dir):
+            self._load_cached_mesh(run_dir)
+            return
+
+        params = self.mesh_params()
+        artifacts.atomic_json(os.path.join(C.OUT, 'mesh_settings.json'), params)
+        params["LEAD_DIR"] = live_dir
+        params_path = os.path.join(run_dir, "params.json")
+        with open(params_path, "w") as fh:
+            json.dump(params, fh, indent=2)
+
+        self._mesh_run_dir = run_dir
+        for label in self.mesh_report_labels.values():
+            label.setText("-")
+        self.mesh_detail.setPlainText("")
+        self.mesh_progress.setValue(0)
+        async_runner.set_status(self.mesh_status, "running", "starting...")
+        # start() FIRST -- refresh_gates() reads is_running() off the
+        # runner, so calling it before the process actually exists would
+        # leave Generate Mesh wrongly enabled for the whole run (caught live
+        # via this repo's MCP bridge while verifying this exact mechanism).
+        self.set_mesh_state("running")
+        scs_job_service.service().submit(self.doc, 'Mesh', self.mesh_runner,
+                                         [run_dir, params_path], self.env_overrides())
+        self.refresh_gates()
+
+    def _load_cached_mesh(self, run_dir):
+        """A mesh.npz already exists for this exact lead+params combination
+        -- reuse it instead of re-running the subprocess. Reads back the
+        report this same run's ORIGINAL build saved (mesh_report.json) so
+        the labels show real numbers, not placeholders; the tissue-coloured
+        preview is reloaded from that run's own preview.vtp, which
+        mesh_preview.py always writes alongside mesh.npz."""
+        self.set_mesh_state("completed")
+        self.mesh_progress.setValue(100)
+        report = live_lead.load_report(run_dir, "mesh_report")
+        preview_vtp = os.path.join(run_dir, "preview.vtp")
+        order = report.get("order") if report else None
+        try:
+            if os.path.isfile(preview_vtp) and order is not None:
+                load_preview_by_tissue(self.doc, preview_vtp, order)
+                self.set_preview_picking(self.pick_preview.isChecked())
+            elif os.path.isfile(preview_vtp):
+                print("SCS Mesh Generator: cached mesh_report.json for %s predates "
+                      "per-run tissue order metadata -- skipping the coloured "
+                      "preview reload (re-run Generate Mesh to refresh it)."
+                      % run_dir)
+        except Exception as exc:
+            self.set_mesh_state("failed")
+            async_runner.set_status(self.mesh_status, "failed",
+                                    "cached mesh found but preview could not be "
+                                    "loaded: %s" % exc)
+            return
+        if report:
+            self.mesh_report_labels["nodes"].setText(str(report["nodes"]))
+            self.mesh_report_labels["tets_classified"].setText(str(report["tets_classified"]))
+            self.mesh_report_labels["tets_background_dropped"].setText(
+                str(report["tets_background_dropped"]))
+            self.mesh_report_labels["dura_leak_pct"].setText("%.3f" % report["dura"]["leak_pct"])
+            self.mesh_report_labels["elapsed_s"].setText("%.1f (original build)" % report["elapsed_s"])
+        async_runner.set_status(self.mesh_status, "done",
+                                "reused cached mesh -- no rebuild needed")
+        self.refresh_gates()
+
+    def on_mesh_tick(self, elapsed):
+        async_runner.set_status(self.mesh_status, "running",
+                                "meshing... %d%% (%.0fs elapsed)" % (self.mesh_progress.value(), elapsed))
+
+    def on_mesh_aborted(self, msg):
+        self.set_mesh_state("aborted")
+        async_runner.set_status(self.mesh_status, "aborted", msg)
+        self.refresh_gates()
+
+    def on_mesh_failed(self, msg):
+        self.set_mesh_state("failed")
+        async_runner.set_status(self.mesh_status, "failed", "mesh_preview.py failed")
+        self.mesh_detail.setPlainText(msg)
+        self.refresh_gates()
+
+    def on_mesh_finished(self, report):
+        self.set_mesh_state("completed")
+        import scs_document_cache
+        self.mesh_report_labels["nodes"].setText(str(report["nodes"]))
+        self.mesh_report_labels["tets_classified"].setText(str(report["tets_classified"]))
+        self.mesh_report_labels["tets_background_dropped"].setText(str(report["tets_background_dropped"]))
+        self.mesh_report_labels["dura_leak_pct"].setText("%.3f" % report["dura"]["leak_pct"])
+        self.mesh_report_labels["elapsed_s"].setText("%.1f" % report["elapsed_s"])
+        self.mesh_detail.setPlainText(report.get("_stdout_tail", ""))
+
+        try:
+            load_preview_by_tissue(self.doc, report["preview_vtp"], report["order"])
+            self.set_preview_picking(self.pick_preview.isChecked())
+        except Exception as exc:
+            self.set_mesh_state("failed")
+            async_runner.set_status(self.mesh_status, "failed",
+                                    "generated but could not load/colour: %s" % exc)
+            self.refresh_gates()
+            return
+
+        live_lead.save_report(self._mesh_run_dir, "mesh_report", report)
+        scs_document_cache.bind_mesh(self.doc, self._mesh_run_dir,
+                                     scs_document_cache.run_params(self._mesh_run_dir))
+        async_runner.set_status(self.mesh_status, "done",
+                                "%d nodes, %d tets, dura leak %.3f%%, %.1fs"
+                                % (report["nodes"], report["tets_classified"],
+                                   report["dura"]["leak_pct"], report["elapsed_s"]))
+        self.refresh_gates()
+
+    def on_dock_closing(self):
+        """Release document-owned workers when the document/panel is destroyed."""
+        self._poll_timer.stop()
+        self._syncing_cost = True
+        if self.mesh_runner.is_running() and not scs_job_service.service().owns(self.mesh_runner):
+            self.mesh_runner.abort()
+        self.cost.stop()
+
+
+class DocumentMeshPanels(QtWidgets.QStackedWidget):
+    """Document-owned forms/jobs, with the active document selecting the visible form.
+
+    A switch never retargets a worker callback. Completed, failed, and in-flight
+    states stay with their originating document. Only one mesh runs at a time
+    because the resource estimate assumes exclusive use of available memory.
+    """
+    def __init__(self):
+        super(DocumentMeshPanels, self).__init__()
+        self.panels = {}
+        self.empty = QtWidgets.QLabel("Open a model to generate a mesh.")
+        self.addWidget(self.empty)
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.sync_document)
+        self.timer.start(250)
+        self.sync_document()
+
+    def other_job_running(self, panel):
+        return any(p is not panel and p.mesh_runner.is_running() for p in self.panels.values())
+
+    def sync_document(self):
+        documents = FreeCAD.listDocuments()
+        for name, panel in list(self.panels.items()):
+            if name not in documents or documents[name] is not panel.doc:
+                panel.on_dock_closing()
+                self.removeWidget(panel)
+                panel.deleteLater()
+                del self.panels[name]
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            self.setCurrentWidget(self.empty)
+            return
+        panel = self.panels.get(doc.Name)
+        if panel is None:
+            panel = MeshGeneratorPanel(doc)
+            panel.job_owner = self
+            self.panels[doc.Name] = panel
+            self.addWidget(panel)
+        if self.currentWidget() is not panel:
+            self.setCurrentWidget(panel)
+            panel.refresh_gates()
+
+    def on_dock_closing(self):
+        self.timer.stop()
+        for panel in self.panels.values():
+            panel.on_dock_closing()
+
+
+def show_panel():
+    mw = FreeCADGui.getMainWindow()
+    dock = mw.findChild(QtWidgets.QDockWidget, OBJECT_NAME)
+    if dock is None:
+        dock = QtWidgets.QDockWidget("SCS Mesh Generator", mw)
+        dock.setObjectName(OBJECT_NAME)
+        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    else:
+        old = dock.widget()
+        # Reopening a current panel must not abort jobs or discard edited settings.
+        if old is not None and hasattr(old, "sync_document"):
+            old.sync_document()
+            dock.show()
+            dock.raise_()
+            return dock
+        if old is not None and hasattr(old, "on_dock_closing"):
+            old.on_dock_closing()
+    dock.setWidget(DocumentMeshPanels())
+    dock.show()
+    dock.raise_()
+    return dock
+
+
+def main():
+    show_panel()
+    print("SCS Mesh Generator follows the active document. Save the document to keep mesh references.")
+
+
+if __name__ == "__main__":
+    main()

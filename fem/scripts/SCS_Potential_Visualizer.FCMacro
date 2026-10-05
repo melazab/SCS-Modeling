@@ -1,0 +1,871 @@
+"""Solve and display the field on a completed SCS Mesh Generator mesh.
+
+Mesh settings come from the open mesh dock, or its last generated settings.
+The visualizer requires a verified mesh for the live lead. It solves per-contact
+basis fields once per model/background configuration; montage changes only
+combine those fields. It does not generate meshes or save the CAD document.
+"""
+import json
+import os
+import sys
+
+import FreeCAD
+import FreeCADGui
+
+try:
+    from PySide import QtCore, QtGui, QtWidgets
+except ImportError:                                     # pragma: no cover
+    try:
+        from PySide6 import QtCore, QtGui, QtWidgets
+    except ImportError:
+        from PySide2 import QtCore, QtGui, QtWidgets
+
+# Fixed, not derived from __file__: this macro is meant to be copied or
+# symlinked into FreeCAD's Macro directory to appear in the Macro menu, and
+# __file__ then points THERE, not at fem/scripts/ -- confirmed to actually
+# break this way for a sibling macro once copied. A symlink wouldn't dodge
+# it either: os.path.abspath() doesn't resolve symlinks. NEVER hard-link
+# this file into the Macro directory -- always a symlink (`ln -s`).
+REPO_ROOT = "/home/mohamed/Projects/SCS-Modeling"
+FEM_SCRIPTS_DIR = os.path.join(REPO_ROOT, "fem", "scripts")
+sys.path.insert(0, FEM_SCRIPTS_DIR)
+import async_runner
+import build_mesh
+import config as C
+import live_lead
+import artifacts
+import scs_job_service
+import scs_field_display
+import scs_montage as M
+import scs_montage_feature as F
+import scs_document_cache
+import scs_waveform as W
+import scs_fast_viewer
+from solve_cpu_limit import physical_core_limit
+
+# Reloaded on every run -- same reason src/freecad/lead_designer.FCMacro's
+# own load_builder() reloads build_lead_config, and the same reason
+# SCS_Mesh_Generator.FCMacro does: FreeCAD keeps these modules in
+# sys.modules across macro re-runs, so editing config.py/scs_montage.py/
+# scs_montage_feature.py/live_lead.py and re-running this macro would
+# otherwise keep running the OLD code with no error.
+import importlib
+for _m in (C, artifacts, M, F, live_lead, build_mesh, async_runner):
+    try:
+        importlib.reload(_m)
+    except Exception:
+        pass
+
+FEM_VENV_PY = os.path.join(REPO_ROOT, "fem", ".venv", "bin", "python")
+SOLVE_LEAD_SCRIPT = os.path.join(FEM_SCRIPTS_DIR, "solve_lead.py")
+
+PREFERRED_DOC = "NBF_RADO_SCS"
+
+GROUP_NAME = "SCS_PotentialFieldViz"
+MONTAGE_NAME = "SCS_Montage"
+OBJECT_NAME = "SCS_PotentialVisualizerDock"    # QDockWidget identity, so re-running finds it
+MESH_GENERATOR_DOCK_NAME = "SCS_MeshGeneratorDock"
+PIPE_LABELS = {
+    "epidural": ("SCS_Epidural_PotentialField", "Epidural space -- SCS potential field"),
+    "dura": ("SCS_Dura_PotentialField", "Dura -- SCS potential field"),
+    "csf": ("SCS_CSF_PotentialField", "CSF -- SCS potential field"),
+    "white": ("SCS_White_PotentialField", "White matter -- SCS potential field"),
+    "grey": ("SCS_Grey_PotentialField", "Grey matter -- SCS potential field"),
+}
+
+PIPE_LABELS.update({t: (F.PIPE_NAMES[t], M.TISSUE_LABELS[t] + " -- SCS potential field")
+                    for t in M.TISSUES if t not in PIPE_LABELS})
+
+LIVE_LEAD_POLL_MS = 1500
+THREAD_ENV_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+
+# Combined-progress weighting for the self-sufficient "Plot Field" chain:
+# meshing is the slower of the two stages by roughly this ratio (measured
+# field-of-record default-parameter timings: ~740s mesh vs ~300s solve --
+# see SCS_Mesh_Generator.FCMacro's own module docstring), so it gets 70% of
+# the combined bar and solving gets the remaining 30%. Not claimed to be
+# perfectly calibrated -- monotonic and not wildly misleading is the bar
+# Mohamed's brief actually sets.
+
+
+def get_target_document():
+    if FreeCAD.ActiveDocument is not None:
+        return FreeCAD.ActiveDocument
+    if PREFERRED_DOC in FreeCAD.listDocuments():
+        return FreeCAD.getDocument(PREFERRED_DOC)
+    if FreeCAD.ActiveDocument is not None:
+        print(
+            "'%s' not open; using active document '%s' instead"
+            % (PREFERRED_DOC, FreeCAD.ActiveDocument.Name)
+        )
+        return FreeCAD.ActiveDocument
+    print("no document open; creating a new one")
+    return FreeCAD.newDocument("SCSPotentialViz")
+
+
+def read_shared_mesh_params():
+    """SCS_Mesh_Generator.FCMacro's dock's CURRENT size-field values, if
+    that dock happens to be open in this same FreeCAD session -- both
+    macros run in the same process, so its panel object is just sitting on
+    the Qt object tree, no IPC needed. Falls back to
+    build_mesh.DEFAULT_PARAMS (Mohamed's own brief: "if not, reading
+    build_mesh.DEFAULT_PARAMS as the fallback is fine") if that dock isn't
+    open, or is open but not (yet) the expected panel type."""
+    mw = FreeCADGui.getMainWindow()
+    dock = mw.findChild(QtWidgets.QDockWidget, MESH_GENERATOR_DOCK_NAME)
+    if dock is not None:
+        panel = dock.widget()
+        if panel is not None and hasattr(panel, "mesh_params") and panel.doc == FreeCAD.ActiveDocument:
+            try:
+                return panel.mesh_params()
+            except Exception as exc:
+                print("SCS Potential Visualizer: could not read Mesh Generator's "
+                      "current parameters (%s) -- falling back to "
+                      "build_mesh.DEFAULT_PARAMS" % exc)
+    try:
+        saved = scs_document_cache.document_params(FreeCAD.ActiveDocument)
+        if saved is not None:
+            return saved
+        with open(os.path.join(C.OUT, 'mesh_settings.json')) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return dict(build_mesh.DEFAULT_PARAMS)
+
+
+def get_or_create(doc, name, type_id, parent=None):
+    obj = doc.getObject(name)
+    created = False
+    if obj is None:
+        obj = doc.addObject(type_id, name)
+        created = True
+        if parent is not None:
+            parent.addObject(obj)
+    return obj, created
+
+
+def apply_field_with_stale_range_fix(pipe, field_name):
+    """Setting ViewObject.Field once, immediately after a pipeline's data
+    first exists, captures FreeCAD's colour-bar range before the pipeline
+    has really finished -- it sticks at the -0.5/+0.5 default and never
+    updates again even though pipe.Data is correct. Found and fixed
+    2026-09-11 in view_elmer_result.FCMacro; same fix, same reason, here."""
+    doc = pipe.Document
+    enum = pipe.ViewObject.getEnumerationsOfProperty("Field")
+    if field_name not in enum:
+        print("WARNING: '%s' not in Field enum for %s -- got %s" % (field_name, pipe.Name, enum))
+        return False
+    pipe.ViewObject.Field = "None"
+    doc.recompute([pipe])
+    pipe.ViewObject.Field = field_name
+    doc.recompute([pipe])
+    return True
+
+
+def load_pipe(pipe, vtp_path, clamp_v):
+    """(Re)load one tissue pipeline from a freshly written .vtp. Shared by
+    the initial bootstrap and by the panel's Plot Field action, so there is
+    exactly one place doing the DisplayMode/Field dance."""
+    doc = pipe.Document
+    pipe.read(vtp_path)
+    pipe.ViewObject.DisplayMode = "Surface"
+    doc.recompute([pipe])
+    # NOT FreeCADGui.updateGui() -- see module docstring.
+    pipe.ViewObject.DisplayMode = "Wireframe"
+    doc.recompute([pipe])
+    pipe.ViewObject.DisplayMode = "Surface"
+    doc.recompute([pipe])
+    field_name = "V_clamped_%gV" % clamp_v
+    applied = apply_field_with_stale_range_fix(pipe, field_name)
+    if not applied:
+        apply_field_with_stale_range_fix(pipe, "V_volts")
+    pipe.ViewObject.Visibility = True
+
+
+def ensure_pipes(doc):
+    """Create (or find) the group, the five tissue pipelines and
+    SCS_Montage. Does NOT load any data or run the montage -- that only
+    happens once Plot Field is pressed and a solved field is available.
+    Rebuilds SCS_Montage if it predates the SolutionNpz property. Returns
+    (group, {tissue: pipe}, montage_obj)."""
+    grp, _ = get_or_create(doc, GROUP_NAME, "App::DocumentObjectGroup")
+    grp.Label = "SCS potential field (interactive montage)"
+
+    labels = dict(PIPE_LABELS)
+    info = live_lead.find_live_lead(doc)
+    if info['status'] == live_lead.LiveLeadStatus.OK:
+        for index in info['contacts']:
+            key = 'contact_%d' % index
+            labels[key] = ('SCS_%s_PotentialField' % key,
+                          live_lead.contact_label(info, index) + ' -- SCS potential field')
+        for lead in info['lead_indices']:
+            key = 'insulator_%d' % lead
+            labels[key] = ('SCS_%s_PotentialField' % key, 'Lead %d insulation -- SCS potential field' % lead)
+        # Upgrade older completed meshes with display-only insulation exports.
+        import scs_document_cache
+        run = scs_document_cache.document_run(doc)
+        if run:
+            arrays = live_lead.tessellate_lead_arrays(info)
+            if scs_document_cache.geometry_matches(arrays, run):
+                live_lead.write_insulator_surfaces(arrays, os.path.join(run, 'lead'))
+    pipes = {}
+    for tissue, (pipe_name, label) in labels.items():
+        pipe, created = get_or_create(doc, pipe_name, "Fem::FemPostPipeline", grp)
+        pipe.Label = label
+        if created:
+            pipe.ViewObject.Visibility = False
+        pipes[tissue] = pipe
+
+    montage_obj = doc.getObject(MONTAGE_NAME)
+    if montage_obj is not None and "SolutionNpz" not in montage_obj.PropertiesList:
+        doc.removeObject(montage_obj.Name)
+        montage_obj = None
+    if montage_obj is None:
+        montage_obj = doc.addObject("App::FeaturePython", MONTAGE_NAME)
+        F.SCSMontageProxy(montage_obj)
+        if FreeCAD.GuiUp:
+            F.SCSMontageViewProxy(montage_obj.ViewObject)
+        grp.addObject(montage_obj)
+    else:
+        # Reloading a module does not update instances already in a document.
+        # Replace their callbacks without recreating properties/current values.
+        # Clear first: attaching a ViewProvider can immediately call updateData.
+        montage_obj.Proxy = F.SCSMontageProxy.__new__(F.SCSMontageProxy)
+        if FreeCAD.GuiUp:
+            F.SCSMontageViewProxy(montage_obj.ViewObject)
+
+    if 'IncludeBackground' not in montage_obj.PropertiesList:
+        montage_obj.addProperty('App::PropertyBool', 'IncludeBackground', 'Solve settings',
+            'Include unclassified mesh volume as conductive background on the next solve.')
+        montage_obj.IncludeBackground = montage_obj.SolutionNpz.endswith('solution_bg.npz')
+    F.SCSMontageProxy.ensure_revision(montage_obj)
+    scs_field_display.ensure_setting(montage_obj)
+    scs_field_display.apply(doc)
+
+    if info['status'] == live_lead.LiveLeadStatus.OK:
+        F.group_lead_pipes(doc, info['contact_map'])
+        old_insulation = doc.getObject('SCS_insulator_PotentialField')
+        if old_insulation is not None:
+            if not montage_obj.SolutionNpz:
+                doc.removeObject(old_insulation.Name)
+            else:
+                old_insulation.ViewObject.Visibility = False
+                old_insulation.Label = 'Combined insulation (legacy preview)'
+    return grp, pipes, montage_obj
+
+
+def role_of(value):
+    if value > 0:
+        return "source/anode"
+    if value < 0:
+        return "sink/cathode"
+    return "floating"
+
+
+ROLE_STYLES = {
+    "source/anode":  "color: #1b5e20; font-weight: bold;",
+    "sink/cathode":  "color: #8e0000; font-weight: bold;",
+    "floating":      "color: gray;",
+}
+
+
+class PotentialVisualizerPanel(QtWidgets.QWidget):
+    """Live-lead status, one current control per discovered contact,
+    Solve / Plot Field for the matching mesh, and a result readout."""
+
+    def __init__(self, doc):
+        super(PotentialVisualizerPanel, self).__init__()
+        self.doc = doc
+        _grp, self.pipes, self.montage_obj = ensure_pipes(doc)
+        if not self.montage_obj.SolutionNpz:
+            # Recover older panels that erased the binding, using only the
+            # current geometry/mesh run's last completed, verified solve.
+            _info, run_dir = self.resolve_run()
+            if run_dir:
+                try:
+                    with open(os.path.join(run_dir, 'solve_report.json')) as fh:
+                        report = json.load(fh)
+                    candidate = os.path.join(run_dir, 'solution_bg.npz' if report['background_included'] else 'solution.npz')
+                    if artifacts.valid(candidate, artifacts.solution_signature(run_dir, report['background_included'])):
+                        self.montage_obj.SolutionNpz = candidate
+                except (OSError, ValueError, KeyError):
+                    pass
+        W.ensure_properties(self.montage_obj)
+        self._current_sol_npz = self.montage_obj.SolutionNpz or None
+        self._live_lead_info = dict(status=live_lead.LiveLeadStatus.NONE, reason="")
+        self._pending_run_dir = None
+        self._pending_live_dir = None
+
+        self.solve_runner = async_runner.AsyncProcessRunner(
+            self, FEM_VENV_PY, SOLVE_LEAD_SCRIPT, "SOLVE_JSON ")
+        self.solve_runner.progress.connect(self.on_plot_solve_progress)
+        self.solve_runner.finished_ok.connect(self.on_plot_solve_finished)
+        self.solve_runner.failed.connect(self.on_plot_failed)
+        self.solve_runner.aborted.connect(self.on_plot_aborted)
+
+        root_layout = QtWidgets.QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll)
+        outer = QtWidgets.QVBoxLayout(content)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(6)
+
+        # -- live lead status (replaces the old combo box + Refresh) -------
+        self.lead_status = QtWidgets.QLabel("")
+        self.lead_status.setAlignment(QtCore.Qt.AlignCenter)
+        self.lead_status.setMinimumHeight(24)
+        self.lead_status.setWordWrap(True)
+        self.lead_status.setToolTip(
+            "All leads currently in this document's tree (placed by Lead "
+            "Designer), found by object name -- no export, no picker. "
+            "Rechecked automatically every %.1fs." % (LIVE_LEAD_POLL_MS / 1000.0))
+        outer.addWidget(self.lead_status)
+
+        # -- montage controls, disabled as a whole while gated ------------
+        self.montage_group = QtWidgets.QGroupBox("Montage")
+        mv = QtWidgets.QVBoxLayout(self.montage_group)
+
+        # 2026-09-14 CORRECTION: this used to build a FIXED M.N_CONTACTS
+        # (== 8) rows here in __init__, once, no matter what lead was
+        # actually in the document -- a 4-contact live lead got 8 rows, 4
+        # of them meaningless. self.contact_form is its own QFormLayout,
+        # rebuilt by _rebuild_contact_rows() (below) to hold EXACTLY as
+        # many rows as the CURRENT live lead has contacts, whenever that
+        # count changes (including the very first time a lead is found --
+        # it starts with 0 rows here, since no lead is known yet at
+        # __init__ time).
+        self.contact_form = QtWidgets.QFormLayout()
+        self.contact_form.setLabelAlignment(QtCore.Qt.AlignRight)
+        self.contact_spins = []
+        self.role_labels = []
+        self._current_n_contacts = 0
+        contact_widget = QtWidgets.QWidget()
+        contact_widget.setLayout(self.contact_form)
+        contact_scroll = QtWidgets.QScrollArea()
+        contact_scroll.setWidgetResizable(True)
+        contact_scroll.setWidget(contact_widget)
+        contact_scroll.setMinimumHeight(180)
+        contact_scroll.setMaximumHeight(300)
+        mv.addWidget(contact_scroll)
+        current_row = QtWidgets.QHBoxLayout()
+        self.total_current = QtWidgets.QDoubleSpinBox()
+        self.total_current.setRange(.001, 5000.)
+        self.total_current.setDecimals(3)
+        self.total_current.setValue(sum(max(0., getattr(self.montage_obj, F.contact_prop_name(i))) for i in F.contact_indices(self.montage_obj)) or 2.4)
+        self.total_current.setSuffix(' mA total')
+        self.total_current.setToolTip('Total positive current across ALL leads; equal negative return. Same value in both models for a matched-current comparison.')
+        current_row.addWidget(self.total_current)
+        scale_button = QtWidgets.QPushButton('Scale to total')
+        scale_button.clicked.connect(self.scale_to_total)
+        current_row.addWidget(scale_button)
+        mv.addLayout(current_row)
+        self.total_label = QtWidgets.QLabel('Select source and sink contacts; no contacts are preassigned.')
+        self.total_label.setWordWrap(True)
+        mv.addWidget(self.total_label)
+
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignRight)
+        self.clamp_spin = QtWidgets.QDoubleSpinBox()
+        self.clamp_spin.setRange(0.0, 100000.0)
+        self.clamp_spin.setSingleStep(10.0)
+        self.clamp_spin.setDecimals(3)
+        self.clamp_spin.setSuffix(" V")
+        self.clamp_spin.setValue(self.montage_obj.ClampVolts)
+        self.clamp_spin.setToolTip(
+            "Colour-legend saturation, +/-volts (see the V_clamped_* array "
+            "note in scs_montage.py). 0 = auto-choose from this montage's "
+            "own data (95th percentile |V|).")
+        form.addRow("Colour clamp (0=auto)", self.clamp_spin)
+        mv.addLayout(form)
+
+        waveform = QtWidgets.QGroupBox('Waveform and phase snapshots')
+        wf = QtWidgets.QFormLayout(waveform)
+        self.wave_mode = QtWidgets.QComboBox()
+        self.wave_mode.addItems(['Static', 'FAST-style biphasic'])
+        self.wave_mode.setCurrentText(str(self.montage_obj.WaveformMode))
+        wf.addRow('Mode', self.wave_mode)
+        self.wave_spins = {}
+        for prop, label, low, high, suffix in (
+            ('FrequencyHz', 'Frequency', .01, 10000., ' Hz'),
+            ('PhaseWidthUs', 'Width per phase', 1., 100000., ' µs'),
+            ('InterphaseGapUs', 'Gap (assumption)', 0., 100000., ' µs')):
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(low, high)
+            spin.setDecimals(2)
+            spin.setSuffix(suffix)
+            spin.setValue(getattr(self.montage_obj, prop))
+            self.wave_spins[prop] = spin
+            wf.addRow(label, spin)
+        self.phase_choice = QtWidgets.QComboBox()
+        self.phase_choice.addItems(['First phase', 'Reverse phase', 'Interpulse interval'])
+        wf.addRow('Snapshot phase', self.phase_choice)
+        self.phase_choice.currentIndexChanged.connect(lambda *_: self.apply_montage())
+        apply_phase = QtWidgets.QPushButton('Update phase / currents (cached field)')
+        apply_phase.clicked.connect(self.apply_montage)
+        wf.addRow(apply_phase)
+        viewer = QtWidgets.QPushButton('Export animation + PNG snapshot viewer…')
+        viewer.clicked.connect(self.export_fast_viewer)
+        wf.addRow(viewer)
+        note = QtWidgets.QLabel('90 Hz, symmetric active recharge. 220 µs is the common comparison default. Gap=0 is assumed. Field-only visualization; not a perception or efficacy prediction.')
+        note.setWordWrap(True)
+        wf.addRow(note)
+        mv.addWidget(waveform)
+
+        self.background_check = QtWidgets.QCheckBox("Include background tissue")
+        self.background_check.setChecked(self.montage_obj.IncludeBackground)
+        self.background_check.setToolTip(
+            "Include mesh elements outside the classified anatomy/lead as a conducting "
+            "background at bone conductivity. Off removes those elements from the solve. "
+            "This changes the solved field and memory use, not tissue visibility; "
+            "each setting has a separate solution cache.")
+        self.background_check.toggled.connect(
+            lambda checked: setattr(self.montage_obj, 'IncludeBackground', checked))
+        self.background_check.toggled.connect(self.refresh_gates)
+        mv.addWidget(self.background_check)
+        self.local_group = QtWidgets.QGroupBox('Execution')
+        local_form = QtWidgets.QVBoxLayout(self.local_group)
+        self.execution_status = QtWidgets.QLabel()
+        local_form.addWidget(self.execution_status)
+        manager = QtWidgets.QPushButton('Open Job Manager…')
+        manager.clicked.connect(lambda: __import__('scs_job_manager').show())
+        local_form.addWidget(manager)
+        mv.addWidget(self.local_group)
+        self.solve_detail = QtWidgets.QPlainTextEdit()
+        self.solve_detail.setReadOnly(True)
+        self.solve_detail.document().setMaximumBlockCount(200)
+        self.solve_runner.stage_message.connect(self.solve_detail.appendPlainText)
+        self.solve_detail.setMaximumHeight(100)
+        mv.addWidget(self.solve_detail)
+
+        row = QtWidgets.QHBoxLayout()
+        self.btn_plot = QtWidgets.QPushButton("Solve / Plot Field")
+        self.btn_plot.setToolTip(
+            "Solve the completed mesh from SCS Mesh Generator, then plot the "
+            "contact currents. Changing only currents reuses the basis fields.")
+        self.btn_plot.clicked.connect(self.start_plot)
+        row.addWidget(self.btn_plot, 1)
+        self.btn_plot_abort = QtWidgets.QPushButton("Abort")
+        self.btn_plot_abort.setEnabled(False)
+        self.btn_plot_abort.setToolTip(
+            "Kills the solve subprocess currently "
+            "running for this Plot Field press, and verifies it actually "
+            "exited.")
+        self.btn_plot_abort.clicked.connect(self.abort_plot)
+        row.addWidget(self.btn_plot_abort, 1)
+        mv.addLayout(row)
+
+        self.plot_progress = QtWidgets.QProgressBar()
+        self.plot_progress.setRange(0, 100)
+        self.plot_progress.setValue(0)
+        self.plot_progress.setFormat("%p%")
+        mv.addWidget(self.plot_progress)
+
+        self.status = QtWidgets.QLabel("")
+        self.status.setAlignment(QtCore.Qt.AlignCenter)
+        self.status.setMinimumHeight(24)
+        self.status.setWordWrap(True)
+        self.status.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        mv.addWidget(self.status)
+        async_runner.set_status(self.status, "idle", "Not plotted yet this session")
+
+        readout_form = QtWidgets.QFormLayout()
+        self.clamp_label = QtWidgets.QLabel("-")
+        readout_form.addRow("Clamp shown", self.clamp_label)
+        self.charge_label = QtWidgets.QLabel("-")
+        readout_form.addRow("Charge balance", self.charge_label)
+        self.tissue_labels = {}
+        for t in M.TISSUES:
+            lbl = QtWidgets.QLabel("-")
+            self.tissue_labels[t] = lbl
+            readout_form.addRow("%s V range" % t, lbl)
+        mv.addLayout(readout_form)
+        self.pick_field = QtWidgets.QCheckBox('Pick field in viewport (slower for dense models)')
+        self.pick_field.setChecked(bool(self.montage_obj.PickFieldInViewport))
+        self.pick_field.setToolTip('Enable only when selecting field surfaces with the mouse. Model-tree selection and visibility remain available when off.')
+        self.pick_field.toggled.connect(lambda enabled: scs_field_display.set_enabled(self.doc, enabled))
+        mv.addWidget(self.pick_field)
+
+        outer.addWidget(self.montage_group)
+        outer.addStretch(1)
+
+        self._poll_timer = QtCore.QTimer(self)
+        self._poll_timer.timeout.connect(lambda: self.refresh_gates() if self.isVisible() else None)
+        self._poll_timer.start(LIVE_LEAD_POLL_MS)
+        self.refresh_gates()
+
+    # -- live lead / gating ----------------------------------------------
+    def busy(self):
+        return self.solve_runner.is_running()
+
+    def resolve_run(self):
+        """(lead_info, run_dir) for the CURRENT live lead + the CURRENT
+        shared/default mesh params -- same pattern as
+        SCS_Mesh_Generator.FCMacro.resolve_run(), duplicated rather than
+        imported because it is five lines of pure orchestration over
+        live_lead.py's shared functions, not physics or caching logic
+        itself (which DOES live in one place, live_lead.py)."""
+        info = live_lead.find_live_lead(self.doc)
+        self._live_lead_info = info
+        if info["status"] != live_lead.LiveLeadStatus.OK:
+            return info, None
+        arrays = live_lead.tessellate_lead_arrays(info)
+        geom_fp = live_lead.fingerprint_from_arrays(arrays)
+        run_dir = scs_document_cache.resolve_run(self.doc, arrays, read_shared_mesh_params())
+        return info, run_dir
+
+    def refresh_gates(self):
+        try:
+            profile = scs_job_service.service().profile(self.doc)
+            self.execution_status.setText('Execution: ' + profile['name'])
+        except ValueError as exc:
+            self.execution_status.setText(str(exc))
+        self.local_group.setEnabled(not self.busy())
+        if self.busy():
+            return  # don't fight the running pipeline's own status text
+        info, run_dir = self.resolve_run()
+        if info["status"] == live_lead.LiveLeadStatus.OK:
+            n = info["n_contacts"]
+            if info['contact_map'] != getattr(self, '_contact_map', None):
+                F.SCSMontageProxy.ensure_contact_mapping(self.montage_obj, info)
+                self._contact_map = info['contact_map']
+                self._rebuild_contact_rows(n)
+            async_runner.set_status(self.lead_status, "active",
+                                    live_lead.ready_text(info))
+        elif info["status"] == live_lead.LiveLeadStatus.NONE:
+            async_runner.set_status(self.lead_status, "idle", info["reason"])
+        else:
+            async_runner.set_status(self.lead_status, "gated", info["reason"])
+
+        if self._current_sol_npz is not None:
+            expected_name = 'solution_bg.npz' if self.background_check.isChecked() else 'solution.npz'
+            expected = os.path.join(run_dir, expected_name) if run_dir else None
+            if expected != self._current_sol_npz or not artifacts.valid(expected, artifacts.solution_signature(run_dir, self.background_check.isChecked())):
+                self._current_sol_npz = None
+                self.montage_obj.SolutionNpz = ''
+                for pipe in self.pipes.values():
+                    pipe.ViewObject.Visibility = False
+                async_runner.set_status(self.status, 'gated', 'Field is stale for the current lead/model. Solve / Plot Field to update.')
+        valid_lead = run_dir is not None
+        self.montage_group.setEnabled(valid_lead)
+        ready = valid_lead and artifacts.preview_ready(run_dir)
+        self.btn_plot.setEnabled(ready)
+        if valid_lead and not ready:
+            async_runner.set_status(self.status, 'gated', 'Generate a mesh for this lead and settings in SCS Mesh Generator first.')
+        if not valid_lead:
+            self.btn_plot.setToolTip(info["reason"])
+
+    def _rebuild_contact_rows(self, n_contacts):
+        """Rebuild self.contact_form so it has EXACTLY n_contacts spinbox
+        rows (Contact 1..n_contacts) -- called from refresh_gates()
+        whenever the live lead's own contact count changes, including the
+        very first time a lead is found (from 0). Also keeps the
+        SCS_Montage document object's own Contact<i>_mA properties in sync
+        via F.SCSMontageProxy.ensure_contact_properties(), so the Data tab
+        and this dock's spinboxes never disagree about how many contacts
+        exist. Per Mohamed's brief, a new row starts at 0 mA/floating --
+        nothing is pre-assigned a role -- and an existing row for a
+        contact number that's KEPT (e.g. going from 6 contacts to 4 keeps
+        rows 1-4) is not touched here since it isn't rebuilt."""
+        while self.contact_form.rowCount():
+            self.contact_form.removeRow(0)
+        self.contact_spins = []
+        self.role_labels = []
+        for i in range(1, n_contacts + 1):
+            row = QtWidgets.QWidget()
+            row_h = QtWidgets.QHBoxLayout(row)
+            row_h.setContentsMargins(0, 0, 0, 0)
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(-5000.0, 5000.0)
+            spin.setSingleStep(0.1)
+            spin.setDecimals(6)
+            spin.setSuffix(" mA")
+            spin.setValue(float(getattr(self.montage_obj, 'Contact%d_mA' % i, 0.0)))
+            spin.setToolTip(
+                "Current into contact %d, mA. Positive = source/anode, "
+                "negative = sink/cathode (assign_and_solve.py's own "
+                "convention). Starts at 0 -- nothing is pre-assigned." % i)
+            role_lbl = QtWidgets.QLabel(role_of(spin.value()))
+            role_lbl.setStyleSheet(ROLE_STYLES[role_of(spin.value())])
+            role_lbl.setMinimumWidth(90)
+            spin.valueChanged.connect(lambda v, lbl=role_lbl: self.update_role(lbl, v))
+            spin.valueChanged.connect(self.update_totals)
+            self.contact_spins.append(spin)
+            self.role_labels.append(role_lbl)
+            row_h.addWidget(spin, 1)
+            row_h.addWidget(role_lbl)
+            self.contact_form.addRow(live_lead.contact_label(self._live_lead_info, i), row)
+        self._current_n_contacts = n_contacts
+        F.SCSMontageProxy.ensure_contact_properties(self.montage_obj, n_contacts)
+        self.update_totals()
+
+    def update_totals(self, *_):
+        source, sink = W.totals([spin.value() for spin in self.contact_spins])
+        self.total_label.setText('First phase: source %.6g mA; sink %.6g mA across all leads' % (source, sink))
+
+    def scale_to_total(self):
+        try:
+            values = W.normalize([s.value() for s in self.contact_spins], self.total_current.value())
+            for spin, value in zip(self.contact_spins, values):
+                spin.setValue(value)
+            # Correct rounding at the final contact of each polarity.
+            for sign in (1, -1):
+                active = [s for s in self.contact_spins if s.value()*sign > 0]
+                residual = sign*self.total_current.value()-sum(s.value() for s in active)
+                active[-1].setValue(active[-1].value()+residual)
+            self.update_totals()
+        except ValueError as exc:
+            self.total_label.setText(str(exc))
+
+    def sync_waveform(self):
+        obj = self.montage_obj
+        obj.WaveformMode = self.wave_mode.currentText()
+        for prop, spin in self.wave_spins.items():
+            setattr(obj, prop, spin.value())
+        period = W.validate(obj.FrequencyHz, obj.PhaseWidthUs, obj.InterphaseGapUs)
+        w, g = obj.PhaseWidthUs/1000., obj.InterphaseGapUs/1000.
+        obj.WaveformTimeMs = [w/2, w+g+w/2, (2*w+g+period)/2][self.phase_choice.currentIndex()]
+        if obj.WaveformMode != 'Static':
+            W.require_balanced([s.value() for s in self.contact_spins])
+
+    def export_fast_viewer(self):
+        if self.busy() or not self.montage_obj.SolutionNpz:
+            self.status.setText('Solve / Plot Field first; export uses the cached solution.')
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Export shareable FAST viewer',
+                          os.path.join(REPO_ROOT, self.doc.Name+'_FAST.html'), 'HTML (*.html)')
+        if not path:
+            return
+        try:
+            self.sync_waveform()
+            self.montage_obj.Proxy.validate_binding(self.montage_obj)
+            currents = [s.value() for s in self.contact_spins]
+            total = W.require_balanced(currents)
+            solution = self.montage_obj.SolutionNpz
+            clamp = self.clamp_spin.value() or M.choose_clamp_v(currents, sol_npz=solution)
+            surfaces = {name: M.sample_tissue(name, currents, sol_npz=solution, surface_path=surface)
+                        for name, surface in M.surface_paths(solution).items()}
+            visible = []
+            for name in surfaces:
+                pipe = self.doc.getObject(F.PIPE_NAMES.get(name, 'SCS_%s_PotentialField' % name))
+                if pipe is not None and pipe.ViewObject.Visibility:
+                    visible.append(name)
+            metadata = dict(title=self.doc.Label, frequency_hz=self.montage_obj.FrequencyHz,
+                width_us=self.montage_obj.PhaseWidthUs, gap_us=self.montage_obj.InterphaseGapUs,
+                gap_is_assumed=True, currents_mA=currents, total_mA=total, clamp_v=clamp,
+                contact_map=self._contact_map, solution=solution, visible=visible,
+                electrical_model='Linear resistive; phase two reverses all contact currents',
+                references=['Metzger et al. 2021, doi:10.1080/17434440.2021.1890580',
+                            'Van Acker and Kim 2023, doi:10.1097/PHM.0000000000002268'])
+            if not path.lower().endswith('.html'):
+                path += '.html'
+            scs_fast_viewer.export(path, surfaces, metadata)
+            self.status.setText('Exported '+path+'; open in a browser for playback and annotated PNGs.')
+        except Exception as exc:
+            self.status.setText('Export failed: '+str(exc))
+
+    def update_role(self, label, value):
+        role = role_of(value)
+        label.setText(role)
+        label.setStyleSheet(ROLE_STYLES[role])
+
+    def env_overrides(self):
+        # CPU allocation is passed explicitly to Elmer as MPI tasks. Python
+        # preparation and each rank must not spawn another full pool of threads.
+        return {v: 1 for v in THREAD_ENV_VARS}
+
+    # -- Plot Field: mesh-if-needed -> solve-if-needed -> combine ---------
+    def start_plot(self):
+        try:
+            scs_job_service.service().local_settings(self.doc)
+            self.sync_waveform()
+        except ValueError as exc:
+            self.status.setText(str(exc))
+            return
+        info, run_dir = self.resolve_run()
+        if run_dir is None or not artifacts.preview_ready(run_dir):
+            self.refresh_gates()
+            return
+        os.makedirs(run_dir, exist_ok=True)
+
+        live_dir = os.path.join(run_dir, "lead")
+        live_lead.write_insulator_surfaces(live_lead.tessellate_lead_arrays(info), live_dir)
+
+        self._pending_run_dir = run_dir
+        self._pending_background = self.background_check.isChecked()
+        self._pending_live_dir = live_dir
+        self.solve_detail.clear()
+        self.plot_progress.setValue(0)
+        self.btn_plot.setEnabled(False)
+        self.btn_plot_abort.setEnabled(True)
+        async_runner.set_status(self.status, "active", "checking cache...")
+        self._advance_to_solve()
+
+    def abort_plot(self):
+        if self.solve_runner.is_running():
+            self.solve_runner.abort()
+
+    def _advance_to_solve(self):
+        run_dir = self._pending_run_dir
+        background = self.background_check.isChecked()
+        sol_npz = os.path.join(run_dir, "solution_bg.npz" if background else "solution.npz")
+        if artifacts.valid(sol_npz, artifacts.solution_signature(run_dir, background)):
+            self.plot_progress.setValue(100)
+            self._finish_plot(sol_npz)
+            return
+        args = [run_dir, "--lead-dir", self._pending_live_dir]
+        profile = scs_job_service.service().local_settings(self.doc)
+        settings = dict(cpus=profile['solve_cpus'], memory_gb=profile['memory_gb'])
+        artifacts.atomic_json(os.path.join(C.OUT, 'solve_settings.json'), settings)
+        args.extend(['--cpus', str(settings['cpus']), '--memory-gb', str(settings['memory_gb'])])
+        if background:
+            args.append('--background')
+        self.background_check.setEnabled(False)
+        self.local_group.setEnabled(False)
+        async_runner.set_status(self.status, "active",
+                                "solving... %d%%" % 0)
+        scs_job_service.service().submit(self.doc, 'Solve', self.solve_runner, args, self.env_overrides())
+
+    def on_plot_solve_progress(self, pct):
+        overall = pct
+        self.plot_progress.setValue(overall)
+        async_runner.set_status(self.status, "active", "solving... %d%%" % overall)
+
+    def on_plot_solve_finished(self, report):
+        self.background_check.setEnabled(True)
+        self.solve_detail.setPlainText(report.get("_stdout_tail", ""))
+        live_lead.save_report(self._pending_run_dir, "solve_report", report)
+        self.plot_progress.setValue(100)
+        self._finish_plot(report["solution_npz"])
+
+    def on_plot_failed(self, msg):
+        self.solve_detail.setPlainText(msg)
+        async_runner.set_status(self.status, "failed", "Plot Field failed: " + msg.splitlines()[0])
+        self.btn_plot.setEnabled(True)
+        self.btn_plot_abort.setEnabled(False)
+        self.background_check.setEnabled(True)
+        self.refresh_gates()
+
+    def on_plot_aborted(self, msg):
+        async_runner.set_status(self.status, "failed", msg)
+        self.btn_plot.setEnabled(True)
+        self.btn_plot_abort.setEnabled(False)
+        self.background_check.setEnabled(True)
+        self.refresh_gates()
+
+    def _finish_plot(self, sol_npz):
+        """The mesh+solve chain (or the cache) has produced sol_npz for the
+        CURRENT live lead. Sanity-check scs_montage.py's own general-
+        montage arithmetic against it (self_check() diffs the default
+        bipolar case's general-path V against solve_basis_fields()'s own
+        stored V for THIS solution.npz -- lead-agnostic, see module
+        docstring), then combine with the current spinbox currents exactly
+        as before."""
+        current_info, current_run = self.resolve_run()
+        if current_run != self._pending_run_dir:
+            self.on_plot_failed('Lead geometry or mesh settings changed during solve. Generate/select the matching mesh first.')
+            return
+        self.btn_plot_abort.setEnabled(False)
+        ok, msg = M.self_check(sol_npz=sol_npz)
+        if not ok:
+            async_runner.set_status(self.status, "failed",
+                                    "Montage self-check FAILED for this lead's solution: %s" % msg)
+            self.btn_plot.setEnabled(True)
+            self.refresh_gates()
+            return
+        self._current_sol_npz = sol_npz
+        self.montage_obj.SolutionNpz = sol_npz
+        for pipe in self.pipes.values():
+            pipe.ViewObject.Visibility = True
+        self.apply_montage()
+        self.btn_plot.setEnabled(True)
+        self.refresh_gates()
+
+    # -- combine (fast, synchronous -- no FEM solve here) ------------------
+    def apply_montage(self):
+        if self._current_sol_npz is None or self.busy():
+            return
+        currents = [spin.value() for spin in self.contact_spins]
+        clamp_v = self.clamp_spin.value()
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            self.sync_waveform()
+            for i, val in enumerate(currents, start=1):
+                setattr(self.montage_obj, "Contact%d_mA" % i, float(val))
+            self.montage_obj.ClampVolts = float(clamp_v)
+            revision = self.montage_obj.PlotRevision
+            self.montage_obj.touch()
+            self.doc.recompute([self.montage_obj])
+            if self.montage_obj.PlotRevision == revision:
+                raise RuntimeError(self.montage_obj.Status)
+            stats = self.montage_obj.Proxy._last_stats
+        except Exception as exc:
+            async_runner.set_status(self.status, "failed", "update failed: %s" % exc)
+            QtWidgets.QApplication.restoreOverrideCursor()
+            return
+        QtWidgets.QApplication.restoreOverrideCursor()
+        self.refresh_readout(stats)
+        self.status.setToolTip(str(self.montage_obj.Status))
+        async_runner.set_status(self.status, "active", "Field updated — " + self.phase_choice.currentText())
+
+    def refresh_readout(self, stats):
+        self.clamp_label.setText("+/-%.4g V" % stats["clamp_v"])
+        charge = stats.get("source_mA", 0)-stats.get("sink_mA", 0)
+        scale = max(1.0, max(abs(s.value()) for s in self.contact_spins))
+        balanced = abs(charge) < 1e-6 * scale
+        self.charge_label.setText(
+            "%.4g mA%s" % (charge, "" if balanced else "  -- UNBALANCED source/return"))
+        self.charge_label.setStyleSheet("" if balanced else "color: #8e0000; font-weight: bold;")
+        for t in M.TISSUES:
+            s = stats["tissues"][t]
+            txt = "[%.1f, %.1f] V" % (s["v_min"], s["v_max"])
+            if s["n_nan"]:
+                txt += "  NaN=%d" % s["n_nan"]
+            self.tissue_labels[t].setText(txt)
+
+    def on_dock_closing(self):
+        self._poll_timer.stop()
+        if self.solve_runner.is_running() and not scs_job_service.service().owns(self.solve_runner):
+            self.solve_runner.abort()
+
+
+def show_panel():
+    doc = get_target_document()
+    FreeCAD.setActiveDocument(doc.Name)
+    FreeCADGui.setActiveDocument(doc.Name)
+
+    mw = FreeCADGui.getMainWindow()
+    dock = mw.findChild(QtWidgets.QDockWidget, OBJECT_NAME)
+    if dock is None:
+        dock = QtWidgets.QDockWidget("SCS Potential Visualizer", mw)
+        dock.setObjectName(OBJECT_NAME)
+        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    else:
+        old_widget = dock.widget()
+        if old_widget is not None and hasattr(old_widget, 'busy') and old_widget.busy():
+            dock.show()
+            dock.raise_()
+            print('A solve is running for ' + old_widget.doc.Label + '. Monitor it in Job Manager.')
+            return dock
+        if old_widget is not None and hasattr(old_widget, "on_dock_closing"):
+            old_widget.on_dock_closing()
+    panel = PotentialVisualizerPanel(doc)
+    dock.setWidget(panel)
+    dock.show()
+    dock.raise_()
+    return dock
+
+
+def main():
+    show_panel()
+    print(
+        "Done. The SCS Potential Field Visualizer dock is open. Not saved "
+        "-- File > Save if you want to keep this."
+    )
+
+
+if __name__ == "__main__":
+    main()

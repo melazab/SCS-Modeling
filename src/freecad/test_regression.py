@@ -99,10 +99,12 @@ Z_CENTER = 110.43203353881836
 CASES = [
     ("dorsal_z110_8c",
      {"type": "dorsal", "contacts": 8, "contact_length": 3.0, "gap": 1.0,
-      "diameter": 1.3, "tail": 6.0, "x_offset": 0.0, "z_center": Z_CENTER}),
+      "diameter": 1.3, "contact_thickness": 0.0, "tail": 6.0,
+      "x_offset": 0.0, "z_center": Z_CENTER}),
     ("ventral_z110_8c",
      {"type": "ventral", "contacts": 8, "contact_length": 3.0, "gap": 1.0,
-      "diameter": 1.3, "tail": 6.0, "x_offset": 0.0, "z_center": Z_CENTER}),
+      "diameter": 1.3, "contact_thickness": 0.0, "tail": 6.0,
+      "x_offset": 0.0, "z_center": Z_CENTER}),
 ]
 
 # The nine files each case must reproduce. Named explicitly rather than globbed,

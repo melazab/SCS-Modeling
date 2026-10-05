@@ -53,7 +53,9 @@ implanted, so the banner is red if either kind of check fails.
 
 INSTALL
 -------
-    cp src/freecad/lead_designer.FCMacro "$(python3 -c 'import FreeCAD,os;print(os.path.join(FreeCAD.getUserAppDataDir(),"Macro"))')"
+    MDIR=$(python3 -c 'import FreeCAD,os;print(os.path.join(FreeCAD.getUserAppDataDir(),"Macro"))')
+    mkdir -p "$MDIR"
+    ln -sfn "$PWD/src/freecad/lead_designer.FCMacro" "$MDIR/lead_designer.FCMacro"
 
     # FreeCAD's macro directory is VERSIONED -- on 26.3 it is
     #   ~/.local/share/FreeCAD/v26-3/Macro/
@@ -163,9 +165,25 @@ def load_builder():
     try:
         import importlib
         importlib.reload(build_lead_config)
+        if "make_scs_lead" in sys.modules:
+            importlib.reload(sys.modules["make_scs_lead"])
     except Exception:
         pass
     return build_lead_config
+
+
+def load_reader():
+    """Import read_document_leads, which recovers parameters from a document."""
+    freecad_dir = os.path.join(REPO, "src", "freecad")
+    if freecad_dir not in sys.path:
+        sys.path.insert(0, freecad_dir)
+    import read_document_leads
+    try:
+        import importlib
+        importlib.reload(read_document_leads)
+    except Exception:
+        pass
+    return read_document_leads
 
 
 def worst_of(levels):
@@ -227,6 +245,15 @@ class LeadPage(QtWidgets.QWidget):
                                   "the house default is 1.30 mm",
                                   0.2, 4.0, 0.05, " mm")
         form.addRow("Diameter", self.diameter)
+        self.contact_thickness = self.spin(
+            "How far each electrode contact projects radially beyond the "
+            "insulated lead body. Contact outer diameter = Diameter + twice "
+            "this value. Zero gives the legacy flush contact.",
+            0.0, 2.0, 0.01, " mm")
+        form.addRow("Contact thickness", self.contact_thickness)
+        if kind == "drg":
+            self.contact_thickness.setSpecialValueText("Fixed mesh")
+            self.contact_thickness.setValue(self.contact_thickness.minimum())
         self.tail = self.spin("Plain insulator beyond the end contacts", 0.0,
                               30.0, 0.5, " mm")
         form.addRow("Tail", self.tail)
@@ -236,7 +263,7 @@ class LeadPage(QtWidgets.QWidget):
                          "the lead this model ships, so this is measured, not "
                          "chosen. Only the target and the three nudges are yours.")
             for w in (self.contacts, self.contact_length, self.gap,
-                      self.diameter, self.tail):
+                      self.diameter, self.contact_thickness, self.tail):
                 w.setEnabled(False)
                 w.setToolTip(fixed_tip)
                 # Three decimals, not the two a swept lead uses. These are
@@ -326,7 +353,7 @@ class LeadPage(QtWidgets.QWidget):
             form.addRow("", self.offset_note)
 
             self.numeric = (self.contacts, self.contact_length, self.gap,
-                            self.diameter, self.tail, self.z_center, self.x_offset)
+                            self.diameter, self.contact_thickness, self.tail, self.z_center, self.x_offset)
 
         for w in self.numeric:
             w.valueChanged.connect(self.touched)
@@ -444,6 +471,7 @@ class LeadPage(QtWidgets.QWidget):
                 self.contact_length.setValue(float(params["contact_length"]))
                 self.gap.setValue(float(params["gap"]))
                 self.diameter.setValue(float(params["diameter"]))
+                self.contact_thickness.setValue(float(params.get("contact_thickness", 0.0)))
                 self.tail.setValue(float(params["tail"]))
                 self.z_center.setValue(float(params["z_center"]))
                 self.x_offset.setValue(float(params["x_offset"]))
@@ -473,6 +501,7 @@ class LeadPage(QtWidgets.QWidget):
                        contact_length=self.contact_length.value(),
                        gap=self.gap.value(),
                        diameter=self.diameter.value(),
+                       contact_thickness=self.contact_thickness.value(),
                        tail=self.tail.value(),
                        z_center=self.z_center.value(),
                        x_offset=self.x_offset.value())
@@ -487,6 +516,7 @@ class LeadDesigner(QtWidgets.QWidget):
     def __init__(self, blc):
         super(LeadDesigner, self).__init__()
         self.blc = blc
+        self.rdl = load_reader()
         self.cfg = blc.parse_defaults_file(blc.DEFAULTS_YAML)
         self.max_per_type = int(self.cfg.get("max_leads_per_type",
                                              blc.DEFAULT_MAX_LEADS_PER_TYPE))
@@ -581,7 +611,8 @@ class LeadDesigner(QtWidgets.QWidget):
         self.status.setStyleSheet("color: gray;")
         outer.addWidget(self.status)
 
-        self.add_lead("dorsal")
+        if not self.hydrate_from_document():
+            self.add_lead("dorsal")
         self.sync_preview_button()
 
     # -- the set of pages --------------------------------------------------
@@ -601,6 +632,92 @@ class LeadDesigner(QtWidgets.QWidget):
         for kind, btn in self.add_buttons.items():
             btn.setEnabled(self.count_of(kind) < self.max_per_type)
         self.btn_remove.setEnabled(self.tabs.count() > 1)
+
+    # A recovered z_center is a measured number, but it usually lands on a
+    # named vertebral level -- the poster dorsal leads sit at 80.440, and
+    # lead_defaults.yaml puts T12 at 80.44. Showing "— custom —" there would
+    # hide the one fact a clinician reads first. The levels are tens of mm
+    # apart, so this tolerance cannot confuse two of them; it only has to
+    # absorb the recovery's own error (~0.02 mm, measured).
+    LEVEL_MATCH_MM = 0.1
+
+    def level_for_z(self, z):
+        """Name the vertebral level a recovered z_center sits at, else CUSTOM."""
+        best, best_d = None, self.LEVEL_MATCH_MM
+        for name, lz in (self.cfg.get("levels") or {}).items():
+            try:
+                d = abs(float(lz) - float(z))
+            except (TypeError, ValueError):
+                continue
+            if d <= best_d:
+                best, best_d = name, d
+        return best or CUSTOM
+
+    def hydrate_from_document(self):
+        """Fill the panel from the leads already in the active document.
+
+        Opening a RADO model that carries leads used to show this panel's
+        DEFAULTS, which described nothing in front of you -- the poster dorsal
+        model has two leads at +/-2.00 mm, 1.60 mm across, centred at z = 80.44,
+        against a default of one lead on the midline, 1.30 mm across, at z = 110.
+        Editing from that state would have silently moved real leads.
+
+        The parameters are not stored in the document (the lead bodies carry
+        only Placement/Shape/Label/Visibility), so read_document_leads recovers
+        them from the geometry, and the vertebral level is named back from the
+        recovered position (the poster dorsal leads sit at 80.440 = T12).
+        contact_thickness is not encoded anywhere and keeps its default, so a
+        page is always complete.
+
+        Returns True when at least one lead was loaded.
+        """
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return False
+        try:
+            found = self.rdl.recover(doc, midline_x=self.blc.MIDLINE_X)
+        except Exception:
+            FreeCAD.Console.PrintWarning(
+                "Lead designer: could not read the document's leads, starting "
+                "from defaults.\n%s\n" % traceback.format_exc())
+            return False
+        if not found:
+            return False
+
+        loaded, stale = 0, []
+        self.loading = True
+        try:
+            for rec in found:
+                kind = rec["type"]
+                if self.count_of(kind) >= self.max_per_type:
+                    continue
+                # Start from the resolved defaults so every key a page reads is
+                # present, then overlay only what the geometry actually gave us.
+                params = self.blc.resolve_lead(self.cfg, {"type": kind},
+                                               self.tabs.count() + 1, 1)
+                for key in rec["_recovered"]:
+                    params[key] = rec[key]
+                params["level"] = self.level_for_z(params["z_center"])
+                if self.add_lead(kind, params) is not None:
+                    loaded += 1
+                    if rec["_label_type"] is None:
+                        stale.append(rec["_lead_number"])
+        finally:
+            self.loading = False
+
+        if not loaded:
+            return False
+        msg = ("Loaded %d lead(s) from %s. Values are recovered from the lead "
+               "geometry -- the file does not store them -- and the level is "
+               "named when the recovered position matches one. Contact "
+               "thickness is not recoverable and keeps its default."
+               % (loaded, doc.Name))
+        if stale:
+            msg += (" Lead(s) %s carry no type in their label and were assumed "
+                    "dorsal -- check before rebuilding."
+                    % ", ".join(str(n) for n in stale))
+        self.status.setText(msg)
+        return True
 
     def add_lead(self, kind, params=None):
         if self.count_of(kind) >= self.max_per_type:
@@ -700,8 +817,8 @@ class LeadDesigner(QtWidgets.QWidget):
                     % (len(leads), closest)
             elif self.outcome["leads"] and "clearance_mm" in self.outcome["leads"][0]["numbers"]:
                 n = self.outcome["leads"][0]["numbers"]
-                headline += "   —   %.2f mm lead, %+.2f mm clearance" \
-                    % (leads[0]["diameter"], n["clearance_mm"])
+                headline += "   —   %.2f mm widest contact, %+.2f mm clearance" \
+                    % (n["widest_lead_mm"], n["clearance_mm"])
             self.set_banner(worst, headline)
             self.status.setText("")
             # Check fit doubles as "rebuild what is in the tree": if the leads

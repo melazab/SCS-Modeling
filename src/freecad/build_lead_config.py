@@ -106,7 +106,7 @@ So the correct check is not "did the subtraction succeed" but "is carving
 unnecessary". For an epidural lead that is three measurements:
 
     fit         the channel thickness measured AT the requested side, lateral
-                offset and z span, against the lead diameter
+                offset and z span, against the widest contact diameter
     containment every sampled vertex of the built lead tested for being inside
                 the epidural fat and outside the dura
     coverage    whether the lead runs off the end of the measured centreline
@@ -215,6 +215,7 @@ swallows print(). Same convention as every other script here.
 
 import argparse
 import json
+import math
 import os
 import re
 import shlex
@@ -270,6 +271,7 @@ PARAM_TYPES = {
     "contact_length": float,
     "gap": float,
     "diameter": float,
+    "contact_thickness": float,
     "tail": float,
     "note": str,
     "label": str,
@@ -294,6 +296,7 @@ COMMON_PARAMS = {
     "contact_length",
     "gap",
     "diameter",
+    "contact_thickness",
     "tail",
     "note",
     "label",
@@ -315,7 +318,7 @@ DRG_PARAMS = {"target", "lateral_offset", "y_offset", "z_offset"}
 #     principle as every other parameter that means nothing for its type;
 #   - filled back in by MEASURING RADO's meshes, so describe() and the reports
 #     can still say what the hardware is without any of it being a claim.
-DRG_FIXED_PARAMS = {"contacts", "contact_length", "gap", "diameter", "tail"}
+DRG_FIXED_PARAMS = {"contacts", "contact_length", "gap", "diameter", "contact_thickness", "tail"}
 
 TYPES = ("dorsal", "ventral", "drg")
 EPIDURAL_TYPES = ("dorsal", "ventral")
@@ -615,6 +618,10 @@ def resolve_lead(cfg, entry, index=1, of=1, overrides=None):
                 params["z_center"] = float(cfg["levels"][level])
         params["x"] = MIDLINE_X + float(params["x_offset"])
 
+    if kind != "drg":
+        # Missing in older configurations means a flush contact and therefore
+        # preserves their exact geometry.
+        params.setdefault("contact_thickness", 0.0)
     params["index"] = index
     params["of"] = of
     params.setdefault("label", default_label(params, index, of))
@@ -680,6 +687,10 @@ def check_sane(params):
         problems.append("the gap between contacts cannot be negative")
     if params["tail"] < 0:
         problems.append("the tail cannot be negative")
+    if params["type"] != "drg":
+        thickness = params.get("contact_thickness", 0.0)
+        if not math.isfinite(thickness) or thickness < 0:
+            problems.append("contact thickness must be finite and non-negative")
     if params["type"] == "drg":
         target = str(params.get("target", ""))
         if not re.match(r"^[LR][1-9]\d*$", target):
@@ -711,6 +722,8 @@ def describe(params):
         params["gap"],
         params["diameter"],
     )
+    if kind != "drg":
+        common += ", %.3f mm contact projection" % params.get("contact_thickness", 0.0)
     if kind == "drg":
         target = params["target"]
         side = "left" if target[0] == "L" else "right"
@@ -981,7 +994,8 @@ def build_shapes(params, path_info):
         params["tail"],
         t_center,
     )
-    shapes = msl.sweep_path(segments, point_of, 0.5 * params["diameter"])
+    shapes = msl.sweep_path(segments, point_of, 0.5 * params["diameter"],
+                            contact_thickness=params.get("contact_thickness"))
     return shapes, segments, t0, total
 
 
@@ -1273,13 +1287,14 @@ def _validate_epidural(params, meshes, corridor, max_samples):
     thicknesses = [t for _z, _y, t in cinfo["stations"]]
     t_min, t_med = min(thicknesses), sorted(thicknesses)[len(thicknesses) // 2]
     z_at_min = min(cinfo["stations"], key=lambda s: s[2])[0]
-    clearance = t_min - params["diameter"]
+    contact_diameter = params["diameter"] + 2 * params.get("contact_thickness", 0.0)
+    clearance = t_min - contact_diameter
     numbers.update(
         channel_min_mm=t_min,
         channel_median_mm=t_med,
         channel_min_at_z=z_at_min,
         clearance_mm=clearance,
-        widest_lead_mm=t_min,
+        widest_lead_mm=contact_diameter,
     )
     where = (
         "on the midline"
@@ -1300,7 +1315,7 @@ def _validate_epidural(params, meshes, corridor, max_samples):
                 "press through the dura. The widest lead that fits here is "
                 "%.2f mm; the %s space is the roomier one at %.2f mm."
                 % (
-                    params["diameter"],
+                    contact_diameter,
                     side,
                     where,
                     t_min,
@@ -1322,7 +1337,7 @@ def _validate_epidural(params, meshes, corridor, max_samples):
                 "its narrowest (z = %.0f mm) -- only %.2f mm to spare, i.e. "
                 "%.2f mm each side. It fits, but it is against both walls."
                 % (
-                    params["diameter"],
+                    contact_diameter,
                     side,
                     where,
                     t_min,
@@ -1345,7 +1360,7 @@ def _validate_epidural(params, meshes, corridor, max_samples):
                     where,
                     t_min,
                     t_med,
-                    params["diameter"],
+                    contact_diameter,
                     clearance,
                     0.5 * clearance,
                 ),
@@ -2096,7 +2111,7 @@ def report_lines(params, result):
                     n["channel_min_mm"],
                     n["channel_min_at_z"],
                     n["channel_median_mm"],
-                    params["diameter"],
+                    n["widest_lead_mm"],
                     n["clearance_mm"],
                 )
             )
@@ -2329,6 +2344,18 @@ def export_set(name, leads, results, out_root=DEFAULT_OUT):
     several = len(leads) > 1
 
     doc = FreeCAD.newDocument("scs_lead_export")
+
+    def export_shape(shape, object_name, path):
+        # Mesh.export(Part::Feature) otherwise uses whatever GUI tessellation
+        # happens to be cached on the object. That produced 100 facets in one
+        # session and 500 in another for identical cylinders. Tessellate an
+        # untouched copy explicitly so exports, geometry fingerprints and the
+        # committed regression fixtures do not depend on viewport preferences.
+        verts, tris = shape.copy().tessellate(0.02)
+        triangles = [[tuple(verts[j]) for j in tri] for tri in tris]
+        obj = doc.addObject("Mesh::Feature", object_name)
+        obj.Mesh = Mesh.Mesh(triangles)
+        Mesh.export([obj], path)
     written = []
     manifest = ["%s -- %s" % (name, describe_set(leads)), ""]
     try:
@@ -2368,15 +2395,11 @@ def export_set(name, leads, results, out_root=DEFAULT_OUT):
             for kind, idx, shape in result["shapes"]:
                 if kind != "contact":
                     continue
-                obj = doc.addObject("Part::Feature", "contact%d" % idx)
-                obj.Shape = shape
                 path = os.path.join(outdir, "SCS Lead Electrode %d.stl" % idx)
-                Mesh.export([obj], path)
+                export_shape(shape, "contact%d" % idx, path)
                 written.append(os.path.relpath(path, root))
-            ins = doc.addObject("Part::Feature", "insulator")
-            ins.Shape = msl.fuse_insulator(result["shapes"])
             path = os.path.join(outdir, "SCS Lead Insulator.stl")
-            Mesh.export([ins], path)
+            export_shape(msl.fuse_insulator(result["shapes"]), "insulator", path)
             written.append(os.path.relpath(path, root))
             manifest.append("")
     finally:
@@ -2664,6 +2687,7 @@ def main():
         ("--contact-length", float),
         ("--gap", float),
         ("--diameter", float),
+        ("--contact-thickness", float),
         ("--x-offset", float),
         ("--z-center", float),
         ("--tail", float),
@@ -2696,6 +2720,7 @@ def main():
             "contact_length",
             "gap",
             "diameter",
+            "contact_thickness",
             "x_offset",
             "z_center",
             "tail",

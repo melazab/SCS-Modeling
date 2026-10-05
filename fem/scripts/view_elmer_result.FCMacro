@@ -1,0 +1,200 @@
+"""Load the Elmer StatCurrentSolver result into the open FreeCAD document and
+show it next to the RADO-SCS anatomy, colored by voltage.
+
+WHY THIS EXISTS
+
+`fem/scripts/crosscheck_elmer.py` runs Elmer's StatCurrentSolver on the same
+tissue-tagged mesh the P1 solver uses, and writes
+
+    fem/out/elmer/results/case_t0001.vtu
+
+The mesh was built in millimetres (matching the RADO STL files), but that
+Elmer run used `Coordinate Scaling = 1.0e-3` in its .sif, so the point
+coordinates INSIDE case_t0001.vtu are in metres. Load it as-is into a
+document whose other geometry is in mm and the field appears ~1000x too
+small, floating far from the anatomy. This script handles that, builds a
+`Fem::FemPostPipeline` + a `Fem::FemPostClipFilter` sagittal slice through
+the lead axis, colors it by the `potential` point-data field, and (since it
+is on the identical mesh, already in mm, no scaling needed) does the same
+for this repo's own from-scratch P1 solve at fem/out/solution.vtu, hidden by
+default, purely as an on-hand comparison.
+
+Nothing outside `fem/` is touched, no existing document object is deleted or
+modified, and the document is NOT saved -- run File > Save yourself if you
+want to keep this. Re-running is safe: it looks objects up by name first and
+updates them in place rather than duplicating.
+
+USAGE
+
+Run from FreeCAD's Macro menu (Macro -> Execute macro..., browse to this
+file -- or copy/symlink it into FreeCAD.getUserAppDataDir()/Macro/ for the
+Macro menu's list to pick it up), or paste into the Python console, with the
+target document already open. Needs FreeCAD's GUI (uses ViewObject
+properties) -- do not run under `freecadcmd`.
+"""
+import os
+import sys
+
+import FreeCAD
+import FreeCADGui
+
+# Fixed, not derived from __file__: this macro is meant to be copied or
+# symlinked into FreeCAD's Macro directory to appear in the Macro menu, and
+# __file__ then points THERE, not at fem/scripts/ -- confirmed to actually
+# break this way for a sibling macro (SCS_Mesh_Generator.FCMacro) once
+# copied. A symlink wouldn't dodge it either: os.path.abspath() doesn't
+# resolve symlinks. Same fixed-path convention as Elmer (/opt/elmerfem) and
+# CalculiX (/bin/ccx) elsewhere in fem/scripts/.
+sys.path.insert(0, "/home/mohamed/Projects/SCS-Modeling/fem/scripts")
+import config as C
+import prepare_elmer_result_mm as prep
+
+# -- which document to add the visualization to --------------------------
+# Prefer the RADO anatomy document if it is open, so the field lands right
+# next to the model it was solved for; otherwise fall back to whatever is
+# active, and only create a new document as a last resort.
+PREFERRED_DOC = "NBF_RADO_SCS"
+
+ELMER_VTU_M = os.path.join(C.OUT, "elmer", "results", "case_t0001.vtu")
+P1_VTU = os.path.join(C.OUT, "solution.vtu")
+
+GROUP_NAME = "Elmer_Viz"
+ELMER_PIPE_NAME = "Elmer_PotentialField"
+ELMER_CLIP_NAME = "Elmer_ClipFilter"
+PLANE_NAME = "Elmer_ClipPlane"
+P1_PIPE_NAME = "P1_PotentialField"
+P1_CLIP_NAME = "P1_ClipFilter"
+
+# Sagittal clip plane through the lead axis, x = 55.60 mm -- the same slice
+# `fem/scripts/plot_slices.py` already uses for its own sagittal figure, so
+# this view is consistent with that one rather than an arbitrary new cut.
+CLIP_X_MM = 55.60
+
+
+def get_target_document():
+    if PREFERRED_DOC in FreeCAD.listDocuments():
+        return FreeCAD.getDocument(PREFERRED_DOC)
+    if FreeCAD.ActiveDocument is not None:
+        print("'%s' not open; using active document '%s' instead"
+              % (PREFERRED_DOC, FreeCAD.ActiveDocument.Name))
+        return FreeCAD.ActiveDocument
+    print("no document open; creating a new one")
+    return FreeCAD.newDocument("ElmerResult")
+
+
+def get_or_create(doc, name, type_id, parent=None):
+    obj = doc.getObject(name)
+    if obj is None:
+        obj = doc.addObject(type_id, name)
+        if parent is not None:
+            parent.addObject(obj)
+    return obj
+
+
+def main():
+    mm_vtu = prep.prepare(ELMER_VTU_M, os.path.join(
+        C.OUT, "elmer", "results", "case_t0001_mm.vtu"))
+
+    doc = get_target_document()
+    FreeCAD.setActiveDocument(doc.Name)
+    FreeCADGui.setActiveDocument(doc.Name)
+
+    grp = get_or_create(doc, GROUP_NAME, "App::DocumentObjectGroup")
+    grp.Label = "Elmer voltage field (bipolar 1A, c3->c5)"
+
+    # --- Elmer field, the primary result of this script ---
+    pipe = get_or_create(doc, ELMER_PIPE_NAME, "Fem::FemPostPipeline", grp)
+    pipe.read(mm_vtu)
+    pipe.ViewObject.DisplayMode = "Surface"
+    pipe.ViewObject.Visibility = False  # the clip below is the intended view
+    doc.recompute()
+    bounds = pipe.Data.GetBounds()
+    print("Elmer field bounds (mm): X%s Y%s Z%s"
+          % (bounds[0:2], bounds[2:4], bounds[4:6]))
+
+    plane = get_or_create(doc, PLANE_NAME, "Fem::FemPostPlaneFunction", grp)
+    plane.PlaneOrigin = FreeCAD.Vector(
+        CLIP_X_MM, (bounds[2] + bounds[3]) / 2.0, (bounds[4] + bounds[5]) / 2.0)
+    plane.PlaneNormal = FreeCAD.Vector(1, 0, 0)
+
+    clip = get_or_create(doc, ELMER_CLIP_NAME, "Fem::FemPostClipFilter", None)
+    if clip.Name not in [o.Name for o in pipe.Group]:
+        pipe.addObject(clip)
+    clip.Function = plane
+    clip.InsideOut = False
+    clip.CutCells = False
+    # DisplayMode must be set to "Surface" BEFORE the Field enum is usable --
+    # FreeCAD only populates the list of colorable arrays (ViewObject.Field's
+    # enumeration) once an algorithm that carries point data (not the default
+    # Outline, which discards it) has actually run once via recompute.
+    clip.ViewObject.DisplayMode = "Surface"
+    doc.recompute()
+    # NOT FreeCADGui.updateGui() -- confirmed live (2026-09-11, via the MCP
+    # execute_code bridge this repo is developed through) to hang GUI
+    # dispatch for 90+ seconds. A DisplayMode round-trip forces the same
+    # Field-enum rebuild without touching the GUI event loop directly.
+    clip.ViewObject.DisplayMode = "Wireframe"
+    doc.recompute()
+    clip.ViewObject.DisplayMode = "Surface"
+    doc.recompute()
+    if "potential" in clip.ViewObject.getEnumerationsOfProperty("Field"):
+        # Setting Field ONCE right after the clip filter's data first exists
+        # captures the colour-bar range before the filter has really run --
+        # it sticks at FreeCAD's -0.5/+0.5 default and never gets a second
+        # chance to update, even though the *data* (clip.Data) is already
+        # correct. Toggling the property to "None" and back forces the
+        # onChanged handler to recompute the range against real data. Found
+        # live 2026-09-11: without this the legend read -0.5..+0.5 while the
+        # actual field spans -1369.9..+1297.7 V -- the plot looked almost
+        # entirely mid-range green with the true extremes crushed into a
+        # tiny hot corner, which is NOT what the field actually looks like.
+        clip.ViewObject.Field = "None"
+        doc.recompute()
+        clip.ViewObject.Field = "potential"
+        doc.recompute()
+    else:
+        print("WARNING: 'potential' not in Field enum -- got %s"
+              % clip.ViewObject.getEnumerationsOfProperty("Field"))
+    clip.ViewObject.Visibility = True
+
+    rng = clip.Data.GetPointData().GetArray("potential").GetRange()
+    print("Elmer potential range shown: %.2f to %.2f V" % rng)
+
+    # --- P1 solver field, same mesh, already mm -- hidden comparison only ---
+    if os.path.exists(P1_VTU):
+        p1 = get_or_create(doc, P1_PIPE_NAME, "Fem::FemPostPipeline", grp)
+        p1.read(P1_VTU)
+        p1.ViewObject.DisplayMode = "Surface"
+        p1.ViewObject.Visibility = False
+
+        p1clip = get_or_create(doc, P1_CLIP_NAME, "Fem::FemPostClipFilter", None)
+        if p1clip.Name not in [o.Name for o in p1.Group]:
+            p1.addObject(p1clip)
+        p1clip.Function = plane  # reuse the same slice for a direct comparison
+        p1clip.InsideOut = False
+        p1clip.CutCells = False
+        p1clip.ViewObject.DisplayMode = "Surface"
+        doc.recompute()
+        # same DisplayMode-round-trip fix as the Elmer clip above -- NOT
+        # FreeCADGui.updateGui(), which hangs GUI dispatch (see above)
+        p1clip.ViewObject.DisplayMode = "Wireframe"
+        doc.recompute()
+        p1clip.ViewObject.DisplayMode = "Surface"
+        doc.recompute()
+        if "V_volts" in p1clip.ViewObject.getEnumerationsOfProperty("Field"):
+            # same stale-colour-bar-range fix as the Elmer clip above
+            p1clip.ViewObject.Field = "None"
+            doc.recompute()
+            p1clip.ViewObject.Field = "V_volts"
+            doc.recompute()
+        p1clip.ViewObject.Visibility = False  # toggle on by hand to compare
+        print("P1 comparison field loaded (hidden): %s -> Elmer_Viz group"
+              % P1_PIPE_NAME)
+    else:
+        print("no P1 solution.vtu found at %s -- skipping comparison field" % P1_VTU)
+
+    print("Done. Not saved -- File > Save if you want to keep this.")
+
+
+if __name__ == "__main__":
+    main()

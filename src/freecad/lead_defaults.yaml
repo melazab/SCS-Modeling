@@ -127,6 +127,7 @@ defaults:
   contact_length: 3.0     # mm, along the lead
   gap: 1.0                # mm of insulator between adjacent contacts
   diameter: 1.3           # mm, see the note above about 1.25 vs 1.30
+  contact_thickness: 0.0  # mm radial projection beyond the insulated lead body
   tail: 6.0               # mm of plain insulator beyond the end contacts
 
 # Applied on top of `defaults` for a dorsal or ventral lead only.

@@ -1,0 +1,7 @@
+"""Open the shared SCS execution profiles and job monitor."""
+import sys
+SCRIPTS='/home/mohamed/Projects/SCS-Modeling/fem/scripts'
+if SCRIPTS not in sys.path:sys.path.insert(0,SCRIPTS)
+# Do not reload the service: its identity and workers must survive macro reruns.
+import scs_job_manager
+scs_job_manager.show()

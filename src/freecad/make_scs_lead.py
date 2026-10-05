@@ -32,7 +32,8 @@ Construction: the lead is split along its length into alternating insulator and
 contact segments, each a cylinder placed along the local tangent of the
 centreline, so neighbours share a flat interface and never overlap -- which is
 what the mesher and bonded electric contact want, and matches how RADO models
-its own contacts (short full-diameter segments).
+its own contacts (short cylindrical segments, optionally projecting beyond the
+insulated body).
 
 Usage -- run headless with FreeCAD:
 
@@ -90,8 +91,8 @@ def segment_plan(n_contacts, c_len, gap, tail, z_center):
     of the contact array and the centre of the whole lead.
 
     Segments abut exactly rather than overlapping: neighbours share a flat
-    interface, which is what the mesher and a bonded electric contact want, and
-    it is how RADO models its own contacts (short full-diameter segments).
+    interface, which is what the mesher and a bonded electric contact want.
+    The contact radius itself is applied later by sweep_path().
 
     ZERO-LENGTH SEGMENTS ARE DROPPED rather than emitted, because a cylinder of
     zero height is not a shape: Part.makeCylinder() would be handed a length of
@@ -125,7 +126,7 @@ def segment_plan(n_contacts, c_len, gap, tail, z_center):
     return segments, z0, total
 
 
-def sweep_path(segments, point_of, radius):
+def sweep_path(segments, point_of, radius, contact_thickness=None):
     """THE one implementation of "sweep a lead along a measured centreline".
 
     Each segment becomes a cylinder placed along the LOCAL TANGENT of the
@@ -148,16 +149,27 @@ def sweep_path(segments, point_of, radius):
                            FORAMEN, so both of the other two coordinates follow
                            a curve and neither is the sweep parameter.
 
+    contact_thickness is how far the electrode surface projects radially beyond
+    the lead body's radius. Thus its outer diameter is
+    2 * (radius + contact_thickness). Zero preserves the legacy flush contact.
+
     Returns [(kind, index, Part.Shape), ...] parallel to `segments`. It builds
     shapes and nothing else -- no document, no files -- so the caller decides
     whether they become a preview in a live document or STLs on disk.
     """
+    if contact_thickness is None:
+        contact_thickness = 0.0
+    if not math.isfinite(contact_thickness) or contact_thickness < 0:
+        raise ValueError("Contact thickness must be finite and non-negative")
     shapes = []
     for kind, idx, ts, ln in segments:
         a = App.Vector(*point_of(ts))
         b = App.Vector(*point_of(ts + ln))
         d = b.sub(a)
-        shapes.append((kind, idx, Part.makeCylinder(radius, d.Length, a, d.normalize())))
+        length = d.Length
+        direction = d.normalize()
+        part_radius = radius + contact_thickness if kind == "contact" else radius
+        shapes.append((kind, idx, Part.makeCylinder(part_radius, length, a, direction)))
     return shapes
 
 
