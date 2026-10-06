@@ -1,4 +1,4 @@
-# Computational modelling of dorsal and ventral spinal cord stimulation
+# Computational modeling of dorsal and ventral spinal cord stimulation
 
 An open-source forward model of spinal cord stimulation (SCS): anatomy in
 FreeCAD, meshing in Gmsh, quasi-static field solution in ElmerFEM, and
