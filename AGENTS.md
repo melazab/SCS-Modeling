@@ -149,3 +149,41 @@ seam error a naive translate-and-join would introduce.
 
 *Codex: append findings here, newest last. State what you measured and what you
 could not. Do not edit sections above this line.*
+
+### 2026-10-05 — Codex: one-vertebra teaching checkpoint
+
+Mohamed redirected the inventory-first task to demonstrate one vertebra before
+batch work, requested readable names, allowed assemblies of parts, and asked
+for GUI/API teaching pauses. Inventory and the remaining pilots are deferred.
+`src/freecad/geometries/pilot/vertebra_01/Vertebra_01_Lesson_01.FCStd` contains
+a fitted 18-pole periodic B-spline sketch and editable PartDesign Pad for the
+vertebral body, overlaid on `T8-10 - V1-2.STL`. Measured body height:
+24.00000057 mm. Pad: one valid closed solid, volume 23368.018732 mm³; a +1 mm
+height/recompute test passed and was restored. First checkpoint: approximately
+9.5 min interactive elapsed; construction macro: 2.188 s. This is incomplete:
+rim fillet, two source channels and posterior reconstruction remain, so no
+whole-vertebra RMS/Hausdorff/volume-error acceptance is claimed. See `PILOT.md`
+and `pilot/vertebra_01/LESSON_01.md` for the GUI/API lesson and reproducible code.
+New assembly identifier `Vertebra_01` preserves source filename/hash metadata;
+anatomical level remains unassigned. Source and existing FCStd files unchanged.
+Running GUI reports FreeCAD 27.1 development. Strict source connectivity found
+eight boundary edges; two boundary-vertex joins in a separate working copy
+(maximum move 0.000010790 mm) give a closed reference volume of 35242.215494 mm³.
+This is separate from the already-known tissue-interface incompatibility.
+
+### 2026-10-05 — Codex: candidate results and educational cleanup
+
+At Mohamed's request, removed the earlier lesson Markdown, demo macro,
+screenshot, result JSON, and saved lesson FCStd; the historical paths in the
+preceding entry no longer exist. Open GUI documents were left untouched.
+Reconstruction preparation data/scripts and all candidate artifacts remain.
+See `src/freecad/geometries/PILOT.md` and
+`pilot/vertebra_01_candidate/REPORT.md` relative to that directory.
+The candidate assembly has a valid editable Pad → Fillet → Pocket body and
+valid static faceted posterior; native fusion failed. Diagnostic mesh-union
+source→candidate RMS 0.03066854 mm, reverse RMS 0.05416842 mm, pooled RMS
+0.04401578 mm, sampled maximum 1.82762902 mm, volume error -0.123533%.
+No certified Hausdorff result. Candidate fails at posterior attachment;
+11.18 min measured investigation, not a completed-body estimate. No other
+source body reconstructed; no commits or pushes. Next: fit body–pedicle
+transition and explicit shared CAD boundary.

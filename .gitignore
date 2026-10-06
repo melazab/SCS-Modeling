@@ -90,3 +90,6 @@ hpc_cluster_resource_info.html
 AGENTS_log_archive_*.md
 docs/abstract*.md
 *Research_Day_Abstract*
+
+# FreeCAD backup files from the CAD pilot
+*.FCBak

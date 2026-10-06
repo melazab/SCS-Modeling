@@ -1,0 +1,8 @@
+{
+  "status": "Diagnostic mesh union ONLY; not native CAD fusion",
+  "watertight": true,
+  "winding_consistent": true,
+  "volume_mm3": 35198.67955598188,
+  "faces": 82876,
+  "elapsed_seconds": 0.6149928260001616
+}

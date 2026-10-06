@@ -1,0 +1,35 @@
+{
+  "mode": "diagnostic_mesh_union.npz whole surface",
+  "samples_requested_per_direction": 100000,
+  "candidate_mesh_watertight": true,
+  "candidate_mesh_winding_consistent": true,
+  "candidate_mesh_volume_mm3": 35198.67955598188,
+  "source_closed_reference_volume_mm3": 35242.21549354452,
+  "relative_volume_error": -0.001235334866237836,
+  "candidate_mesh_faces": 82876,
+  "source_to_candidate": {
+    "n_area_samples": 100000,
+    "rms_mm": 0.030668544860100858,
+    "sample_max_mm": 0.5320505515461084,
+    "p95_mm": 0.018667927674821894,
+    "max_point_mm": [
+      73.60131478397173,
+      63.50347006932682,
+      79.61871875378992
+    ]
+  },
+  "candidate_to_source": {
+    "n_area_samples": 100000,
+    "rms_mm": 0.05416841829497261,
+    "sample_max_mm": 1.8276290179776766,
+    "p95_mm": 0.019416182996056,
+    "max_point_mm": [
+      41.52129054582302,
+      64.51157383898818,
+      81.1626912776437
+    ]
+  },
+  "pooled_rms_mm": 0.04401577662847233,
+  "bidirectional_sample_max_mm": 1.8276290179776766,
+  "runtime_seconds": 45.81139261200042
+}

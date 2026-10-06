@@ -1,0 +1,30 @@
+0.292 pad built
+1.128 fillet built ['Edge2', 'Edge3']
+1.339 pocket built
+2.256 body exported
+9.868 posterior shell built
+14.921 ERROR
+0.541 pad built
+0.645 fillet built ['Edge2', 'Edge3']
+0.874 pocket built
+1.735 body exported
+1.846 ERROR
+0.969 pad built
+1.288 fillet built ['Edge2', 'Edge3']
+1.568 pocket built
+3.104 body exported
+13.834 posterior shell built
+19.878 posterior validity (True, True, 12236.342621295107)
+33.147 posterior solid validated
+72.743 union recomputed
+72.745 ERROR
+0.274 pad built
+0.683 fillet built ['Edge2', 'Edge3']
+0.921 pocket built
+1.791 body exported
+9.764 posterior shell built
+14.827 posterior validity (True, True, 12236.342621295107)
+27.193 posterior solid validated
+69.668 union recomputed
+69.669 union metrics {'body_valid': True, 'body_closed': True, 'body_volume_mm3': 23220.53578120026, 'body_faces': 7, 'fillet_edges': ['Edge2', 'Edge3'], 'pocket_status': ['Up-to-date'], 'fillet_status': ['Up-to-date'], 'posterior_valid': True, 'posterior_closed': True, 'posterior_faces': 25702, 'posterior_volume_mm3': 12236.342621295107, 'union_valid': True, 'union_closed': True, 'union_solids': 0, 'union_volume_mm3': 0.0, 'union_faces': 0, 'union_status': ['Up-to-date']}
+69.671 ERROR

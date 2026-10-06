@@ -1,0 +1,81 @@
+{
+  "body": {
+    "valid": true,
+    "closed": true,
+    "solids": 1,
+    "faces": 7,
+    "volume_mm3": 23220.535781200288,
+    "bbox": "BoundBox (35.5855, 34.5498, 65.3703, 78.0476, 67.095, 95.3896)"
+  },
+  "posterior": {
+    "valid": true,
+    "closed": true,
+    "solids": 1,
+    "faces": 25702,
+    "volume_mm3": 12236.342621295104,
+    "bbox": "BoundBox (18.5584, 59.9606, 48.4829, 94.5584, 100.888, 91.6224)"
+  },
+  "tip": {
+    "valid": true,
+    "closed": true,
+    "solids": 1,
+    "faces": 7,
+    "volume_mm3": 23220.53578120026,
+    "bbox": "BoundBox (-20.9801, -15.9827, -9.66545e-16, 21.4894, 11.7164, 24)"
+  },
+  "parameter_checks": [
+    {
+      "parameter": "BodyHeight.Length",
+      "delta_mm": 1,
+      "result": {
+        "valid": true,
+        "closed": true,
+        "solids": 1,
+        "faces": 7,
+        "volume_mm3": 24192.654537667142,
+        "bbox": "BoundBox (35.5855, 34.5481, 65.3705, 78.0497, 67.3721, 96.3509)"
+      }
+    },
+    {
+      "parameter": "EndplateRims.Radius",
+      "delta_mm": 0.1,
+      "result": {
+        "valid": true,
+        "closed": true,
+        "solids": 1,
+        "faces": 7,
+        "volume_mm3": 23205.45494321847,
+        "bbox": "BoundBox (35.5855, 34.5736, 65.398, 78.0476, 67.0704, 95.3661)"
+      }
+    },
+    {
+      "parameter": "ChannelCenters radius constraint 0",
+      "delta_mm": 0.05,
+      "result": {
+        "valid": true,
+        "closed": true,
+        "solids": 1,
+        "faces": 7,
+        "volume_mm3": 23216.581486458894,
+        "bbox": "BoundBox (35.5855, 34.5498, 65.3703, 78.0476, 67.095, 95.3896)"
+      }
+    }
+  ],
+  "restored_body": {
+    "valid": true,
+    "closed": true,
+    "solids": 1,
+    "faces": 7,
+    "volume_mm3": 23220.53578120029,
+    "bbox": "BoundBox (35.5855, 34.5498, 65.3703, 78.0476, 67.095, 95.3896)"
+  },
+  "fuzzy_union": {
+    "valid": true,
+    "closed": true,
+    "solids": 0,
+    "faces": 0,
+    "volume_mm3": 0.0,
+    "bbox": "BoundBox (1.79769e+308, 1.79769e+308, 1.79769e+308, -1.79769e+308, -1.79769e+308, -1.79769e+308)"
+  },
+  "elapsed_seconds": 50.340360069998496
+}

@@ -1,0 +1,28 @@
+{
+  "body_valid": true,
+  "body_closed": true,
+  "body_volume_mm3": 23220.53578120026,
+  "body_faces": 7,
+  "fillet_edges": [
+    "Edge2",
+    "Edge3"
+  ],
+  "pocket_status": [
+    "Up-to-date"
+  ],
+  "fillet_status": [
+    "Up-to-date"
+  ],
+  "posterior_valid": true,
+  "posterior_closed": true,
+  "posterior_faces": 25702,
+  "posterior_volume_mm3": 12236.342621295107,
+  "union_valid": true,
+  "union_closed": true,
+  "union_solids": 0,
+  "union_volume_mm3": 0.0,
+  "union_faces": 0,
+  "union_status": [
+    "Up-to-date"
+  ]
+}
