@@ -82,3 +82,29 @@ transverse value). The paper's anisotropy — 0.1432 transverse / 0.6 longitudin
 — cannot be entered through the Mechanical Electric GUI. It needs an APDL command
 snippet (`MP,RSVX/RSVY/RSVZ`) or PyMAPDL; see `mapdl_electric_solve_template.dat`.
 The cord axis is global Z in this STL set. Currently left isotropic by choice.
+
+## Why the Ansys route stalled
+
+Kept because the diagnosis is reusable, not because the route is recommended.
+
+The models failed on pivot conditioning, and three candidate causes were each
+ruled out by measurement rather than argument:
+
+- **Element contact conductance is not the lever.** Three values four orders of
+  magnitude apart produced bit-identical pivots.
+- **Model size is not the lever.** Stripping a third of the elements moved the
+  maximum pivot from 7.13e16 to 7.73e16 — slightly worse.
+- **`CEDELE,ALL` is not a fix.** Those 878 constraint equations *are* the
+  electrode equipotential definitions. Deleting them lets the model solve by
+  ceasing to be the model.
+
+The actual cause is upstream: the source bodies cannot be meshed conformally
+(see `fem/README.md`, "Gotchas"), so Workbench glued 245 separately meshed
+bodies with 1116 bonded contact pairs, and every downstream symptom followed
+from that.
+
+`testA_mapdl_cylinder` is the counter-example that works — nested cylinders
+merged into one conformal mesh, with electrode conductivity moderated to
+1e4 S/m and the insulator dropped to remove a 1e11 contrast. It produces a
+clean field (-1.0366 to +1.0380 V for ±1 mA). The physics recipe was never the
+problem; the mesh topology was.

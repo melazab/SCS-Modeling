@@ -126,7 +126,6 @@ Longer list, with evidence: [`fem/README.md`](fem/README.md).
 | [`src/freecad/`](src/freecad/README.md) | Lead Designer — parametric leads with a fit check |
 | [`src/ansys/`](src/ansys/README.md) | earlier Ansys route, kept as a validation target |
 | [`STL_files/`](STL_files/) | RADO-SCS 3.0 source geometry, 245 STLs |
-| [`HANDOFF.md`](HANDOFF.md) | current state and where to start |
 | [`fem/TODO.md`](fem/TODO.md) | open technical items, with reasoning |
 
 ## Running it

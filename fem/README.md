@@ -843,3 +843,30 @@ Elmer resources and monitor jobs across models. Updated modeling macros use
 these shared execution profiles. HPC profile setup and a read-only SSH probe
 are included; remote submission is not enabled yet. See
 [Job Manager workflow and limitations](../docs/job_manager.md).
+
+## Gotchas
+
+Things that cost a day each, recorded so they cost nobody else one.
+
+- **The source STL interfaces are not conformal, and that is the central
+  constraint on this route.** Rounding vertices to 1e-4 mm and intersecting:
+  dura/epidural share 4 vertices of 1780 and 1756; CSF/dura 4 of 2138 and 1780;
+  white/CSF 237 of 5384 and 2138. The STLs are individually watertight,
+  manifold and free of degenerate facets — quality is not the problem,
+  compatibility is. No conformal volume mesh can be built by stitching them,
+  and the same fact rules out CAD "shared topology", which needs coincident
+  geometry these bodies do not have.
+- **Never save a `.FCStd` under `freecadcmd`.** It writes the document back
+  without per-face appearance and silently destroys every colour.
+- **FreeCAD's macro directory is versioned** (`~/.local/share/FreeCAD/v26-3/Macro/`).
+  Get it from `FreeCAD.getUserAppDataDir()` rather than hardcoding a version.
+- **Qt renders SVG Tiny.** No `clipPath`, and a `--` inside an XML comment is
+  illegal XML. Either produces a fully transparent icon with no error message.
+- **An exit code of 0 and a short runtime is not evidence that a solve
+  happened.** Two runs once "succeeded" having done nothing. Check for the
+  solver's own completion markers.
+- **ElmerSolver needs `ELMER_HOME` and `ELMER_SOLVER_HOME`, not just `PATH`,**
+  or it fails with `elements.def not found`.
+- **The conductivities in `tissue_map.yaml` are matched to Khadka et al. 2020
+  deliberately.** Do not adjust them to make a solver behave; that trades a
+  solver problem for a physics one.
