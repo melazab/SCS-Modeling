@@ -88,3 +88,5 @@ poster_backups/
 # Saved HPC node-availability page; a snapshot, not a source file.
 hpc_cluster_resource_info.html
 AGENTS_log_archive_*.md
+docs/abstract*.md
+*Research_Day_Abstract*
