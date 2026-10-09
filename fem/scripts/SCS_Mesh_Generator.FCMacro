@@ -634,19 +634,21 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         form.setLabelAlignment(QtCore.Qt.AlignRight)
 
         self.h_min = self.spin(
-            "Lower clamp on all region sizes, mm. A smaller Near value is raised to this limit.", 0.05, 2.0, 0.05, 2,
+            "Lower clamp on all region sizes, mm. A smaller Near value is raised to this limit.", 0.05, 2.0, 0.05, 3,
             build_mesh.DEFAULT_PARAMS["H_MIN"])
         form.addRow("H_Min", self.h_min)
         self.h_max = self.spin(
             "Upper clamp on every region size, mm. Reducing this refines the entire anatomical box.",
-            0.5, 10.0, 0.25, 2, build_mesh.DEFAULT_PARAMS["H_MAX"])
+            0.5, 10.0, 0.25, 3, build_mesh.DEFAULT_PARAMS["H_MAX"])
         form.addRow("H_Max", self.h_max)
 
         self._region_defaults = {name: (near, plateau, growth)
                                  for name, near, plateau, growth in build_mesh.DEFAULT_PARAMS["FIELDS"]}
         self.region_spins = {}
         for region, caption, default, tip in REGION_SPINS:
-            spin = self.spin(tip, 0.05, 5.0, 0.05, 2, self._region_defaults[region][0])
+            # Three decimals: halving 0.25/0.75 gives 0.125/0.375, and a rounded value
+            # changes the run key, so a finished mesh would not be found.
+            spin = self.spin(tip, 0.05, 5.0, 0.05, 3, self._region_defaults[region][0])
             self.region_spins[region] = spin
             form.addRow(caption, spin)
         outer.addWidget(size_box)
