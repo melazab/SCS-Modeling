@@ -41,14 +41,15 @@ def model_signature(stage='mesh'):
     names = ['artifacts.py', 'config.py', 'stlio.py', 'inside.py',
              'build_mesh.py', 'mesh_geometry.py', 'mesh_faces.py', 'mesh_preview.py']
     if stage == 'solve':
+        # The Elmer build is deliberately NOT hashed. Every published field has
+        # passed elmer_backend's independent residual and pin-current check,
+        # computed by the hashed Python code from the hashed mesh, labels and
+        # conductivities; that, not the binary, is what certifies it. Hashing
+        # /opt/elmerfem made Pioneer solves (~/opt/elmerfem-26.2, validated to
+        # 2e-9 of span against the workstation) permanently invalid locally.
+        # The solution records which build produced it (elmer_bin, elmer_version).
         names += ['assign_and_solve.py', 'solve_lead.py', 'element_batches.py',
                   'elmer_backend.py', 'solve_resources.py']
-        paths += [p for p in ('/opt/elmerfem/bin/ElmerSolver_mpi',
-                             '/opt/elmerfem/bin/ElmerGrid',
-                             '/opt/elmerfem/lib/elmersolver/libelmersolver.so',
-                             '/opt/elmerfem/share/elmersolver/lib/StatCurrentSolve.so',
-                             '/opt/elmerfem/deps/usr/lib/x86_64-linux-gnu/libHYPRE.so')
-                  if os.path.isfile(p)]
     paths += [str(here / name) for name in names]
     # Classification shares a module with the solver. Hash its actual code
     # separately, so changing CG/AMG does not invalidate a completed mesh.

@@ -233,6 +233,7 @@ def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, re
     residuals = []
     reactions = []
     free = np.ones(len(nodes), bool); free[pin] = False
+    version = None
     for pos, contact in enumerate(contact_ids):
         mask = labels == order.index('contact%d' % contact)
         source_vol = float(vol[mask].sum())
@@ -257,6 +258,9 @@ def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, re
         if resources.cpus > 1:
             command = [mpi, '-np', str(resources.cpus)] + command
         run(command, case, case / 'solver.log')
+        version = version or next((line.split('Version:', 1)[1].strip() for line
+                                   in (case / 'solver.log').read_text(errors='replace').splitlines()
+                                   if 'MAIN: Version:' in line), 'unknown')
         resources.mark('verify contact %d' % contact)
         v = read_potential(results, nodes)
         v -= v[pin]
@@ -278,7 +282,8 @@ def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, re
                 relative_residuals=np.array(residuals), pin_reactions=np.array(reactions),
                 accepted_residual=ACCEPTED_RESIDUAL, requested_residual=1e-11,
                 contact_ids=np.array(contact_ids), order=np.array(order), pinned_node=pin,
-                backend='Elmer StatCurrentSolver', cpus=resources.cpus,
+                backend='Elmer StatCurrentSolver', elmer_bin=str(ELMER_BIN), elmer_version=version,
+                cpus=resources.cpus,
                 memory_budget_gb=resources.memory_gb, peak_rss_gb=resources.peak_gb)
 
 
