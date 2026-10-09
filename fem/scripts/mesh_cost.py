@@ -135,11 +135,13 @@ def available_ram_gb():
             return None
 
 
-def describe(est, ram_gb=None):
+def describe(est, ram_gb=None, budget="available"):
     """One short human line, plus a severity the UI can colour on.
 
     Returns (severity, text) where severity is "ok" | "warn" | "danger".
-    Deliberately terse -- this goes in a panel, not a log.
+    Deliberately terse -- this goes in a panel, not a log. `ram_gb` defaults
+    to this machine's available RAM; a cluster job passes its allocation and
+    budget="HPC allocation".
     """
     ram_gb = available_ram_gb() if ram_gb is None else ram_gb
     n = est["n_tets"]
@@ -168,7 +170,7 @@ def describe(est, ram_gb=None):
             sev = "warn"
     text = "%s, %s, %s" % (count, ram, dur)
     if sev == "danger":
-        text += "  --  exceeds %.1f GB mesh budget (80%% of %.1f GB available)" % (0.8 * ram_gb, ram_gb)
+        text += "  --  exceeds %.1f GB mesh budget (80%% of %.1f GB %s)" % (0.8 * ram_gb, ram_gb, budget)
     elif sev == "warn":
-        text += "  --  high memory use; %.1f GB mesh budget (80%% of %.1f GB available)" % (0.8 * ram_gb, ram_gb)
+        text += "  --  high memory use; %.1f GB mesh budget (80%% of %.1f GB %s)" % (0.8 * ram_gb, ram_gb, budget)
     return sev, text

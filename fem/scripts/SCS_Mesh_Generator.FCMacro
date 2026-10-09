@@ -40,6 +40,7 @@ import config as C
 import live_lead
 import artifacts
 import scs_job_service
+import scs_jobs as J
 
 # 2026-09-15: this file used to import check_tissue_map.parse_tissue_map to
 # colour the preview per tissue. The preview is a single flat colour now
@@ -354,6 +355,7 @@ class CostEstimator(QtCore.QObject):
         self._next_id = 0
         self._want_id = None
         self._pending_params = None
+        self.ram_gb = None          # a cluster allocation; None = this machine's RAM
 
     def _set_state(self, s):
         self.state = s
@@ -531,6 +533,8 @@ class CostEstimator(QtCore.QObject):
         self._want_id = self._next_id
         req = dict(id=self._next_id, H_MIN=params["H_MIN"], H_MAX=params["H_MAX"],
                    FIELDS=[list(f) for f in params["FIELDS"]])
+        if self.ram_gb is not None:
+            req.update(ram_gb=self.ram_gb, budget="HPC allocation")
         self.proc.write((json.dumps(req) + "\n").encode("utf-8"))
 
     def _on_finished(self, *_):
@@ -601,6 +605,9 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         self.mesh_runner = async_runner.AsyncProcessRunner(
             self, FEM_VENV_PY, MESH_PREVIEW_SCRIPT, "MESH_PREVIEW_JSON ")
         self.mesh_runner.tick.connect(self.on_mesh_tick)
+        self.mesh_runner.stage_message.connect(self.on_mesh_stage)
+        self._remote_note = ""
+        self._profile_key = None
         self.mesh_runner.progress.connect(self._set_mesh_progress)
         self.mesh_runner.finished_ok.connect(self.on_mesh_finished)
         self.mesh_runner.failed.connect(self.on_mesh_failed)
@@ -876,6 +883,12 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             self.request_cost()
 
     def request_cost(self):
+        # A cluster mesh is judged against its SLURM allocation, not this RAM.
+        try:
+            profile = scs_job_service.service().profile(self.doc)
+            self.cost.ram_gb = (J.allocation_gb(profile) if profile['backend'] == 'slurm' else None)
+        except ValueError:
+            self.cost.ram_gb = None
         self.cost.request(self.mesh_params())
 
     def on_cost_state(self, state):
@@ -898,11 +911,18 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
     def refresh_gates(self):
         """Gate meshing on live geometry, worker state and available RAM."""
         busy = self.mesh_runner.is_running()
+        profile = None
         try:
             profile = scs_job_service.service().profile(self.doc)
-            self.execution_status.setText('Execution: ' + profile['name'] + ' — settings in Job Manager')
+            where = (' on %s (%s)' % (profile['host'], profile['sbatch_options'])
+                     if profile['backend'] == 'slurm' else '')
+            self.execution_status.setText('Execution: ' + profile['name'] + where + ' — settings in Job Manager')
         except ValueError as exc:
             self.execution_status.setText(str(exc))
+        key = scs_job_service.service().profile_key(self.doc)
+        if key != self._profile_key:
+            self._profile_key = key
+            self.request_cost()
         info, run_dir = self.resolve_run()
         self._current_run_dir = run_dir
         self.sync_cost_model()
@@ -938,6 +958,13 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
                 % self._cost_text)
         elif busy:
             self.btn_mesh.setToolTip("A mesh build or solve is already running.")
+        elif profile is not None and profile['backend'] == 'slurm':
+            self.btn_mesh.setToolTip(
+                "Submits fem/scripts/mesh_preview.py to %s with sbatch %s, then "
+                "fetches the mesh and preview back here. The job keeps running "
+                "if FreeCAD closes: Job Manager resumes watching it, and pressing "
+                "Generate Mesh again afterwards loads the fetched mesh."
+                % (profile['host'], profile['sbatch_options']))
         else:
             self.btn_mesh.setToolTip(
                 "Runs fem/scripts/mesh_preview.py in fem/.venv as a background "
@@ -954,18 +981,21 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             w.setEnabled(not busy)
 
     def env_overrides(self):
-        n = scs_job_service.service().local_settings(self.doc)['mesh_threads']
-        return {v: n for v in THREAD_ENV_VARS}
+        profile = scs_job_service.service().profile(self.doc)
+        if profile['backend'] != 'local':
+            return {}   # the cluster job sets its own threads from SLURM
+        return {v: profile['mesh_threads'] for v in THREAD_ENV_VARS}
 
     # -- Stage 1: mesh ------------------------------------------------
     def start_mesh(self):
         if self.mesh_runner.is_running() or (self.job_owner is not None and self.job_owner.other_job_running(self)):
             return
         try:
-            scs_job_service.service().local_settings(self.doc)
+            scs_job_service.service().profile(self.doc)
         except ValueError as exc:
             async_runner.set_status(self.mesh_status, "failed", str(exc))
             return
+        self._remote_note = ""
         info, run_dir = self.resolve_run()
         if run_dir is None:
             self.refresh_gates()
@@ -1055,8 +1085,13 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         self.refresh_gates()
 
     def on_mesh_tick(self, elapsed):
+        note = (" — " + self._remote_note) if self._remote_note else ""
         async_runner.set_status(self.mesh_status, "running",
-                                "meshing... %d%% (%.0fs elapsed)" % (self.mesh_progress.value(), elapsed))
+                                "meshing... %d%% (%.0fs elapsed)%s" % (self.mesh_progress.value(), elapsed, note))
+
+    def on_mesh_stage(self, message):
+        if message.startswith("HPC: "):
+            self._remote_note = message[len("HPC: "):]
 
     def on_mesh_aborted(self, msg):
         self.set_mesh_state("aborted")

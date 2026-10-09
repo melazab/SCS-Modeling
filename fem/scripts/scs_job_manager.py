@@ -48,7 +48,8 @@ class JobManager(QtWidgets.QWidget):
         self.check.clicked.connect(self.check_connection);rf.addRow(self.check)
         note=QtWidgets.QLabel('Same options you would give sbatch or srun. Your default account and partition apply unless you add -A or -p. '
                               'The check loads the worker environment on the cluster and reads the real SLURM limits; nothing is submitted. '
-                              'Submitting from this panel is not built yet: run fem/hpc/mesh_solve.sbatch and bring results back with fem/hpc/fetch_run.sh.')
+                              'With this profile in use, Generate Mesh and Solve / Plot Field sync the code to the cluster, submit there, '
+                              'and fetch the results back. Jobs keep running if FreeCAD closes and are picked up again on restart.')
         note.setWordWrap(True);rf.addRow(note)
         self.settings.addWidget(self.remote);form.addRow(self.settings)
         self.save=QtWidgets.QPushButton('Save profile and use for active model')
@@ -80,7 +81,6 @@ class JobManager(QtWidgets.QWidget):
         p=self.service.store.profiles[self.profile.currentData()]
         remote=p['backend']=='slurm'
         self.settings.setCurrentIndex(int(remote))
-        self.save.setText('Save HPC profile' if remote else 'Save profile and use for active model')
         if remote:
             try:p=J.validate_profile(p)  # converts the old account/partition/CPU fields
             except ValueError as exc:self.notice.setText(str(exc))
@@ -100,9 +100,9 @@ class JobManager(QtWidgets.QWidget):
         try:
             p=self.edited_profile();key=self.profile.currentData()
             self.service.store.save_profile(key,p)
-            if p['backend']=='local' and App.ActiveDocument:
+            if App.ActiveDocument:
                 self.service.select_profile(App.ActiveDocument,key)
-            self.notice.setText('Saved. Running jobs keep their original settings.' if p['backend']=='local' else 'HPC profile saved. Submitting from this panel is not built yet.')
+            self.notice.setText('Saved and used for the active model. Running jobs keep their original settings.')
         except (ValueError,OSError) as exc:self.notice.setText(str(exc))
         self.refresh()
 
@@ -120,7 +120,10 @@ class JobManager(QtWidgets.QWidget):
         records=sorted(self.service.records.values(),key=lambda r:r['created'],reverse=True)
         self.table.blockSignals(True);self.table.setRowCount(len(records))
         for row,r in enumerate(records):
-            values=[r['document']['label'],r['task'],r['profile']['name'],r['state'],str(r['progress'])+'%']
+            state=r['state']
+            if r.get('message') and state not in J.TERMINAL and r['profile'].get('backend')=='slurm':
+                state+=' — '+r['message']   # e.g. queued on case-hpc (Priority)
+            values=[r['document']['label'],r['task'],r['profile']['name'],state,str(r['progress'])+'%']
             for col,value in enumerate(values):
                 item=QtWidgets.QTableWidgetItem(value);item.setData(QtCore.Qt.UserRole,r['id']);self.table.setItem(row,col,item)
             if selected==r['id']:self.table.selectRow(row)

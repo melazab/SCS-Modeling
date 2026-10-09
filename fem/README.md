@@ -5,7 +5,8 @@ MPI, Hypre/BoomerAMG and conjugate gradients**. The dedicated **SCS Job Manager*
 configures future local jobs: mesh maximum threads, physical-core-capped Elmer
 MPI processes and solve memory budget. Older open panels may still show legacy
 local controls. These do not read FreeCAD's native Elmer preferences.
-SSH/SLURM submission remains planned; the remote profile is setup/probe only.
+With the HPC profile selected, mesh and solve jobs run on the cluster through
+SLURM and their results are fetched back.
 See [Job Manager](../docs/job_manager.md) and [TODO.md](TODO.md).
 
 Element preparation, sparse reference assembly and independent equation
@@ -840,6 +841,7 @@ See [poster workflow](../docs/poster_fast_workflow.md) for instructions and limi
 
 Open `SCS_JobManager.FCMacro` in FreeCAD to configure local mesh threads and
 Elmer resources and monitor jobs across models. Updated modeling macros use
-these shared execution profiles. HPC profile setup and a read-only SSH probe
-are included; remote submission is not enabled yet. See
+these shared execution profiles. The HPC profile (an SSH host plus sbatch
+options) runs Generate Mesh and Solve / Plot Field on the cluster and fetches
+the results back. See
 [Job Manager workflow and limitations](../docs/job_manager.md).

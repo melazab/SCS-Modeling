@@ -299,6 +299,8 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
         self.solve_runner = async_runner.AsyncProcessRunner(
             self, FEM_VENV_PY, SOLVE_LEAD_SCRIPT, "SOLVE_JSON ")
         self.solve_runner.progress.connect(self.on_plot_solve_progress)
+        self.solve_runner.stage_message.connect(self.on_solve_stage)
+        self._remote_note = ""
         self.solve_runner.finished_ok.connect(self.on_plot_solve_finished)
         self.solve_runner.failed.connect(self.on_plot_failed)
         self.solve_runner.aborted.connect(self.on_plot_aborted)
@@ -520,7 +522,9 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
     def refresh_gates(self):
         try:
             profile = scs_job_service.service().profile(self.doc)
-            self.execution_status.setText('Execution: ' + profile['name'])
+            where = (' on %s (%s)' % (profile['host'], profile['sbatch_options'])
+                     if profile['backend'] == 'slurm' else '')
+            self.execution_status.setText('Execution: ' + profile['name'] + where)
         except ValueError as exc:
             self.execution_status.setText(str(exc))
         self.local_group.setEnabled(not self.busy())
@@ -680,7 +684,7 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
     # -- Plot Field: mesh-if-needed -> solve-if-needed -> combine ---------
     def start_plot(self):
         try:
-            scs_job_service.service().local_settings(self.doc)
+            scs_job_service.service().profile(self.doc)
             self.sync_waveform()
         except ValueError as exc:
             self.status.setText(str(exc))
@@ -717,10 +721,13 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
             self._finish_plot(sol_npz)
             return
         args = [run_dir, "--lead-dir", self._pending_live_dir]
-        profile = scs_job_service.service().local_settings(self.doc)
-        settings = dict(cpus=profile['solve_cpus'], memory_gb=profile['memory_gb'])
-        artifacts.atomic_json(os.path.join(C.OUT, 'solve_settings.json'), settings)
-        args.extend(['--cpus', str(settings['cpus']), '--memory-gb', str(settings['memory_gb'])])
+        profile = scs_job_service.service().profile(self.doc)
+        if profile['backend'] == 'local':
+            settings = dict(cpus=profile['solve_cpus'], memory_gb=profile['memory_gb'])
+            artifacts.atomic_json(os.path.join(C.OUT, 'solve_settings.json'), settings)
+            args.extend(['--cpus', str(settings['cpus']), '--memory-gb', str(settings['memory_gb'])])
+        # On a cluster, CPUs and the memory budget come from the SLURM allocation.
+        self._remote_note = ""
         if background:
             args.append('--background')
         self.background_check.setEnabled(False)
@@ -732,7 +739,13 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
     def on_plot_solve_progress(self, pct):
         overall = pct
         self.plot_progress.setValue(overall)
-        async_runner.set_status(self.status, "active", "solving... %d%%" % overall)
+        note = (" — " + self._remote_note) if self._remote_note else ""
+        async_runner.set_status(self.status, "active", "solving... %d%%%s" % (overall, note))
+
+    def on_solve_stage(self, message):
+        if message.startswith("HPC: "):
+            self._remote_note = message[len("HPC: "):]
+            self.on_plot_solve_progress(self.plot_progress.value())
 
     def on_plot_solve_finished(self, report):
         self.background_check.setEnabled(True)

@@ -1,4 +1,4 @@
-# SCS Job Manager — first local implementation
+# SCS Job Manager
 
 Open `SCS_Job_Manager.FCMacro`. This dedicated window configures execution;
 Mesh Generator and Potential Visualizer retain geometry, mesh, and stimulation
@@ -50,11 +50,13 @@ benchmark has established the fastest allocation yet. See the
 
 ## State and lifecycle
 
-Local jobs: `starting → running → completed/failed`, or
+Jobs: `starting → running → completed/failed`, or
 `running → cancelling → cancelled`. A new submission creates a new record.
+A cluster job is `running` from submission on; the table adds its SLURM state.
 
 The job's profile and metadata are snapshots. Switching documents does not
-retarget it. After restarting FreeCAD, unfinished history is marked **unverified**;
+retarget it. A cluster job is resumed after a restart by its SLURM job id (see
+below). After restarting FreeCAD, an unfinished local job is marked **unverified**;
 we do not assume a reused PID identifies the original process, kill it, or claim
 successful recovery. Check its log and cached artifacts. Persistent independent
 local-worker recovery and automatic result reattachment after closing a document
@@ -79,47 +81,65 @@ and a job over the group limit pends forever; `sbatch --test-only` reports
 neither. It uses your existing SSH keys and a trusted host key; no passwords
 are stored.
 
-Submitting from the panel is not built yet. The service rejects a remote
-destination instead of silently running locally.
+**Save profile and use for active model** makes a model's Generate Mesh and
+Solve / Plot Field run on the cluster.
 
-## Running on Pioneer by hand (until submission is built)
+## Running a stage on the cluster
 
-Results are ordinary files on disk at both ends. Nothing is held only in
-FreeCAD's memory, and nothing comes back on its own.
+With the HPC profile in use, Generate Mesh and Solve / Plot Field behave as
+they do locally: the same progress bar, status line and Abort button. The
+status line adds the cluster state (`queued on case-hpc (Priority)`,
+`running on case-hpc, job 3996452`). `fem/scripts/scs_remote.py` does the work:
 
-1. The worker environment is set up on Pioneer: Elmer in `~/opt/elmerfem-26.2`,
-   a Python venv in `~/scs/venv`, and a mirror of the repository in
-   `~/scs/SCS-Modeling`. `fem/hpc/scs-env.sh` loads all three.
-2. Copy changed `fem/scripts/*.py` files to the mirror with rsync. Provenance
-   hashes the code, so the mirror must match the workstation byte for byte, or
-   the results will not validate here.
-3. Make a run directory under `fem/out/lead_runs/` holding `params.json` and
-   `lead/`. Submit it with `sbatch -n <tasks> --mem=<GB> --time=<limit>
-   fem/hpc/mesh_solve.sbatch <run_dir> both`.
-4. Account `tlv` allows 24 CPUs across the whole group. Batch nodes allow at
-   most 6 GB per CPU, so 24 tasks can have at most 144 GB.
-5. `fem/hpc/fetch_run.sh <run_name>` copies the published artifacts (mesh,
-   preview, solution, manifests, reports, lead STLs) into
-   `fem/out/lead_runs/<run_name>`. It rewrites the cluster paths in the reports
-   and re-checks every sha256. Elmer's scratch directory (`elmer*/`, about 30 GB
-   for a 52 M-tet mesh), `mesh.msh` and the size field stay on the cluster.
+1. **Sync the code mirror.** Every file that provenance hashes (the pipeline
+   scripts, the tissue map, the anatomy STLs, `requirements.txt`) and
+   `fem/hpc/` is copied to `~/scs/SCS-Modeling` with `rsync --checksum`. A
+   result made on the cluster then validates here; uncommitted changes go too.
+2. **Upload the run inputs.** The lead STLs and `params.json` go up, with
+   `LEAD_DIR` pointed at the cluster copy. For a solve, the mesh artifacts go up
+   too if the mesh was built on the workstation.
+3. **Submit** `fem/hpc/mesh_solve.sbatch` with the profile's sbatch options.
+   CPUs and the solve memory budget come from the allocation.
+4. **Poll** every 10 s over one reused SSH connection, streaming the job log
+   into `<run>/hpc-mesh.log` or `hpc-solve.log`. A dropped connection (VPN) is
+   reported and retried; it never fails the job, which keeps running remotely.
+5. **Fetch** on completion: mesh, preview, solution, manifests and reports come
+   back into the run directory. Cluster paths in the reports are rewritten, and
+   every sha256 is checked against its manifest before the panel loads the
+   result. Elmer's scratch (`elmer*/`, about 30 GB at 52 M tets), `mesh.msh`
+   and the size field stay on the cluster.
 
-The Elmer build is not part of the solution signature, so a field solved on
-Pioneer validates on the workstation. Every published field has passed the
-independent residual check, and that check is what certifies it. See
-`fem/scripts/artifacts.py`.
+Abort or Cancel runs `scancel`. The job record keeps the SLURM job id. If
+FreeCAD closes, the job keeps running, and on restart the job service picks it
+up again and fetches the results when it ends. Generate Mesh or Solve / Plot
+Field then finds them as a completed cache entry.
 
-## Next remote implementation
+The Mesh Generator's memory estimate is judged against the profile's `--mem`
+allocation instead of this machine's RAM. The Elmer build is not part of the
+solution signature: every published field passes the independent residual
+check, and that check is what certifies it (`fem/scripts/artifacts.py`).
 
-1. Discover the user's permitted account/partitions and choose remote storage.
-2. Set up and verify the worker environment (Python libraries, Gmsh, Elmer/MPI).
-3. Package immutable geometry, metadata, and code; transfer with checksums.
-4. Implement SLURM submission, queue polling, reconnect, and explicit cancellation.
-5. Run meshing on one high-memory node and Elmer within that allocation initially.
-6. Retrieve and validate results, remap remote paths, and associate them only with
-   the matching document/model fingerprint.
-7. Add lightweight surface/slice/basis retrieval so HPC-sized volume solutions
-   do not have to fit in workstation RAM.
+## Cluster facts (Pioneer)
+
+- The worker environment: Elmer in `~/opt/elmerfem-26.2` (the workstation's
+  revision), a Python venv in `~/scs/venv`, and the repository mirror in
+  `~/scs/SCS-Modeling`. `fem/hpc/scs-env.sh` loads all three.
+- Account `tlv` allows 24 CPUs across the whole group. Batch nodes allow at
+  most 6 GB per CPU, so 24 tasks can have at most 144 GB.
+- Nodes are shared. Elmer's time per contact on the same 52 M-tet mesh has
+  ranged from 265 s to 1000 s depending on what else ran on the node.
+- The home directory is NFS: one small write costs about 16 ms against 0.07 ms
+  on local disk, so nothing here writes many small scratch files there.
+
+`fem/hpc/fetch_run.sh <run_name>` still copies a run back by hand, for jobs
+submitted outside the panel.
+
+## Not built yet
+
+- Lightweight surface/slice/basis retrieval, so HPC-sized volume solutions
+  do not have to fit in workstation RAM.
+- Choosing which cached cluster result belongs to an already-open document
+  without pressing Generate Mesh or Solve / Plot Field again.
 
 Reference inspiration: [ANSYS Workbench HPC Platform Services](https://ansyshelp.ansys.com/public/Views/Secured/corp/v242/en/wb2_help/wb2_help_hpc_platform.html),
 particularly separating execution configuration, job monitoring, and result import.

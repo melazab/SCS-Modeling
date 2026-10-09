@@ -93,7 +93,8 @@ def main():
             req = json.loads(line)
             rid = req.get("id")
             est = model.estimate(_params_from(req))
-            sev, text = mesh_cost.describe(est)
+            # A cluster job sends its allocation; otherwise this machine's RAM.
+            sev, text = mesh_cost.describe(est, req.get("ram_gb"), req.get("budget", "available"))
             out = dict(id=rid, sev=sev, text=text)
             out.update({k: float(v) for k, v in est.items()})
         except Exception as exc:                                # noqa: BLE001
