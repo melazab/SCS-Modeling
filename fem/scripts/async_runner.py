@@ -78,15 +78,40 @@ class AsyncProcessRunner(QtCore.QObject):
         self._last_progress = -1
         self._stderr_buf = ""
         self.log_path = None
+        self.delegate = None   # a RemoteJob driving this runner's signals, see attach()
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._on_tick)
 
     def is_running(self):
+        if self.delegate is not None:
+            return self.delegate.is_running()
         return self.process is not None and self.process.state() != QtCore.QProcess.NotRunning
+
+    def attach(self, job):
+        """Let `job` (scs_remote.RemoteJob: same signals, runs elsewhere) drive
+        this runner, so a panel's own handlers, busy state and Abort button
+        work unchanged for a job that runs on a cluster."""
+        self.delegate = job
+        self._last_progress = -1
+        self.log_path = job.log_path
+        for name in ('tick', 'progress', 'stage_message'):
+            getattr(job, name).connect(getattr(self, name).emit)
+        job.progress.connect(lambda pct: setattr(self, '_last_progress', pct))
+
+        def relay(signal):
+            def emit(value):
+                if self.delegate is job:
+                    self.delegate = None
+                signal.emit(value)
+            return emit
+        job.finished_ok.connect(relay(self.finished_ok))
+        job.failed.connect(relay(self.failed))
+        job.aborted.connect(relay(self.aborted))
 
     def start(self, args, env_overrides=None):
         if self.is_running():
             return
+        self.delegate = None
         proc = QtCore.QProcess(self)
         env = QtCore.QProcessEnvironment.systemEnvironment()
         for k, v in (env_overrides or {}).items():
@@ -120,6 +145,8 @@ class AsyncProcessRunner(QtCore.QObject):
     def abort(self):
         if not self.is_running():
             return
+        if self.delegate is not None:
+            return self.delegate.abort()
         self._aborted = True
         pid = self.process.processId()
         if pid:

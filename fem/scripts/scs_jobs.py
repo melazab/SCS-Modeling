@@ -46,9 +46,10 @@ def defaults():
             sbatch_options='-n 16 --mem=96gb --time=04:00:00')}
 
 
-# The worker environment on the cluster (Elmer, Python venv, repository mirror);
-# see fem/hpc/scs-env.sh and docs/job_manager.md.
-REMOTE_ENV = '$HOME/scs/SCS-Modeling/fem/hpc/scs-env.sh'
+# The repository mirror on the cluster, relative to the remote $HOME, and the
+# worker environment there (Elmer, Python venv); see fem/hpc/scs-env.sh.
+REMOTE_ROOT = 'scs/SCS-Modeling'
+REMOTE_ENV = '$HOME/%s/fem/hpc/scs-env.sh' % REMOTE_ROOT
 SAFE_OPTION = re.compile(r'[A-Za-z0-9_.,:=@%/+-]+')
 
 
@@ -115,6 +116,13 @@ def requested(tokens):
         return None if not m else int(m.group(1)) * {'K': 1 / 1024, '': 1, 'M': 1, 'G': 1024, 'T': 1024 ** 2}[m.group(2)]
     cpus = int(value.get('ntasks', 1)) * int(value.get('cpus', 1))
     return cpus, mb(value.get('mem')), mb(value.get('mem_per_cpu')), value.get('account', ''), value.get('partition', '')
+
+
+def allocation_gb(profile):
+    """Memory the profile's sbatch options request, in GB, or None if unset."""
+    cpus, mem, mem_per_cpu, _, _ = requested(sbatch_options(profile))
+    mb = mem if mem else (mem_per_cpu * cpus if mem_per_cpu else None)
+    return None if mb is None else mb / 1024
 
 
 def ssh_probe_args(profile):

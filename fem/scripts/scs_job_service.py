@@ -21,10 +21,15 @@ class JobService(QtCore.QObject):
         self.runners={}
         self.clients={}
         # Historical local processes cannot safely be adopted from a PID alone.
+        # A submitted cluster job can: SLURM still knows it by its job id.
         for r in self.records.values():
-            if r['state'] not in J.TERMINAL:
-                r.update(state='unverified', message='Previous session: check the worker log and cached results. No process has been killed.')
-                self.store.write(r)
+            if r['state'] in J.TERMINAL:
+                continue
+            if r['profile'].get('backend')=='slurm' and (r.get('remote') or {}).get('job_id'):
+                QtCore.QTimer.singleShot(0,lambda r=r:self.resume_remote(r))
+                continue
+            r.update(state='unverified', message='Previous session: check the worker log and cached results. No process has been killed.')
+            self.store.write(r)
 
     def profile_key(self, doc):
         obj=doc.getObject('SCS_Execution')
@@ -38,9 +43,6 @@ class JobService(QtCore.QObject):
 
     def select_profile(self, doc, key):
         if key not in self.store.profiles: raise ValueError('Unknown profile')
-        # Do not allow a configuration that the current release cannot execute.
-        if self.store.profiles[key]['backend'] != 'local':
-            raise ValueError('Remote submission is not available yet. Save and check the HPC profile; keep Local selected for execution.')
         obj=doc.getObject('SCS_Execution')
         if obj is None:
             obj=doc.addObject('App::FeaturePython','SCS_Execution')
@@ -57,7 +59,9 @@ class JobService(QtCore.QObject):
         return p
 
     def submit(self, doc, task, runner, args, environment):
-        profile=self.local_settings(doc)
+        profile=self.profile(doc)
+        if profile['backend']=='slurm':
+            return self.submit_remote(doc,task,runner,args,profile)
         self.track(doc,task,runner,profile,args,environment)
         try:
             runner.start(args,env_overrides=environment)
@@ -65,6 +69,55 @@ class JobService(QtCore.QObject):
             runner.failed.emit('Could not prepare worker: '+str(exc))
             return
         self.update_running(runner)
+
+    def submit_remote(self, doc, task, runner, args, profile):
+        """Run the stage on the profile's cluster. The panel's own runner is
+        driven by the remote job, so its handlers and Abort work unchanged."""
+        import scs_remote
+        try:
+            job=scs_remote.RemoteJob(profile,task,runner.json_prefix,args)
+        except (ValueError,KeyError) as exc:
+            runner.failed.emit('Could not prepare cluster job: '+str(exc))
+            return
+        runner.attach(job)
+        job.setParent(runner)
+        self.track(doc,task,runner,profile,args,{})
+        ident=next(i for i,r in self.runners.items() if r is runner)
+        self._watch_remote(ident,job)
+        job.start()
+        self.update_running(runner)
+
+    def _watch_remote(self, ident, job):
+        def save():
+            r=self.records.get(ident)
+            if r is None:return
+            r['remote']=job.state();r['updated']=time.time()
+            self.store.write(r);self.changed.emit()
+        job.updated.connect(save)
+        job.stage_message.connect(lambda text,i=ident:self.note(i,text))
+
+    def note(self, ident, text):
+        r=self.records.get(ident)
+        if r is None or r['state'] in J.TERMINAL or not text.startswith('HPC: '):return
+        r['message']=text[len('HPC: '):];self.store.write(r);self.changed.emit()
+
+    def resume_remote(self, record):
+        """Keep watching a cluster job submitted before a restart; fetch its
+        results when it ends. The panel picks them up from the run directory."""
+        import scs_remote
+        ident=record['id']
+        try:
+            job=scs_remote.RemoteJob(record['profile'],record['task'],record['remote']['json_prefix'],record['args'],self)
+        except (ValueError,KeyError) as exc:
+            record.update(state='unverified',message='Cannot resume cluster job: %s'%exc);self.store.write(record);return
+        self.runners[ident]=job
+        self._watch_remote(ident,job)
+        job.progress.connect(lambda value,i=ident:self.progress(i,value))
+        job.finished_ok.connect(lambda report,i=ident:self.finish(i,'completed',report))
+        job.failed.connect(lambda msg,i=ident:self.finish(i,'failed',msg))
+        job.aborted.connect(lambda msg,i=ident:self.finish(i,'cancelled',msg))
+        job.resume(record['remote'])
+        self.changed.emit()
 
     def track(self, doc, task, runner, profile=None, args=None, environment=None):
         if runner in self.runners.values(): return
