@@ -76,6 +76,33 @@ Remote submission is intentionally not selectable yet. The service rejects an
 unsupported remote destination instead of silently running locally. A successful
 SSH probe is not proof that Elmer/Gmsh dependencies or a SLURM allocation work.
 
+## Running on Pioneer by hand (until submission is built)
+
+Results are ordinary files on disk at both ends. Nothing is held only in
+FreeCAD's memory, and nothing comes back on its own.
+
+1. The worker environment is set up on Pioneer: Elmer in `~/opt/elmerfem-26.2`,
+   a Python venv in `~/scs/venv`, and a mirror of the repository in
+   `~/scs/SCS-Modeling`. `fem/hpc/scs-env.sh` loads all three.
+2. Copy changed `fem/scripts/*.py` files to the mirror with rsync. Provenance
+   hashes the code, so the mirror must match the workstation byte for byte, or
+   the results will not validate here.
+3. Make a run directory under `fem/out/lead_runs/` holding `params.json` and
+   `lead/`. Submit it with `sbatch -n <tasks> --mem=<GB> --time=<limit>
+   fem/hpc/mesh_solve.sbatch <run_dir> both`.
+4. Account `tlv` allows 24 CPUs across the whole group. Batch nodes allow at
+   most 6 GB per CPU, so 24 tasks can have at most 144 GB.
+5. `fem/hpc/fetch_run.sh <run_name>` copies the published artifacts (mesh,
+   preview, solution, manifests, reports, lead STLs) into
+   `fem/out/lead_runs/<run_name>`. It rewrites the cluster paths in the reports
+   and re-checks every sha256. Elmer's scratch directory (`elmer*/`, about 30 GB
+   for a 52 M-tet mesh), `mesh.msh` and the size field stay on the cluster.
+
+The Elmer build is not part of the solution signature, so a field solved on
+Pioneer validates on the workstation. Every published field has passed the
+independent residual check, and that check is what certifies it. See
+`fem/scripts/artifacts.py`.
+
 ## Next remote implementation
 
 1. Discover the user's permitted account/partitions and choose remote storage.

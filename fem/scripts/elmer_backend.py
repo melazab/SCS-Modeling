@@ -20,7 +20,8 @@ import config as C
 from element_batches import elements, action, batch_size
 from mesh_faces import face_batches
 
-ELMER_BIN = Path('/opt/elmerfem/bin')
+# SCS_ELMER_BIN points at another install, e.g. the Pioneer build in ~/opt.
+ELMER_BIN = Path(os.environ.get('SCS_ELMER_BIN', '/opt/elmerfem/bin'))
 
 
 def run(command, cwd, log):
