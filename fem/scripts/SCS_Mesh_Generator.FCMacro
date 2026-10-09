@@ -939,7 +939,10 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         # A "danger" cost estimate BLOCKS the build; "warn" only informs; no
         # estimate at all (no lead yet, estimator still starting, fem/.venv
         # missing) never blocks -- an absent prediction is not a bad one.
-        too_big = self._cost_sev == "danger"
+        # A finished mesh for this lead and these settings only needs loading,
+        # so the memory estimate for BUILDING it must not block that.
+        cached = valid_lead and artifacts.preview_ready(run_dir)
+        too_big = self._cost_sev == "danger" and not cached
         other_busy = self.job_owner is not None and self.job_owner.other_job_running(self)
         self.btn_mesh.setEnabled(self.mesh_state != "aborting" and
                                  (busy or (valid_lead and not too_big and not other_busy)))
@@ -1000,6 +1003,11 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         if run_dir is None:
             self.refresh_gates()
             return
+        if artifacts.preview_ready(run_dir):
+            # Already built (here or fetched from the cluster): load it. This
+            # comes before the memory refusal, which is about building.
+            self._load_cached_mesh(run_dir)
+            return
         if self._cost_sev == "danger":
             # Second, independent refusal. refresh_gates() already disables
             # the button, but this is the point of the whole feature and a
@@ -1018,11 +1026,6 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         # disk, right before they're needed.
         arrays = live_lead.tessellate_lead_arrays(info)
         live_dir = live_lead.write_stls(arrays, os.path.join(run_dir, "lead"))
-
-        mesh_npz = os.path.join(run_dir, "mesh.npz")
-        if artifacts.preview_ready(run_dir):
-            self._load_cached_mesh(run_dir)
-            return
 
         params = self.mesh_params()
         artifacts.atomic_json(os.path.join(C.OUT, 'mesh_settings.json'), params)
