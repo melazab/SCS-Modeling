@@ -27,12 +27,19 @@ class Resources:
         self.process = psutil.Process()
 
     def usage(self):
-        # Sum RSS conservatively, including MPI launchers and their workers.
+        # Sum over the process tree, including MPI launchers and their workers.
+        # PSS, not RSS: forked workers (parallel classification) map the
+        # parent's pages copy-on-write, and summing RSS counted that shared
+        # memory once per worker -- 2.5 GB read by 8 workers summed to 22.7 GB
+        # and tripped the budget. PSS splits each shared page among its users.
         processes = [self.process] + self.process.children(recursive=True)
         total = 0
         for process in processes:
             try:
-                total += process.memory_info().rss
+                try:
+                    total += process.memory_full_info().pss
+                except (AttributeError, psutil.AccessDenied):
+                    total += process.memory_info().rss
             except psutil.NoSuchProcess:
                 pass
         return total / 1e9

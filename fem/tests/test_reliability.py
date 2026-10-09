@@ -106,6 +106,29 @@ class ReliabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Non-manifold'):
             face_neighbours(np.array([[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 2, 5]]))
 
+    def test_memory_guard_does_not_count_forked_shared_pages(self):
+        # Parallel classification forks workers that read the parent's arrays.
+        # Summed RSS counted those shared pages once per worker and killed solves.
+        script = """
+import sys, multiprocessing, numpy as np
+sys.path.insert(0, %r)
+from solve_resources import Resources
+BIG = None
+def work(i):
+    import time
+    time.sleep(1)  # outlive a 0.25 s guard sample, like real classification chunks
+    return float(BIG[i::97].sum())
+with Resources(1, 1.0) as r:
+    BIG = np.ones(int(0.3e9 / 8))
+    with multiprocessing.get_context('fork').Pool(8) as pool:
+        pool.map(work, range(8))
+print('peak %%.2f' %% r.peak_gb)
+""" % str(Path(__file__).resolve().parents[1] / 'scripts')
+        import subprocess
+        out = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertLess(float(out.stdout.split('peak')[-1]), 1.0)
+
     def test_tissue_interfaces_and_leak_area(self):
         nodes = np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]])
         tets = np.array([[0, 1, 2, 3], [0, 2, 1, 4]])
