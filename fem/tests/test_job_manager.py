@@ -1,6 +1,7 @@
 """Profiles, lifecycle persistence, and real local workers behind Job Manager."""
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -83,5 +84,57 @@ class JobTests(unittest.TestCase):
             doc=SimpleNamespace(getObject=lambda _:SimpleNamespace(Profile='case-hpc'))
             with self.assertRaisesRegex(ValueError,'Remote submission'):
                 service.local_settings(doc)
+
+    def test_clear_finished_archives_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=J.Store(tmp)
+            done=store.new_job({'name':'a'},'Solve',store.profiles['local'],[],{},None)
+            store.transition(done,'running');store.transition(done,'completed')
+            (Path(tmp)/(done['id']+'.log')).write_text('log')
+            live=store.new_job({'name':'b'},'Mesh',store.profiles['local'],[],{},None)
+            store.transition(live,'running')
+            with patch.object(S.J,'Store',return_value=store):service=S.JobService()
+            service.runners[live['id']]=SimpleNamespace(is_running=lambda:True)
+            self.assertEqual(service.clear_finished(),1)
+            self.assertEqual(list(service.records),[live['id']])
+            self.assertEqual([r['id'] for r in store.history()],[live['id']])
+            self.assertTrue((Path(tmp)/'cleared'/(done['id']+'.json')).is_file())
+            self.assertTrue((Path(tmp)/'cleared'/(done['id']+'.log')).is_file())
+
+    def test_probe_output_survives_refresh(self):
+        # Widgets need a QApplication; the other tests already own a QCoreApplication.
+        script=PROBE_WIDGET_SCRIPT%str(Path(__file__).resolve().parents[1]/'scripts')
+        env=dict(J.os.environ,QT_QPA_PLATFORM='offscreen')
+        result=subprocess.run([sys.executable,'-c',script],env=env,capture_output=True,text=True,timeout=60)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+
+PROBE_WIDGET_SCRIPT='''
+import sys,tempfile,types
+sys.path.insert(0,%r)
+sys.modules['FreeCAD']=types.SimpleNamespace(ActiveDocument=None)
+try:
+    from PySide import QtWidgets
+except ImportError:
+    from PySide6 import QtWidgets
+app=QtWidgets.QApplication([])
+import scs_jobs as J,scs_job_service as S,scs_job_manager as M
+tmp=tempfile.mkdtemp();store=J.Store(tmp)
+job=store.new_job({'name':'a','label':'A','path':''},'Solve',store.profiles['local'],[],{},None)
+store.transition(job,'running');store.transition(job,'completed')
+S.J.Store=lambda:store;S._SERVICE=None
+M.service=S.service
+w=M.JobManager();w.timer.stop()
+w.table.selectRow(0)
+assert job['id'] in w.details.toPlainText()
+w.probe_text='SSH exit code: 0\\nhpc8';w.show_details()
+w.refresh();w.refresh()
+assert w.details.toPlainText().startswith('SSH exit code'),w.details.toPlainText()[:200]
+w.select_job()
+assert job['id'] in w.details.toPlainText()
+assert w.clear.isEnabled()
+w.clear_finished()
+assert w.table.rowCount()==0 and not w.clear.isEnabled()
+'''
 
 if __name__=='__main__':unittest.main()

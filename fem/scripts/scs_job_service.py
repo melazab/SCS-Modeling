@@ -135,6 +135,13 @@ class JobService(QtCore.QObject):
         self.store.transition(self.records[ident],'cancelling')
         self.changed.emit();runner.abort()
 
+    def clear_finished(self):
+        finished=[i for i,r in self.records.items() if r['state'] in J.TERMINAL and i not in self.runners]
+        for ident in finished:
+            self.store.clear(ident);self.records.pop(ident)
+        self.changed.emit()
+        return len(finished)
+
     def adopt_open_panels(self):
         # Attach signals only; never replace/restart existing workers or panels.
         import FreeCADGui as Gui

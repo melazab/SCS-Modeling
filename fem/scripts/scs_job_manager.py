@@ -18,6 +18,7 @@ class JobManager(QtWidgets.QWidget):
         self._document=None
         self._editing=False
         self.probe=None
+        self.probe_text=None  # shown until the user picks a job row
         outer=QtWidgets.QVBoxLayout(self)
         self.model=QtWidgets.QLabel()
         outer.addWidget(self.model)
@@ -60,10 +61,15 @@ class JobManager(QtWidgets.QWidget):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.itemSelectionChanged.connect(self.show_details)
+        self.table.itemSelectionChanged.connect(self.select_job)
+        self.table.cellClicked.connect(self.select_job)
         outer.addWidget(self.table)
         self.cancel=QtWidgets.QPushButton('Cancel selected job')
-        self.cancel.clicked.connect(self.cancel_job);outer.addWidget(self.cancel)
+        self.cancel.clicked.connect(self.cancel_job)
+        self.clear=QtWidgets.QPushButton('Clear finished jobs')
+        self.clear.setToolTip('Moves completed, failed, cancelled and unverified records to fem/out/jobs/cleared/. Results are not touched.')
+        self.clear.clicked.connect(self.clear_finished)
+        buttons=QtWidgets.QHBoxLayout();buttons.addWidget(self.cancel);buttons.addWidget(self.clear);outer.addLayout(buttons)
         self.details=QtWidgets.QPlainTextEdit();self.details.setReadOnly(True);outer.addWidget(self.details)
         self.profile.currentIndexChanged.connect(self.load_profile)
         self.load_profile()
@@ -121,9 +127,22 @@ class JobManager(QtWidgets.QWidget):
         self.table.blockSignals(False)
         self.show_details()
 
+    def select_job(self, *_):
+        self.probe_text=None
+        self.show_details()
+
+    def set_details(self, text):
+        # The 1.5 s refresh must not reset the scroll position or cursor.
+        if text==self.details.toPlainText():return
+        bar=self.details.verticalScrollBar();at_end=bar.value()==bar.maximum();pos=bar.value()
+        self.details.setPlainText(text)
+        bar.setValue(bar.maximum() if at_end and pos else pos)
+
     def show_details(self):
         ident=self.selected_id();runner=self.service.runners.get(ident)
         self.cancel.setEnabled(bool(runner and runner.is_running()))
+        self.clear.setEnabled(any(r['state'] in J.TERMINAL for r in self.service.records.values()))
+        if self.probe_text is not None:return self.set_details(self.probe_text)
         if not ident:return
         r=self.service.records[ident]
         text=json.dumps(r,indent=2)
@@ -132,11 +151,17 @@ class JobManager(QtWidgets.QWidget):
             with open(path,'rb') as f:
                 f.seek(max(0,Path(path).stat().st_size-12000));tail=f.read().decode('utf8','replace')
             text+='\n\nRecent worker log\n'+tail
-        self.details.setPlainText(text)
+        self.set_details(text)
 
     def cancel_job(self):
         ident=self.selected_id()
         if ident:self.service.cancel(ident)
+        self.refresh()
+
+    def clear_finished(self):
+        self.table.clearSelection();self.details.clear()
+        count=self.service.clear_finished()
+        self.notice.setText('Cleared %d finished job(s); records moved to %s. Results were not touched.'%(count,self.service.store.root/'cleared'))
         self.refresh()
 
     def check_connection(self):
@@ -150,15 +175,18 @@ class JobManager(QtWidgets.QWidget):
         self.probe.start('ssh',args)
         self.probe_timeout=QtCore.QTimer(self);self.probe_timeout.setSingleShot(True)
         self.probe_timeout.timeout.connect(self.probe.kill);self.probe_timeout.start(20000)
+        self.probe_text='Checking SSH and available commands…';self.show_details()
 
     def probe_error(self,error):
         self.check.setEnabled(True)
         self.notice.setText('SSH check: '+self.probe.errorString())
+        self.probe_text='SSH check failed: '+self.probe.errorString();self.show_details()
 
     def probe_finished(self,code,status):
         self.probe_timeout.stop();self.check.setEnabled(True)
-        self.notice.setText('Connection check finished. Review available commands below; no job was submitted.')
-        self.details.setPlainText('SSH exit code: %d\n'%code+bytes(self.probe.readAllStandardOutput()).decode('utf8','replace'))
+        self.notice.setText('Connection check finished. Review available commands below; no job was submitted. Click a job row to return to job details.')
+        self.probe_text='SSH exit code: %d\n'%code+bytes(self.probe.readAllStandardOutput()).decode('utf8','replace')
+        self.show_details()
 
 
 def show():

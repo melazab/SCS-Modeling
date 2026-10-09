@@ -19,6 +19,10 @@ A macro already open before this update keeps its current controls until reopene
   script hash, and recent log. Completed logs are copied to the job archive.
 - Explicit cancellation of live jobs, including Elmer child processes through
   the existing subprocess runner.
+- **Clear finished jobs** removes completed, failed, cancelled and unverified
+  records from the table. Their JSON and archived log move to
+  `fem/out/jobs/cleared/`; nothing is deleted, and lead-run results and caches are
+  untouched. Running jobs are never cleared.
 - Opening Job Manager discovers and monitors already-running macro workers
   without replacing them. These are labeled as existing local jobs.
 - Closing/reopening the Job Manager window does not stop jobs. Its service lives

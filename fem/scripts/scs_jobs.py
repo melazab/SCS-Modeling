@@ -108,6 +108,14 @@ class Store:
         record.update(fields, state=state, updated=time.time())
         self.write(record)
 
+    def clear(self, ident):
+        # Archive, never delete: the record and its copied log stay under cleared/.
+        cleared = self.root / 'cleared'
+        cleared.mkdir(parents=True, exist_ok=True)
+        for name in (ident+'.json', ident+'.log'):
+            if (self.root / name).exists():
+                (self.root / name).replace(cleared / name)
+
     def history(self):
         records=[]
         for path in self.root.glob('*.json'):
