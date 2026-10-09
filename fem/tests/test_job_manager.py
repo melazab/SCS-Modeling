@@ -39,6 +39,27 @@ class JobTests(unittest.TestCase):
         p['host']='case-hpc;touch /tmp/no'
         with self.assertRaises(ValueError):J.ssh_probe_args(p)
 
+    def test_hpc_profile_is_host_plus_sbatch_options(self):
+        old=dict(name='Case HPC',backend='slurm',host='case-hpc',account='',partition='',
+                 directory='',cpus=16,memory_gb=64.,time_limit='04:00:00')
+        self.assertEqual(J.validate_profile(old),dict(name='Case HPC',backend='slurm',host='case-hpc',
+                         sbatch_options='-n 16 --mem=64gb --time=04:00:00'))
+        for bad in ['-n 4; rm -rf ~','n 4','--wrap="x y"','$(id)','-n 4 `id`']:
+            with self.assertRaises(ValueError):J.validate_profile(dict(old,sbatch_options=bad))
+
+    def test_probe_verdict_reports_memory_cpu_inflation(self):
+        out='OK host x\nLIMIT partition=batch account=tlv maxmempercpu=6144 groupcpu=24 groupused=0 cpus=1/2/0/3\n'
+        def verdict(options):
+            return J.describe_probe(0,out,dict(name='h',backend='slurm',host='h',sbatch_options=options))[0]
+        self.assertTrue(verdict('-n 24 --mem=144gb').startswith('Ready: 24 CPUs'))
+        # Observed on Pioneer: this became 48 CPUs and pended forever.
+        self.assertIn('need 48 CPUs',verdict('-n 24 --mem=200gb'))
+        self.assertIn('charge 24 CPUs, not 8',verdict('-n 8 --mem=100gb'))
+        self.assertIn('need 40 CPUs',verdict('--ntasks=40 --mem 64G'))
+        self.assertIn('missing: ElmerGrid',J.describe_probe(1,'MISSING ElmerGrid\n',
+                      dict(name='h',backend='slurm',host='h',sbatch_options='-n 1'))[0])
+        self.assertIn('VPN',J.describe_probe(255,'',dict(name='h',backend='slurm',host='h',sbatch_options='-n 1'))[0])
+
     def test_real_worker_retry_and_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             store=J.Store(tmp)

@@ -41,14 +41,14 @@ class JobManager(QtWidgets.QWidget):
         local_note.setWordWrap(True);lf.addRow(local_note)
         self.settings.addWidget(self.local)
         self.remote=QtWidgets.QWidget();rf=QtWidgets.QFormLayout(self.remote)
-        self.remote_fields={}
-        for key,label in [('host','SSH alias'),('account','SLURM account'),('partition','Partition'),('directory','Remote working directory'),('time_limit','Time limit')]:
-            w=QtWidgets.QLineEdit();self.remote_fields[key]=w;rf.addRow(label,w)
-        for key,label in [('cpus','CPUs'),('memory_gb','Memory (GB)')]:
-            w=QtWidgets.QSpinBox();w.setRange(1,100000);self.remote_fields[key]=w;rf.addRow(label,w)
-        self.check=QtWidgets.QPushButton('Check SSH / SLURM connection')
+        self.host=QtWidgets.QLineEdit();rf.addRow('SSH host',self.host)
+        self.sbatch=QtWidgets.QLineEdit();self.sbatch.setPlaceholderText('-n 24 --mem=140gb --time=06:00:00')
+        rf.addRow('sbatch options',self.sbatch)
+        self.check=QtWidgets.QPushButton('Check cluster with these options')
         self.check.clicked.connect(self.check_connection);rf.addRow(self.check)
-        note=QtWidgets.QLabel('Setup only: remote submission and file transfer are not enabled in this version. SSH uses your existing keys/agent and requires an already trusted host. No passwords are stored.')
+        note=QtWidgets.QLabel('Same options you would give sbatch or srun. Your default account and partition apply unless you add -A or -p. '
+                              'The check loads the worker environment on the cluster and reads the real SLURM limits; nothing is submitted. '
+                              'Submitting from this panel is not built yet: run fem/hpc/mesh_solve.sbatch and bring results back with fem/hpc/fetch_run.sh.')
         note.setWordWrap(True);rf.addRow(note)
         self.settings.addWidget(self.remote);form.addRow(self.settings)
         self.save=QtWidgets.QPushButton('Save profile and use for active model')
@@ -80,11 +80,11 @@ class JobManager(QtWidgets.QWidget):
         p=self.service.store.profiles[self.profile.currentData()]
         remote=p['backend']=='slurm'
         self.settings.setCurrentIndex(int(remote))
-        self.save.setText('Save HPC profile (setup only)' if remote else 'Save profile and use for active model')
+        self.save.setText('Save HPC profile' if remote else 'Save profile and use for active model')
         if remote:
-            for k,w in self.remote_fields.items():
-                if isinstance(w,QtWidgets.QLineEdit):w.setText(str(p[k]))
-                else:w.setValue(int(p[k]))
+            try:p=J.validate_profile(p)  # converts the old account/partition/CPU fields
+            except ValueError as exc:self.notice.setText(str(exc))
+            self.host.setText(p['host']);self.sbatch.setText(p.get('sbatch_options',''))
         else:
             self.mesh_threads.setValue(p['mesh_threads']);self.cpus.setValue(p['solve_cpus']);self.memory.setValue(p['memory_gb'])
 
@@ -92,7 +92,7 @@ class JobManager(QtWidgets.QWidget):
         p=dict(self.service.store.profiles[self.profile.currentData()])
         if p['backend']=='local':p.update(mesh_threads=self.mesh_threads.value(),solve_cpus=self.cpus.value(),memory_gb=self.memory.value())
         else:
-            for k,w in self.remote_fields.items():p[k]=w.text().strip() if isinstance(w,QtWidgets.QLineEdit) else w.value()
+            p.update(host=self.host.text().strip(),sbatch_options=self.sbatch.text().strip())
         return J.validate_profile(p)
 
     def save_profile(self):
@@ -102,7 +102,7 @@ class JobManager(QtWidgets.QWidget):
             self.service.store.save_profile(key,p)
             if p['backend']=='local' and App.ActiveDocument:
                 self.service.select_profile(App.ActiveDocument,key)
-            self.notice.setText('Saved. Running jobs keep their original settings.' if p['backend']=='local' else 'HPC profile saved. Remote execution is not enabled yet.')
+            self.notice.setText('Saved. Running jobs keep their original settings.' if p['backend']=='local' else 'HPC profile saved. Submitting from this panel is not built yet.')
         except (ValueError,OSError) as exc:self.notice.setText(str(exc))
         self.refresh()
 
@@ -165,17 +165,17 @@ class JobManager(QtWidgets.QWidget):
         self.refresh()
 
     def check_connection(self):
-        try:args=J.ssh_probe_args(self.edited_profile())
+        try:self.probe_profile=self.edited_profile();args=J.ssh_probe_args(self.probe_profile)
         except ValueError as exc:self.notice.setText(str(exc));return
         self.probe=QtCore.QProcess(self)
         self.probe.setProcessChannelMode(QtCore.QProcess.MergedChannels)
         self.probe.finished.connect(self.probe_finished)
         self.probe.errorOccurred.connect(self.probe_error)
-        self.check.setEnabled(False);self.notice.setText('Checking SSH and available commands…')
+        self.check.setEnabled(False);self.notice.setText('Checking the cluster…')
         self.probe.start('ssh',args)
         self.probe_timeout=QtCore.QTimer(self);self.probe_timeout.setSingleShot(True)
         self.probe_timeout.timeout.connect(self.probe.kill);self.probe_timeout.start(20000)
-        self.probe_text='Checking SSH and available commands…';self.show_details()
+        self.probe_text='Checking the cluster…';self.show_details()
 
     def probe_error(self,error):
         self.check.setEnabled(True)
@@ -184,8 +184,10 @@ class JobManager(QtWidgets.QWidget):
 
     def probe_finished(self,code,status):
         self.probe_timeout.stop();self.check.setEnabled(True)
-        self.notice.setText('Connection check finished. Review available commands below; no job was submitted. Click a job row to return to job details.')
-        self.probe_text='SSH exit code: %d\n'%code+bytes(self.probe.readAllStandardOutput()).decode('utf8','replace')
+        output=bytes(self.probe.readAllStandardOutput()).decode('utf8','replace')
+        verdict,details=J.describe_probe(code,output,self.probe_profile)
+        self.notice.setText(verdict)
+        self.probe_text=verdict+'\n\n'+details+'\n\nNothing was submitted. Click a job row to return to job details.'
         self.show_details()
 
 

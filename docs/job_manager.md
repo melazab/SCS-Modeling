@@ -60,21 +60,27 @@ successful recovery. Check its log and cached artifacts. Persistent independent
 local-worker recovery and automatic result reattachment after closing a document
 remain future work. Keep the originating model open during this first version.
 
-## HPC profile: setup only
+## HPC profile
 
-The Case HPC profile stores SSH alias, SLURM account, partition, working directory,
-CPUs, memory, and wall-time limit. These are profile fields, not model physics.
-Blank account/partition/directory fields are allowed during setup.
+The Case HPC profile is an SSH host alias plus one line of sbatch options, the
+same ones you would give `sbatch` or `srun` (for example
+`-n 24 --mem=140gb --time=06:00:00`). Your default SLURM account and partition
+apply unless you add `-A` or `-p`. Profiles saved with the earlier separate
+account/partition/CPU/memory/time fields convert automatically.
 
-**Check SSH / SLURM connection** performs a read-only asynchronous probe of host
-access and command availability. It submits no jobs, uploads no data, and stores
-no credentials. It uses the existing SSH keys/agent and trusted host keys.
-VPN or interactive authentication requirements must be satisfied separately.
-Missing tools may require loading site-specific environment modules.
+**Check cluster with these options** is read-only and submits nothing. It
+loads the worker environment (`fem/hpc/scs-env.sh`), reports each tool as OK
+or MISSING (SLURM commands, Elmer, MPI, the Python venv), and reads the real
+limits: the partition's MaxMemPerCPU, the account's group CPU limit, the CPUs
+your group is already running, and the partition's idle CPUs (`sinfo`). The
+verdict says how many CPUs SLURM will actually charge. A memory request above
+MaxMemPerCPU silently raises CPUs per task (`-n 24 --mem=200gb` became 48),
+and a job over the group limit pends forever; `sbatch --test-only` reports
+neither. It uses your existing SSH keys and a trusted host key; no passwords
+are stored.
 
-Remote submission is intentionally not selectable yet. The service rejects an
-unsupported remote destination instead of silently running locally. A successful
-SSH probe is not proof that Elmer/Gmsh dependencies or a SLURM allocation work.
+Submitting from the panel is not built yet. The service rejects a remote
+destination instead of silently running locally.
 
 ## Running on Pioneer by hand (until submission is built)
 
