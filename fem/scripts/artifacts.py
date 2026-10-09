@@ -59,7 +59,8 @@ def model_signature(stage='mesh'):
         tree = ast.parse(assignment.read_text())
         selected = [ast.dump(node, include_attributes=False) for node in tree.body
                     if isinstance(node, ast.FunctionDef)
-                    and node.name in ('build_testers', 'classify_tets', 'dura_leak_report')]
+                    and node.name in ('build_testers', 'classify_tets', 'classify_points',
+                                      'dura_leak_report')]
         _CLASSIFICATION_HASH = (stamp, digest(selected))
     return digest(dict(files=[(os.path.relpath(p, C.ROOT), file_hash(p)) for p in sorted(paths)],
                        classification=_CLASSIFICATION_HASH[1]))

@@ -22,13 +22,17 @@ def elements(nodes, tets, sigma, batch=None):
     for start in range(0, len(tets), batch):
         tet = tets[start:start + batch]
         p = nodes[tet] * 1e-3
-        jac = np.swapaxes(p[:, 1:] - p[:, :1], 1, 2)
-        det = np.linalg.det(jac)
+        e1, e2, e3 = p[:, 1] - p[:, 0], p[:, 2] - p[:, 0], p[:, 3] - p[:, 0]
+        # Closed-form inverse of the Jacobian [e1 e2 e3]: its rows are the
+        # cross products over the determinant. ~3x faster than np.linalg's
+        # per-matrix LAPACK calls, which dominated the residual check.
+        g = np.empty((len(tet), 4, 3))
+        g[:, 1], g[:, 2], g[:, 3] = np.cross(e2, e3), np.cross(e3, e1), np.cross(e1, e2)
+        det = np.einsum('ij,ij->i', e1, g[:, 1])
         if not np.isfinite(det).all() or np.any(det == 0):
             raise ValueError('Nonfinite or degenerate tetrahedron in element batch')
         volume = np.abs(det) / 6
-        g = np.empty((len(tet), 4, 3))
-        g[:, 1:] = np.linalg.inv(jac)
+        g[:, 1:] /= det[:, None, None]
         g[:, 0] = -g[:, 1:].sum(axis=1)
         ke = np.einsum('eik,ejk->eij', g, g)
         ke *= (sigma[start:start + len(tet)] * volume)[:, None, None]

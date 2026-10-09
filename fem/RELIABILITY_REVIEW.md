@@ -49,6 +49,10 @@ old global face arrays failed after classification (85% progress).
 
 - Bounded, disk-partitioned face matching for dura checks, tissue surfaces and
   solver boundary extraction; chunked centroid creation; compact preview nodes.
+  (2026-10-09: replaced by one in-memory face-adjacency array per stage,
+  ~110 bytes/tet, because the bucket files cost ~16 ms per append on Pioneer's
+  NFS home and each sort of the 52 M-tet fine mesh took about an hour. See
+  `fem/scripts/mesh_faces.py`.)
 - Full-anatomy/lead bounding box and shared tissue refinement regions in the
   mesher and estimator. Distance searches are limited to their influence radii;
   structured-grid coordinates are generated in chunks.

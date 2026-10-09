@@ -2,8 +2,8 @@
 
 CLI: mesh_preview.py <run_dir> <params.json>
 Progress 0-75 is the volume mesh, 75-85 classification, 85-92 the dura check,
-and 92-100 tissue-surface export. Face sorting is partitioned on disk for
-bounded memory. A mesh_report and artifact manifests mark completed previews.
+and 92-100 tissue-surface export. Classification and face matching use
+OMP_NUM_THREADS workers, like Gmsh. A mesh_report and artifact manifests mark completed previews.
 An interrupted preview can reuse a completed matching volume mesh.
 """
 import json
@@ -17,13 +17,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_mesh
 import config as C
 from assign_and_solve import classify_tets, dura_leak_report
-
-
-from mesh_faces import face_batches
+from mesh_faces import face_neighbours, face_chunks
 import artifacts
 
 
-def outer_surface(nodes, tets, lab):
+def outer_surface(nodes, tets, lab, nbr=None):
     """Every triangular face owned by exactly one tet (the mesh's outer
     boundary, tissue-labelled by whichever tet owns it), for a lightweight
     preview -- same face-counting idiom assign_and_solve.py already uses.
@@ -32,14 +30,16 @@ def outer_surface(nodes, tets, lab):
     the faces BETWEEN tissues. Kept because it is the honest answer to
     "what is the outer hull of this mesh", which is a different question.
     """
+    nbr = face_neighbours(tets) if nbr is None else nbr
     faces, ids = [], []
-    for f, owner, paired, lone in face_batches(tets):
+    for f, owner, other in face_chunks(tets, nbr):
+        lone = other < 0
         faces.append(f[lone])
         ids.append(lab[owner[lone]])
     return np.concatenate(faces), np.concatenate(ids)
 
 
-def tissue_surfaces(nodes, tets, lab):
+def tissue_surfaces(nodes, tets, lab, nbr=None):
     """Every face that BOUNDS A TISSUE, labelled with the tissue it bounds.
 
     WHY THIS REPLACED outer_surface() FOR THE PREVIEW (2026-09-15)
@@ -70,13 +70,16 @@ def tissue_surfaces(nodes, tets, lab):
     against the 1 771 980 triangles RADO's own 240 STL bodies already render
     in this document. Returns (tris (m,3), tissue_id (m,)).
     """
+    nbr = face_neighbours(tets) if nbr is None else nbr
     tris, ids = [], []
-    for f, owner, paired, lone in face_batches(tets):
+    for f, owner, other in face_chunks(tets, nbr):
+        lone = other < 0
         tris.append(f[lone])
         ids.append(lab[owner[lone]])
-        la, lb = lab[owner[paired]], lab[owner[paired + 1]]
+        la, lb = lab[owner[~lone]], lab[other[~lone]]
         cut = la != lb
-        tris.extend((f[paired[cut]], f[paired[cut] + 1]))
+        f = f[~lone][cut]
+        tris.extend((f, f))
         ids.extend((la[cut], lb[cut]))
     return np.concatenate(tris), np.concatenate(ids)
 
@@ -161,19 +164,22 @@ def main():
                                            insulator_stl=insulator_stl,
                                            progress_cb=progress)
 
+    threads = max(1, int(os.environ.get("OMP_NUM_THREADS", "1")))
     lab = classify_tets(nodes, tets, contact_stl=contact_stl,
-                         insulator_stl=insulator_stl, order=order)
+                         insulator_stl=insulator_stl, order=order, workers=threads)
     progress(85)
-    print("Checking dura barrier (partitioned face sort)", flush=True)
+    print("Checking dura barrier", flush=True)
 
     keep = lab >= 0
     tets_k, lab_k = tets[keep], lab[keep]
+    # One face adjacency serves the dura check and the preview.
+    nbr = face_neighbours(tets_k, threads)
 
-    leak = dura_leak_report(nodes, tets_k, lab_k, order=order)
+    leak = dura_leak_report(nodes, tets_k, lab_k, order=order, nbr=nbr)
     progress(92)
 
-    print("Extracting tissue interfaces (partitioned face sort)", flush=True)
-    tri, tri_lab = tissue_surfaces(nodes, tets_k, lab_k)
+    print("Extracting tissue interfaces", flush=True)
+    tri, tri_lab = tissue_surfaces(nodes, tets_k, lab_k, nbr=nbr)
     preview_path = os.path.join(scratch_dir, "preview.vtp")
     # Drop interior vertices from the display artifact.
     used, inverse = np.unique(tri, return_inverse=True)

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import artifacts
 import config as C
 from field import TetField, structured_export
-from mesh_faces import face_batches
+from mesh_faces import face_neighbours, subset_neighbours, face_chunks
 from mesh_preview import tissue_surfaces, outer_surface
 from assign_and_solve import dura_leak_report, check_residual, solve_contact
 from mesh_cost import describe
@@ -76,24 +76,35 @@ class ReliabilityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'no solution published'):
                 check_residual(a, bad, rhs, 1, 400)
 
-    def test_face_partition_matches_independent_face_count(self):
+    def test_face_neighbours_match_independent_face_count(self):
         nodes = np.random.default_rng(31).random((80, 3))
         tets = Delaunay(nodes).simplices
         expected = Counter()
         for tet in tets:
             for omit in range(4):
                 expected[tuple(sorted(np.delete(tet, omit)))] += 1
+        nbr = face_neighbours(tets, threads=3)
         found = Counter()
-        owners = []
-        with contextlib.redirect_stdout(io.StringIO()):
-            for f, owner, paired, lone in face_batches(tets, target_faces=75, chunk_tets=13):
-                for face in f:
-                    found[tuple(face)] += 1
-                for face, who in zip(f, owner):
-                    self.assertTrue(set(face).issubset(tets[who]))
-                owners.extend(tuple(v) for v in f[lone])
-        self.assertEqual(found, expected)
-        self.assertEqual(set(owners), {f for f, n in expected.items() if n == 1})
+        lone = set()
+        for f, owner, other in face_chunks(tets, nbr, chunk=13):
+            for face, who, across in zip(f, owner, other):
+                key = tuple(sorted(face))
+                found[key] += 1
+                self.assertTrue(set(face).issubset(tets[who]))
+                if across < 0:
+                    lone.add(key)
+                else:
+                    self.assertTrue(set(face).issubset(tets[across]))
+                    self.assertIn(who, nbr[across])
+        self.assertEqual(set(found.values()), {1})
+        self.assertEqual(set(found), set(expected))
+        self.assertEqual(lone, {f for f, n in expected.items() if n == 1})
+        keep = np.arange(len(tets)) % 3 != 0
+        np.testing.assert_array_equal(subset_neighbours(nbr, keep), face_neighbours(tets[keep]))
+
+    def test_face_neighbours_reject_non_manifold_mesh(self):
+        with self.assertRaisesRegex(ValueError, 'Non-manifold'):
+            face_neighbours(np.array([[0, 1, 2, 3], [0, 1, 2, 4], [0, 1, 2, 5]]))
 
     def test_tissue_interfaces_and_leak_area(self):
         nodes = np.array([[0., 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]])

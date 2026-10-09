@@ -18,7 +18,7 @@ from scipy.spatial import cKDTree
 
 import config as C
 from element_batches import elements, action, batch_size
-from mesh_faces import face_batches
+from mesh_faces import face_neighbours, face_chunks
 
 # SCS_ELMER_BIN points at another install, e.g. the Pioneer build in ~/opt.
 ELMER_BIN = Path(os.environ.get('SCS_ELMER_BIN', '/opt/elmerfem/bin'))
@@ -47,19 +47,20 @@ def run(command, cwd, log):
 
 
 def connectivity(tets, n):
-    """Reject disconnected active domains using a batched boolean graph."""
-    graph = sp.csr_matrix((n, n), dtype=bool)
-    for start in range(0, len(tets), batch_size()):
-        tet = tets[start:start + batch_size()]
-        row = np.repeat(tet[:, 0], 3)
-        col = tet[:, 1:].ravel()
-        graph += sp.coo_matrix((np.ones(len(row), bool), (row, col)), shape=(n, n)).tocsr()
+    """Reject disconnected active domains (tets joined through shared nodes).
+
+    One sparse build; summing per-batch CSR matrices was quadratic in the
+    number of batches (~520 at 52 M tets)."""
+    row = np.repeat(tets[:, 0], 3)
+    col = tets[:, 1:].ravel()
+    graph = sp.csr_matrix((np.ones(len(row), bool), (row, col)), shape=(n, n))
+    del row, col
     count = connected_components(graph, directed=False, return_labels=False)
     if count != 1:
         raise RuntimeError('Active mesh has %d disconnected components; check tissue connectivity before solving.' % count)
 
 
-def write_mesh(directory, nodes, tets, labels, order, pin=None):
+def write_mesh(directory, nodes, tets, labels, order, pin=None, nbr=None):
     """Write native Elmer mesh in SI units; return normalized nodal return."""
     directory.mkdir(parents=True, exist_ok=True)
     with open(directory / 'mesh.nodes', 'w') as stream:
@@ -80,7 +81,9 @@ def write_mesh(directory, nodes, tets, labels, order, pin=None):
         pin = int(np.argmax(np.linalg.norm(nodes[:, :2] - np.array([55.60, 87.0]), axis=1)))
     count = 0
     with open(directory / 'mesh.boundary', 'w') as stream:
-        for faces, owner, paired, lone in face_batches(tets):
+        nbr = face_neighbours(tets) if nbr is None else nbr
+        for faces, owner, other in face_chunks(tets, nbr):
+            lone = other < 0
             boundary = faces[lone]
             p = nodes[boundary] * 1e-3
             area = np.linalg.norm(np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]), axis=1) / 2
@@ -174,11 +177,13 @@ End
 ''' % (1. / source_volume, -1. / return_area, '\n'.join(bodies))
 
 
-def read_potential(results, nodes):
-    """Map partition output to original nodes and check interface agreement."""
+def read_potential(results, nodes, tree=None, workers=1):
+    """Map partition output to original nodes and check interface agreement.
+
+    Pass `tree` (cKDTree of nodes in metres) to reuse it across contacts."""
     import vtk
     from vtk.util.numpy_support import vtk_to_numpy
-    tree = cKDTree(nodes * 1e-3)
+    tree = cKDTree(nodes * 1e-3) if tree is None else tree
     values = np.full(len(nodes), np.nan)
     files = sorted(results.glob('*.vtu'))
     if not files:
@@ -193,7 +198,7 @@ def read_potential(results, nodes):
         if arr is None or grid.GetNumberOfPoints() == 0:
             raise RuntimeError('Missing potential data in %s' % path)
         v = vtk_to_numpy(arr)
-        dist, ids = tree.query(vtk_to_numpy(grid.GetPoints().GetData()))
+        dist, ids = tree.query(vtk_to_numpy(grid.GetPoints().GetData()), workers=workers)
         if not np.isfinite(v).all() or np.max(dist) > 1e-9:
             raise RuntimeError('Elmer result coordinates/values do not match input mesh')
         present = np.isfinite(values[ids])
@@ -205,8 +210,12 @@ def read_potential(results, nodes):
     return values
 
 
-def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, resources, progress=lambda p: None):
-    """Solve a classified mesh; independently verify every unit-current field."""
+def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, resources,
+                   progress=lambda p: None, nbr=None):
+    """Solve a classified mesh; independently verify every unit-current field.
+
+    nbr is the face adjacency of tets (mesh_faces.face_neighbours), if the
+    caller already has it."""
     from assign_and_solve import ACCEPTED_RESIDUAL
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -224,7 +233,10 @@ def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, re
         vol[start:start + len(v)] = v
     pin = int(np.argmax(np.linalg.norm(nodes[:, :2] - np.array([55.60, 87.0]), axis=1)))
     resources.mark('mesh export')
-    ret, area = write_mesh(directory / 'mesh', nodes, tets, labels, order, pin=pin)
+    if nbr is None:
+        nbr = face_neighbours(tets, resources.cpus)
+    ret, area = write_mesh(directory / 'mesh', nodes, tets, labels, order, pin=pin, nbr=nbr)
+    del nbr
     progress(12)
     if resources.cpus > 1:
         resources.mark('mesh partitioning')
@@ -234,7 +246,7 @@ def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, re
     residuals = []
     reactions = []
     free = np.ones(len(nodes), bool); free[pin] = False
-    version = None
+    version = tree = None
     for pos, contact in enumerate(contact_ids):
         mask = labels == order.index('contact%d' % contact)
         source_vol = float(vol[mask].sum())
@@ -263,7 +275,9 @@ def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, re
                                    in (case / 'solver.log').read_text(errors='replace').splitlines()
                                    if 'MAIN: Version:' in line), 'unknown')
         resources.mark('verify contact %d' % contact)
-        v = read_potential(results, nodes)
+        if tree is None:
+            tree = cKDTree(nodes * 1e-3)
+        v = read_potential(results, nodes, tree, resources.cpus)
         v -= v[pin]
         residual = action(nodes, tets, sigma, v) - rhs
         rel = float(np.linalg.norm(residual[free]) / max(np.linalg.norm(rhs[free]), 1e-300))
@@ -296,7 +310,8 @@ def solve(nodes, tets, contact_stl, insulator_stl, include_background, directory
     if minimum > resources.memory_gb:
         raise RuntimeError('Mesh preparation estimate %.2f GB exceeds %.2f GB local budget' % (minimum, resources.memory_gb))
     resources.mark('classification')
-    lab = classify_tets(nodes, tets, contact_stl=contact_stl, insulator_stl=insulator_stl, order=order)
+    lab = classify_tets(nodes, tets, contact_stl=contact_stl, insulator_stl=insulator_stl, order=order,
+                        workers=resources.cpus)
     keep = np.ones(len(tets), bool) if include_background else lab >= 0
     active_tets, active_lab = tets[keep], lab[keep]
     used = np.unique(active_tets)
@@ -307,9 +322,10 @@ def solve(nodes, tets, contact_stl, insulator_stl, include_background, directory
     del keep, lab, remap, used
     print('Active: %d nodes, %d tetrahedra' % (len(active_nodes), len(active_tets)), flush=True)
     progress(5)
-    dura_leak_report(active_nodes, active_tets, active_lab, order=order)
+    nbr = face_neighbours(active_tets, resources.cpus)
+    dura_leak_report(active_nodes, active_tets, active_lab, order=order, nbr=nbr)
     sigma = sigma_of(active_lab, include_background=include_background, order=order)
     result = solve_prepared(active_nodes, active_tets, active_lab, sigma, order,
-                            sorted(contact_stl), directory, resources, progress)
+                            sorted(contact_stl), directory, resources, progress, nbr=nbr)
     result['background_included'] = include_background
     return result
