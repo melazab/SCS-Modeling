@@ -6,15 +6,19 @@ nothing under `fem/scripts/` or `src/ansys/` is modified. Several of those files
 are hashed by the solution provenance check; they are only imported.
 
 ```bash
-fem/.venv/bin/python src/extend/extend_rado.py                      # 4 levels, straight: T6-T9
-fem/.venv/bin/python src/extend/extend_rado.py --levels 3 --kyphosis-deg-per-level 2
+fem/.venv/bin/python src/extend/extend_rado.py              # 4 levels: T6-T9
+fem/.venv/bin/python src/extend/extend_rado.py --levels 3
+fem/.venv/bin/python src/extend/overlap_audit.py fem/out/geometry/rado_up4 --json overlaps.json
 ```
 
-Output: `fem/out/geometry/rado_up<N>_kyph<deg>/` (git-ignored, ~180 MB for 4
-levels). It contains every source STL copied unchanged, the new STLs,
-`manifest.json` and `extension_check.png`. The manifest records inputs with
-SHA-256, every parameter, the per-level transforms and all check results.
-Runtime is about 5 minutes, most of it in the checks (`--no-check` skips them).
+Output: `fem/out/geometry/rado_up<N>/` (git-ignored, ~180 MB for 4 levels).
+It contains RADO's STLs, the new STLs, `manifest.json` and
+`extension_check.png`. Ten RADO files are **replaced** in the set, not copied
+(listed under `replaced_rado_files`): the 8 continuous bodies, each by one
+closed full-length body, and the 2 top sympathetic trunk segments, by joined
+versions. The manifest records inputs with SHA-256, every parameter, the
+per-level transforms and all check results. A run takes about 6 minutes,
+most of it in the checks (`--no-check` skips them).
 
 ## Why it works: RADO is one level unit
 
@@ -32,66 +36,132 @@ Measured, and asserted on every run:
   average of RADO's levels.
 - **Only 8 bodies run continuously:** white, grey, CSF, meninges, epidural,
   two blood layers and the aorta. Each has a constant perpendicular
-  cross-section along the cord: Dice ≥ 0.96 over 20 mm and centroid drift
-  ≤ 0.03 mm (aorta 0.27 mm). Each is extended by sweeping that section along
-  the extended centreline, overlapping the original by 10 mm.
+  cross-section along the cord (Dice ≥ 0.96 over 20 mm).
 - **The top 3–8 mm of each continuous body is not the constant section,**
-  because the end surfaces cut it. The section is therefore taken 10 mm below
+  because the end surfaces cut it. The bodies are therefore cut 10 mm below
   the top. Keep `--join-back` at 10 or more.
 
-Copies and sweeps hang off one centreline frame fitted to the cord: a cubic
-y(z), residual 0.017 mm rms. That frame reproduces RADO's own
-vertebra-to-vertebra steps to 0.07 mm, which sets the level spacing (30.8 mm
-of arc).
+## How the levels are stacked
+
+RADO's vertebrae are rigid copies, so the step between two of them is one
+rigid motion. The top step, T11 → T10 (disc naming; files `V1-3` → `V1-4`),
+is **S: a 5.87° rotation about a left-right axis about 31 cm anterior to the
+vertebral bodies**. New level k is S^k applied to the top unit. So:
+
+- **The vertebrae continue RADO's own curve.** The anterior vertebral edge
+  of T10–T6 lies on the circular arc that S traces through T11 and T10. RADO
+  has no other definition of its curve; it is not a spline. Its lower step,
+  T12 → T11, is 4.61°. Four more levels at 5.87° add 23.5° of kyphosis, about
+  34° over T6–T12, within normal thoracic kyphosis.
+- **Each disc sits on and under its vertebrae exactly as RADO's top disc sits
+  on T10.** S carries RADO's T10/T11 disc onto its T9/T10 disc to 0.22 mm, so
+  the top disc already fits the T9 vertebra that S makes.
+- **The continuous bodies follow the same motion.** Each one's section at the
+  cut is carried along the S-orbit (S^t, real t), so every copied vertebra's
+  canal, foramina and root entries meet the canal contents exactly as at T10.
+  RADO's own cord is not quite S-invariant: at the cut its axis is 1.5° off
+  the orbit, so the extension turns by 1.5° there.
+
+An earlier version continued straight, with the same rotation for every
+copy. It gave the anterior vertebral edge a sawtooth and left the discs out
+of line with the vertebrae above them. Mohamed's review rejected it on
+2026-10-12.
+
+## One closed body per continuous tissue
+
+Each continuous body is written as **one closed surface**: the original cut
+at a plane, walls swept from the cut points themselves, and a cap at the new
+top end. All eight are cut at **one shared plane**, 10 mm below the lowest
+top (the cord's), so the nested canal layers keep sections taken at the same
+place. Cut at their own tops, up to 1.8 mm apart, they left 2.3× more
+unassigned canal points. Each body still ends where RADO's own does relative
+to the top level; the aorta ends 12 mm above the cord.
+
+Cut and walls share vertices, so the result is closed and consistently
+oriented. The run verifies this on the file as written (float32): 0 open,
+0 non-manifold and 0 misoriented edges for all eight, the same as the RADO
+originals. There are no interior caps and no doubled walls, so the same files
+serve classification, size fields and display. The earlier "display only"
+open surfaces are gone.
+
+## The sympathetic trunk
+
+RADO's trunk segments (`neuro_sympathetic_a`, 29 mm tubes of radius 0.75 mm)
+were placed by hand and overlap their neighbours by 0.7–1.1 mm. They are not
+S-periodic. S leaves a copied segment 1.1 mm (right) and 1.8 mm (left) away
+from the segment below, so a plain copy is disconnected.
+
+Each segment's **upper end is bent** until it overlaps the segment above by
+0.8 mm. The bend is a smoothstep from its ganglion to its top end: at most 4.9°
+(right) and 10.2° (left), over 15–18 mm. Ganglia and rami stay rigid copies.
+RADO's own two top segments get the same bend, so they join the first copy;
+they are written as `<stem>__joined.STL`. The topmost copy is left free.
+
+## Overlaps between bodies
+
+RADO's parts were modelled separately and never cut against each other, so
+its bodies overlap. `overlap_audit.py` measures this:
+
+| set | different-tissue overlaps | volume |
+|---|---|---|
+| RADO `STL_files/` | 1,059 pairs | 18.2 cm³ |
+| `rado_up4` | 2,079 pairs | 38.8 cm³ |
+
+The copies carry RADO's overlaps unchanged. The FEM labels each tet by tissue
+priority (soft tissue before bone), as it always has for RADO. Removing the
+overlaps is a requirement for the parametric model. The audit is its
+acceptance test.
 
 ## Modelling choices
 
-| choice | default | why |
+| choice | value | why |
 |---|---|---|
-| curvature above RADO | `--kyphosis-deg-per-level 0` (straight) | RADO's cord tilts 17° from z at the bottom and ~1° at the top, so its kyphosis apex is at its *top* vertebra. Repeating RADO's own 5.87° step would bend the spine anteriorly above T10, earlier than real anatomy (apex usually mid-thoracic). |
-| where copies are pinned | `--attach roots` | The unit was shaped around a curved canal and is placed on a straight one, so it matches exactly only near the pin. Measured offsets, copy vs RADO, in distance to the cord axis: **pinned at the root complex**, roots/rootlets ≤ 0.16 mm and vertebra ≤ 0.88 mm; **pinned at the fitted vertebra attachment**, rootlets up to 3.5 mm. Bone takes the error because a gap fills with background at 0.04 S/m, the vertebra's own value. |
+| curvature above RADO | RADO's top step, 5.87°/level | continues the curve of RADO's own vertebrae (above) |
+| what is copied | RADO's top level unit | levels were placed by hand; the top one is the one adjoining the new levels |
 | level names | RADO's disc filenames | Top vertebra = T10, so new levels are T9, T8, T7, T6. The paper's naming is one level higher; see `src/freecad/README.md` "Vertebral levels". New discs are named for the levels they separate (`T_disk_8_9x-1__up1`); other copies keep the source name plus `__up<k>`. Every new name is asserted to map to the same `tissue_map.yaml` class as its source. |
-| sizes | unchanged | RADO's own vertebrae are identical copies across T10–T12; the copies keep that simplification. Real T6–T9 vertebrae are smaller. Size by level belongs to the parametric generator (`cad-dev`). |
+| sizes | unchanged | RADO's own vertebrae are identical copies across T10–T12, and the copies keep that simplification. Real T6–T9 vertebrae are smaller. Size by level belongs to the parametric model. |
 
-## Checks (default run, 4 levels, straight)
+## Checks (default run, 4 levels)
 
-1. **Seams.** Swept extension vs original body, mid-overlap: Dice 0.92–0.99
-   (dura is the low one, being ~0.3 mm thick).
-2. **Copies.** A section through RADO's top unit, carried by each level's
-   transform, agrees with the copy at ≥ 0.981 on per-level tissue. Continuous
-   bodies are excluded from that gate: they follow the local frame, so carrying
-   them with the unit's transform shifts them where RADO curves.
-3. **Gaps.** Points inside the canal outline that belong to no tissue (they
-   would become background): **extension mean 10.6 / max 24 per section,
-   against RADO's own canal mean 34.1 / max 134** (0.1 mm grid). The extension
-   adds none. RADO's own come from its mismatched interfaces.
+Every run checks these on the files it wrote and records them in the
+manifest; a failure becomes a warning.
+
+1. **Closure.** Each extended body, read back as written (float32): 0 open,
+   0 non-manifold and 0 misoriented edges, the same as the RADO originals.
+2. **The cut.** 5 mm below the cut the extended body is the original
+   (Dice 1.000). 5 mm above it, the 1.5° turn has moved the section about
+   0.1 mm. That gives Dice 0.92–1.00 for thick bodies and 0.71–0.84 for the
+   0.3 mm dura and ~1 mm vessels. RADO's own end zone starts there anyway.
+3. **Copies.** A section through RADO's top unit, carried by S^k, against
+   level k on the same points: per-level tissue agreement ≥ 0.994 and all
+   tissue ≥ 0.964, at every level. Sections of the topmost level beyond the
+   model's top end are recorded but not gated.
+4. **Sympathetic trunk.** 8 of 8 junctions overlap (each lower segment's top
+   end lies inside the segment above).
+5. **Discs.** Fraction of each disc's vertebra-facing area that touches or
+   enters bone: RADO's own discs 0.96–0.99, the new discs 0.96 (below) and
+   0.98 (above), identical to RADO's top disc. 95th-percentile gap 0.00 mm
+   everywhere.
+6. **Gaps.** Points inside the canal outline that belong to no tissue (they
+   would become 0.04 S/m background), per section, 0.1 mm grid: extension
+   mean 20.2 / max 29, RADO's own canal mean 21.5 / max 86. RADO's own come
+   from its mismatched interfaces; the extension adds none beyond them.
+
+`extension_check.png` shows the true midsagittal plane (the arc through all
+seven vertebrae) and a curved coronal section along the cord.
 
 ## Using the set in the FEM
 
 The `fem/` box mesher labels tets by "inside any body of this class", using
-one point-in-shell tester per body. Overlapping bodies of a class are therefore
-a union, and the seams need overlap, not conformity. To mesh this set, `fem/`
-needs a way to point at a geometry directory instead of `STL_files/`. The
-5-entry `config.TISSUE_STL` (one path per primary compartment, used for size
-fields, the cost model and the visualiser surfaces) must also accept the
-original body plus its sweep. Those files belong to the fem/HPC work and are
-not changed here.
+one point-in-shell tester per body. To mesh this set, `fem/` needs a way to
+point at a geometry directory instead of `STL_files/`. The 5-entry
+`config.TISSUE_STL` (one path per primary compartment, used for size fields,
+the cost model and the visualiser surfaces) must then name the extended
+bodies (`<stem>__extended_up4.STL`). Each is one closed shell, so one path per
+compartment still works. Those files belong to the fem/HPC work and are not
+changed here.
 
-**Open display / size-field surfaces.** Each continuous tissue is two closed
-bodies (original + `__sweep_up<N>`), and their caps sit inside each other at
-the join. Any code that draws or densifies surfaces would see a fake
-interface ring at z ≈ 154–164 and refine around it. So the run also writes
-`open_surfaces_display_only/<stem>__open_surface_up<N>.STL`: the original
-clipped exactly at the join plane, plus the sweep's walls and top end.
-Interior cap area near the joins drops from 1,292 mm² (closed pairs) to 0. The
-clip and the sweep's first ring come from the same plane-cut points, so 4 of
-the 8 surfaces are actually watertight; the rest have gaps ≤ 0.04 mm. **They
-are for visualiser surfaces and size-field clouds only. Never classify them.**
-They live in a subdirectory because `config.py` classifies every `.stl` at the
-top level of the geometry directory, and the closed bodies stay the
-classification set.
-
-Expected cost: the model grows from z ≈ 48–176 mm to about 48–300 mm. At
+Expected cost: the model grows from z ≈ 48–176 mm to about 48–290 mm. At
 poster mesh settings, expect ~2.2× the tetrahedra.
 
 A free side result: solving the existing T10 leads on both geometries measures

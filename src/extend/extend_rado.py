@@ -1,45 +1,56 @@
 """Extend the RADO-SCS geometry rostrally by whole vertebral levels.
 
-    fem/.venv/bin/python src/extend/extend_rado.py                 # 4 levels, straight
-    fem/.venv/bin/python src/extend/extend_rado.py --levels 3 --kyphosis-deg-per-level 2
+    fem/.venv/bin/python src/extend/extend_rado.py              # 4 levels: T6-T9
+    fem/.venv/bin/python src/extend/extend_rado.py --levels 3
 
-Writes fem/out/geometry/rado_up<N>_kyph<deg>/ (git-ignored): every source STL
-copied unchanged, the new STLs, manifest.json (inputs with SHA-256, every
-parameter, transform and check) and extension_check.png. STL_files/ is only
-read.
+Writes fem/out/geometry/rado_up<N>/ (git-ignored): a complete, self-contained
+STL set (RADO's files, the new levels, and the few RADO bodies this replaces),
+manifest.json (inputs with SHA-256, every parameter, transform and check) and
+extension_check.png. STL_files/ is only read.
 
 WHY THIS IS POSSIBLE (measured, 2026-10-09). RADO is one level unit, copied:
 224 of its 232 per-level bodies are exact rigid copies of a sibling at another
 level (residual ~2e-5 mm), and the 8 bodies that run the whole length (white,
 grey, CSF, meninges, epidural, two blood layers, aorta) are constant
-cross-sections swept along a curve. So:
+cross-sections swept along a curve. RADO's levels were each placed by hand,
+so the new levels copy RADO's TOP level arrangement (top vertebra, the disc
+above it, the roots/DRG/sleeves/vessels/ganglia at that disc), not an average.
 
-  * per-level bodies: the TOP level unit (top vertebra, the disc above it, the
-    roots/DRG/sleeves/vessels/ganglia at that disc) is copied N times;
-  * continuous bodies: each one's perpendicular cross-section is taken just
-    below its top end and swept up along an extended centreline, overlapping
-    the original by --join-back mm. The original files are untouched.
+HOW THE LEVELS ARE STACKED. The step from RADO's middle to its top vertebra
+(V1-3 -> V1-4, T11 -> T10 in disc naming) is a rigid motion S: a 5.87 deg
+rotation about a left-right axis ~31 cm anterior to the vertebral bodies.
+Level k is S^k applied to the top unit. The vertebrae therefore continue
+RADO's own curve, a circular arc through T11 and T10, and each new disc sits
+on and under its vertebrae exactly as RADO's top disc sits on T10. (RADO's
+lower step, T12 -> T11, is 4.61 deg; the curve has no other definition, no
+spline.) An earlier version continued straight and gave the anterior
+vertebral edge a sawtooth; Mohamed's review rejected it, 2026-10-12.
 
-Everything hangs off ONE centreline frame, fitted to the cord: copy k of the
-top unit is F(p + k*D) o F(p)^-1 applied to it, where F(s) is the centreline
-frame at arc length s, D the level spacing (RADO's top vertebra step, from a
-fit in which the frame reproduces RADO's own vertebra-to-vertebra steps to
-0.07 mm) and p the pin. The unit was shaped around RADO's curved canal, so a
-copy on a straight canal matches exactly only near p; --attach roots (default)
-pins it at the middle of the root complex, which keeps copied roots and
-rootlets within 0.2 mm of their RADO position relative to the cord and puts
-the ~1 mm residual on the vertebra, where it is electrically invisible (a gap
-fills with background at the vertebra's own 0.04 S/m). Measured and recorded.
+The continuous bodies follow the same motion: the section at the join is
+carried by S^t for real t (the S-orbit), so a copied vertebra's canal,
+foramina and root entries meet the swept canal contents exactly as at T10.
+RADO's own cord is not quite S-invariant: at the cut its axis is 1.5 deg off
+the orbit, so the extension turns by 1.5 deg there.
 
-RADO's levels are rigid copies of each other but were each placed by hand
-(the steps differ level to level), so the new levels are copies of RADO's TOP
-level arrangement, not an average.
+ONE BODY PER CONTINUOUS TISSUE. Each continuous body is written as one closed
+surface: the original cut at one plane shared by all eight, walls swept from
+the cut points themselves, and a top cap. The cut and the walls share vertices, so the result
+is closed and consistently oriented; that is checked, not assumed. It replaces
+the original file in the set.
 
-THE MODELLING CHOICE: --kyphosis-deg-per-level. RADO's cord tilts 17 deg from z
-at the bottom and ~1 deg at the top, i.e. its kyphosis apex is at its TOP
-vertebra. Repeating RADO's own top step (5.87 deg) would bend the spine
-anteriorly above T10, earlier than real anatomy. The default, 0, continues
-straight along the top tangent. Positive values bend in RADO's own sense.
+THE SYMPATHETIC TRUNK. RADO's trunk segments (neuro_sympathetic_a, ~29 mm
+tubes, r 0.75 mm) were placed by hand and overlap their neighbours by
+0.7-1.1 mm. They are not S-periodic: S leaves a copied segment 1.1 mm (right)
+and 1.8 mm (left) off the one below. So each segment's upper end is bent, with
+a smoothstep from its ganglion up to its top end, until it overlaps the
+segment above by CHAIN_OVERLAP_MM. Ganglia and rami stay rigid. RADO's own top
+segments get the same bend (written as <stem>__joined, replacing the
+original), and the topmost copy is left free.
+
+OVERLAPS. RADO's parts were never cut against each other, so its bodies
+overlap (18 cm^3 between different tissues; src/extend/overlap_audit.py). The
+copies carry the same overlaps, and fem/ resolves them by tissue priority, as
+it always has for RADO. Removing them is left to the parametric model.
 
 Level names follow RADO's disc filenames (top vertebra = T10, so 4 new levels
 are T9..T6), the same convention as src/freecad/README.md "Vertebral levels";
@@ -47,11 +58,6 @@ the manifest also records the paper's naming (one level higher). New discs are
 named for the levels they separate (T_disk_8_9x...), other copies keep their
 source name plus "__up<k>"; every new name is asserted to map to the same
 tissue_map.yaml class as its source.
-
-THE MESHER TOLERATES THE SEAMS. fem/ labels box-mesh tets by "inside any body
-of this class", with one point-in-shell tester per body, so overlapping bodies
-of the same class are a union and need not be conformal. What it cannot
-tolerate is a gap (it becomes 0.04 S/m background); the checks look for that.
 """
 import argparse
 import hashlib
@@ -64,7 +70,7 @@ import sys
 import time
 
 import numpy as np
-from scipy.optimize import minimize
+from scipy.linalg import expm, logm
 from scipy.spatial import cKDTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -79,10 +85,9 @@ import stlio  # noqa: E402
 
 PIPE_OF_CLASS = {cls: pipe for pipe, cls in C.ANATOMY_CLASS}
 CONTINUOUS_SPAN_MM = 80.0      # z-span above which a body is "continuous"
-OPEN_DIR = "open_surfaces_display_only"   # subdirectory: never scanned by config.py
 RIGID_TOL_MM = 1e-3
-VERT_INDEX = {**{"T%d" % i: 7 + i for i in range(1, 13)}, "L1": 20}
-VERT_NAME = {v: k for k, v in VERT_INDEX.items()}
+CHAIN_OVERLAP_MM = 0.8         # RADO's own trunk segments overlap 0.74-1.09 mm
+SWEEP_MAX_DEG = 0.2            # rotation between consecutive swept rings
 
 
 # --------------------------------------------------------------------------
@@ -137,13 +142,56 @@ def rigid_fit(A, B):
     return R, t, float(np.linalg.norm(A @ R.T + t - B, axis=1).max())
 
 
-def rot_x_deg(R):
-    """Signed rotation angle about +x of a rotation that is (nearly) pure x."""
-    return float(np.degrees(np.arctan2(R[2, 1], R[1, 1])))
-
-
 def apply(M, pts):
     return pts @ M[:3, :3].T + M[:3, 3]
+
+
+def topology(V, T):
+    """Closure and orientation of an indexed surface: boundary and
+    non-manifold edge counts, and edges whose two faces disagree on direction
+    (a consistently oriented closed surface has none)."""
+    e = np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    key = np.sort(e, axis=1)
+    _, inv, counts = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    fwd = np.bincount(inv.ravel(), weights=(e[:, 0] < e[:, 1]), minlength=len(counts))
+    two = counts == 2
+    a, b, c = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    return {"triangles": int(len(T)), "boundary_edges": int((counts == 1).sum()),
+            "nonmanifold_edges": int((counts > 2).sum()),
+            "misoriented_edges": int((two & (fwd != 1)).sum()),
+            "volume_mm3": round(float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0), 3)}
+
+
+class Step:
+    """A rigid motion S (4x4) and its real powers S^t = expm(t log S): the
+    screw motion that interpolates it. RADO's vertebral step is a rotation
+    about a left-right axis (its translation along that axis is 0.04 mm)."""
+
+    def __init__(self, M):
+        self.M = M
+        self.L = np.real(logm(M))
+        assert np.abs(expm(self.L) - M).max() < 1e-9
+
+    def power(self, t):
+        if float(t).is_integer():
+            return np.linalg.matrix_power(self.M, int(t)) if t >= 0 else \
+                np.linalg.matrix_power(np.linalg.inv(self.M), int(-t))
+        return expm(t * self.L)
+
+    def angle_deg(self):
+        return float(np.degrees(np.linalg.norm([self.L[2, 1], self.L[0, 2], self.L[1, 0]])))
+
+    def axis(self):
+        w = np.array([self.L[2, 1], self.L[0, 2], self.L[1, 0]])
+        return w / np.linalg.norm(w)
+
+    def speed(self, p):
+        """mm moved per unit t by point p (= arc length per level at p)."""
+        return float(np.linalg.norm(self.L[:3, :3] @ p + self.L[:3, 3]))
+
+    def centre_yz(self):
+        R, t = self.M[:3, :3], self.M[:3, 3]
+        return np.linalg.solve(np.eye(2) - R[1:, 1:], t[1:])
 
 
 # --------------------------------------------------------------------------
@@ -177,32 +225,27 @@ def cord_centroids(paths, step=1.0, h=0.1):
 
 class Curve:
     """Planar centreline in the y-z plane at x = x0, as dense samples of arc
-    length s, (y, z) and tilt phi (tangent = (0, sin phi, cos phi)).
+    length s, (y, z) and tilt phi (tangent = (0, sin phi, cos phi))."""
 
-    Inside the cord's data range it is the cubic fit y(z); above the data it
-    continues with dphi/ds = -kappa (kappa = 0: straight). RADO's own steps
-    rotate +x by a positive angle going up, i.e. phi DEcreases with s, so a
-    positive kappa bends in RADO's own sense."""
-
-    def __init__(self, coef, x0, z_lo, z_hi, ext_len, kappa, ds=0.05):
-        z = np.arange(z_lo, z_hi + 1e-9, ds)
-        dy = np.polyval(np.polyder(coef), z)
-        y = np.polyval(coef, z)
-        phi = np.arctan(dy)
-        seg = np.sqrt(1 + dy ** 2)
-        s = np.concatenate([[0], np.cumsum(0.5 * (seg[1:] + seg[:-1]) * np.diff(z))])
-        self.s_data_end = s[-1]
-        se = s[-1] + np.arange(ds, ext_len + ds, ds)
-        pe = phi[-1] - kappa * (se - s[-1])
-        pm = 0.5 * (np.concatenate([[phi[-1]], pe[:-1]]) + pe)
-        ye = y[-1] + np.cumsum(np.sin(pm) * ds)
-        ze = z[-1] + np.cumsum(np.cos(pm) * ds)
-        self.S = np.concatenate([s, se])
-        self.Y = np.concatenate([y, ye])
-        self.Z = np.concatenate([z, ze])
-        self.PHI = np.concatenate([phi, pe])
+    def __init__(self, x0, Y, Z):
         self.x0 = x0
+        self.Y, self.Z = np.asarray(Y, float), np.asarray(Z, float)
+        self.S = np.concatenate([[0], np.cumsum(np.hypot(np.diff(self.Y), np.diff(self.Z)))])
+        self.PHI = np.arctan2(np.gradient(self.Y), np.gradient(self.Z))
         self._tree = cKDTree(np.column_stack([self.Y, self.Z]))
+
+    @classmethod
+    def cubic(cls, coef, x0, z_lo, z_hi, ds=0.05):
+        z = np.arange(z_lo, z_hi + 1e-9, ds)
+        return cls(x0, np.polyval(coef, z), z)
+
+    def continued(self, s_join, step, t_end, ds=0.05):
+        """This curve up to s_join, then the S-orbit of its point there."""
+        keep = self.S < s_join
+        p0 = self.point(s_join)
+        ts = np.linspace(0, t_end, max(2, int(np.ceil(t_end * step.speed(p0) / ds))))
+        P = np.array([apply(step.power(t), p0[None])[0] for t in ts])
+        return Curve(self.x0, np.concatenate([self.Y[keep], P[:, 1]]), np.concatenate([self.Z[keep], P[:, 2]]))
 
     def point(self, s):
         return np.array([self.x0, np.interp(s, self.S, self.Y), np.interp(s, self.S, self.Z)])
@@ -219,15 +262,6 @@ class Curve:
         p = self.phi(s)
         return np.array([0.0, np.cos(p), -np.sin(p)])
 
-    def frame_map(self, sa, sb):
-        """4x4 rigid map carrying the frame at sa onto the frame at sb."""
-        a = self.phi(sa) - self.phi(sb)
-        R = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
-        M = np.eye(4)
-        M[:3, :3] = R
-        M[:3, 3] = self.point(sb) - R @ self.point(sa)
-        return M
-
     def project(self, pts):
         """Arc length of the nearest centreline sample, by (y, z)."""
         pts = np.atleast_2d(pts)
@@ -236,7 +270,7 @@ class Curve:
 
 
 # --------------------------------------------------------------------------
-# Cross-section slicing, sweeping, capping
+# Cross-sections, cutting, sweeping, capping
 # --------------------------------------------------------------------------
 def slice_loops(V, T, p0, nrm):
     """Closed polylines where the plane (p0, nrm) cuts the welded mesh."""
@@ -307,7 +341,8 @@ def area2(P):
 
 
 def earclip(P):
-    """Triangulate a simple polygon (n, 2); returns index triples, or None."""
+    """Triangulate a simple polygon (n, 2); returns index triples, or None.
+    Triangles run along increasing index if area2(P) > 0, else decreasing."""
     n = len(P)
     idx = list(range(n)) if area2(P) > 0 else list(range(n))[::-1]
     tris, guard, i = [], 0, 0
@@ -337,28 +372,6 @@ def earclip(P):
             guard += 1
     tris.append(tuple(idx))
     return tris
-
-
-def cap_tris(P):
-    """(triangles, method). Ear clipping; if that fails, a fan from the
-    centroid, which is still correct for the ray-PARITY containment test used
-    by fem/ (a fan covers each interior point an odd number of times)."""
-    t = earclip(P)
-    if t is not None:
-        return np.array(t), "earclip"
-    c = len(P)
-    return np.array([(c, j, (j + 1) % c) for j in range(c)]), "fan"
-
-
-def sweep_samples(curve, s0, s1, max_dphi=np.radians(0.2), max_step=10.0):
-    ss = [s0]
-    while ss[-1] < s1 - 1e-9:
-        s = ss[-1]
-        step = max_step
-        while step > 0.05 and abs(curve.phi(s + step) - curve.phi(s)) > max_dphi:
-            step /= 2
-        ss.append(min(s + step, s1))
-    return np.array(ss)
 
 
 def section_loops(V, T, c, eu, ev, nrm):
@@ -424,68 +437,144 @@ def own_axis(V, T, z_top, span=30.0, step=5.0):
     return p, d if d[2] > 0 else -d
 
 
-def clip_below(tri, p0, nrm):
-    """The part of a triangle soup on the side (x - p0) . nrm < 0, with
-    crossing triangles clipped exactly (RADO's swept STLs use triangles tens
-    of mm long, so dropping them by centroid would leave a ragged edge)."""
-    d = np.einsum("tij,j->ti", tri - p0, nrm)
-    keep = tri[(d < 0).all(1)]
-    out = [keep]
-    for t, dd in zip(tri[~((d < 0).all(1) | (d >= 0).all(1))], d[~((d < 0).all(1) | (d >= 0).all(1))]):
-        poly = []
+def clip_indexed(V, T, p0, nrm):
+    """The part of an indexed surface on the side (x - p0) . nrm < 0, crossing
+    triangles cut exactly (RADO's swept STLs use triangles tens of mm long).
+    Each cut point is computed once per mesh edge and shared by both faces of
+    that edge. Returns (V', T', cut_edges): cut_edges are the new boundary
+    edges (a, b) in the direction their own face runs them."""
+    d = (V - p0) @ nrm
+    d = np.where(np.abs(d) < 1e-9, 1e-9, d)
+    below = d < 0
+    sb = below[T]
+    out = [T[sb.all(1)]]
+    newV, cut, edges = [], {}, []
+
+    def cp(u, w):
+        key = (min(u, w), max(u, w))
+        if key not in cut:
+            a, b = key
+            cut[key] = len(V) + len(newV)
+            newV.append(V[a] + d[a] / (d[a] - d[b]) * (V[b] - V[a]))
+        return cut[key]
+    for tri in T[sb.any(1) & ~sb.all(1)]:
+        poly, cuts = [], []
         for i in range(3):
-            a, b, da, db = t[i], t[(i + 1) % 3], dd[i], dd[(i + 1) % 3]
-            if da < 0:
-                poly.append(a)
-            if (da < 0) != (db < 0):
-                poly.append(a + da / (da - db) * (b - a))
-        out.append(np.array([[poly[0], poly[j], poly[j + 1]] for j in range(1, len(poly) - 1)]).reshape(-1, 3, 3))
-    return np.concatenate(out)
+            u, w = tri[i], tri[(i + 1) % 3]
+            if below[u]:
+                poly.append(u)
+            if below[u] != below[w]:
+                cuts.append(len(poly))
+                poly.append(cp(u, w))
+        out.append(np.array([[poly[0], poly[j], poly[j + 1]] for j in range(1, len(poly) - 1)]))
+        i0, i1 = cuts
+        # the boundary edge joins the two cut points, consecutive in poly order
+        edges.append((poly[i0], poly[i1]) if (i1 - i0) % len(poly) == 1 else (poly[i1], poly[i0]))
+    V2 = np.vstack([V, np.array(newV).reshape(-1, 3)])
+    T2 = np.vstack(out)
+    used = np.unique(T2)                       # drop vertices above the plane
+    remap = np.full(len(V2), -1)
+    remap[used] = np.arange(len(used))
+    return V2[used], remap[T2], [(remap[a], remap[b]) for a, b in edges]
 
 
-def cap_area_near(tri, centre, tangent, half=15.0, cos_min=0.99):
-    """Area of triangles facing along the tangent within +/-half mm of
-    centre: interior caps show up here, side walls do not."""
-    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
-    a = 0.5 * np.linalg.norm(n, axis=1)
-    cosv = np.abs(n @ tangent) / np.maximum(2 * a, 1e-30)
-    near = np.abs((tri.mean(1) - centre) @ tangent) < half
-    return float(a[(cosv > cos_min) & near].sum())
+def chain_loops(edges):
+    """Directed edges -> closed vertex loops in that direction. Raises if the
+    cut is not a set of closed loops (an open source mesh)."""
+    nxt = dict(edges)
+    assert len(nxt) == len(edges), "cut edges branch: the source surface is not manifold here"
+    loops, seen = [], set()
+    for start in nxt:
+        if start in seen:
+            continue
+        loop, cur = [], start
+        while cur not in seen:
+            seen.add(cur)
+            loop.append(cur)
+            assert cur in nxt, "cut loop is open: the source surface has a hole at the join"
+            cur = nxt[cur]
+        assert cur == start, "cut loops merge"
+        loops.append(np.array(loop))
+    return loops
 
 
-def curve_frames(curve, s_samples):
-    """(centre, e_u, e_v) along the centreline: e_u = +x, e_v = in-plane normal."""
-    return [(curve.point(s), np.array([1.0, 0, 0]), curve.normal(s)) for s in s_samples]
+def extend_body(tri, p0, eu, ev, nrm, step, t_end):
+    """One closed surface: tri cut at the plane (p0, nrm), walls swept from the
+    cut points along S^t for t in [0, t_end], and a cap at t_end. nrm points
+    into the swept part. Returns (V, T, loops_uv, cap_methods)."""
+    V, T = stlio.weld(tri)
+    Vc, Tc, edges = clip_indexed(V, T, p0, nrm)
+    loops = chain_loops(edges)
+    ang = step.angle_deg() * t_end
+    ts = np.linspace(0, t_end, max(2, int(np.ceil(ang / SWEEP_MAX_DEG)) + 1))
+    Ms = [step.power(t) for t in ts[1:]]
+    verts, faces, nv = [Vc], [Tc], len(Vc)
+    loops_uv, methods = [], []
+    for L in loops:
+        ring0 = Vc[L]
+        n = len(L)
+        rings = [L] + [nv + i * n + np.arange(n) for i in range(len(Ms))]
+        verts.append(np.vstack([apply(M, ring0) for M in Ms]))
+        nv += n * len(Ms)
+        j, k = np.arange(n), (np.arange(n) + 1) % n
+        for r0, r1 in zip(rings[:-1], rings[1:]):
+            # The cut face runs j -> k, so the wall must run k -> j.
+            faces.append(np.column_stack([r0[k], r0[j], r1[j]]))
+            faces.append(np.column_stack([r0[k], r1[j], r1[k]]))
+        Q = np.column_stack([(ring0 - p0) @ eu, (ring0 - p0) @ ev])
+        loops_uv.append(Q)
+        top = rings[-1]
+        ct = earclip(Q)
+        if ct is not None:
+            ct, flip = np.array(ct), area2(Q) > 0
+            methods.append("earclip")
+        else:
+            # Centroid fan: still right for the ray-PARITY containment test
+            # fem/ uses (each interior point is covered an odd number of times).
+            verts.append(apply(Ms[-1], ring0.mean(0)[None]))
+            top = np.concatenate([top, [nv]])
+            nv += 1
+            ct, flip = np.array([(n, a, (a + 1) % n) for a in range(n)]), True
+            methods.append("fan")
+        # The walls end running j -> k on the top ring, so the cap runs k -> j.
+        faces.append(top[ct[:, ::-1]] if flip else top[ct])
+    return np.vstack(verts), np.vstack(faces), loops_uv, methods
 
 
-def line_frames(p0, d, eu, ev, lengths):
-    return [(p0 + t * d, eu, ev) for t in lengths]
+def seg_axis(P):
+    """(centroid, unit axis pointing up, axial coordinates) of a thin tube."""
+    c = P.mean(0)
+    d = np.linalg.svd(P - c, full_matrices=False)[2][0]
+    d = d if d[2] > 0 else -d
+    return c, d, (P - c) @ d
 
 
-def sweep_body(frames, loops2d, caps=("bottom", "top")):
-    """Closed tube per loop (side walls + two caps), all loops in one array.
-    Nested loops (holes) are handled by the parity containment test. Pass
-    caps=("top",) for the open display/size-field surface."""
-    tris, methods = [], []
-    for P in loops2d:
-        n = len(P)
-        ring = np.array([[c + P[j, 0] * eu + P[j, 1] * ev
-                          for j in range(n)] for c, eu, ev in frames])   # (ns, n, 3)
-        for i in range(len(frames) - 1):
-            for j in range(n):
-                k = (j + 1) % n
-                tris.append([ring[i, j], ring[i, k], ring[i + 1, k]])
-                tris.append([ring[i, j], ring[i + 1, k], ring[i + 1, j]])
-        ct, how = cap_tris(P)
-        methods.append(how)
-        ends = [e for e, name in ((0, "bottom"), (len(frames) - 1, "top")) if name in caps]
-        for end in ends:
-            pts = ring[end]
-            if how == "fan":
-                pts = np.vstack([pts, pts.mean(0)])
-            for a, b, c in ct:
-                tris.append([pts[a], pts[b], pts[c]] if end else [pts[a], pts[c], pts[b]])
-    return np.array(tris), methods
+def seg_ends(P, band=0.3):
+    c, d, s = seg_axis(P)
+    return P[s < s.min() + band].mean(0), P[s > s.max() - band].mean(0), d
+
+
+def join_trunk(tri, ganglion_centre, step):
+    """Bend the upper end of a sympathetic trunk segment so that it overlaps
+    its own S-copy (the segment of the next level up) by CHAIN_OVERLAP_MM.
+    The displacement is w(u) * g, w a smoothstep in the axial coordinate
+    from the ganglion (0) to the top end (1): the part below the ganglion,
+    the ganglion's own stretch and the bottom end do not move."""
+    P = tri.reshape(-1, 3)
+    c, d, s = seg_axis(P)
+    _, top, _ = seg_ends(P)
+    bottom_up, _, d_up = seg_ends(apply(step.M, P))
+    g = bottom_up + CHAIN_OVERLAP_MM * d_up - top
+    s_g = (ganglion_centre - c) @ d
+    u = np.clip((s - s_g) / (s.max() - s_g), 0, 1)
+    w = u * u * (3 - 2 * u)
+    Pj = P + w[:, None] * g
+    bend = float(np.degrees(np.arctan(1.5 * np.linalg.norm(g - (g @ d) * d) / (s.max() - s_g))))
+    return Pj.reshape(-1, 3, 3), {"gap_closed_mm": round(float(np.linalg.norm(g)), 3),
+                                  "axial_mm": round(float(g @ d), 3),
+                                  "lateral_mm": round(float(np.linalg.norm(g - (g @ d) * d)), 3),
+                                  "bent_length_mm": round(float(s.max() - s_g), 2),
+                                  "max_bend_deg": round(bend, 2)}
 
 
 # --------------------------------------------------------------------------
@@ -501,12 +590,11 @@ class TesterCache:
         return self._c[path]
 
 
-def section_grid(curve, s, half_u, v_lo, v_hi, h):
+def section_grid(c, eu, ev, half_u, v_lo, v_hi, h):
     u = np.arange(-half_u, half_u + h / 2, h)
     v = np.arange(v_lo, v_hi + h / 2, h)
     U, W = np.meshgrid(u, v, indexing="ij")
-    pts = curve.point(s) + U.ravel()[:, None] * np.array([1.0, 0, 0]) + W.ravel()[:, None] * curve.normal(s)
-    return pts, U.shape
+    return c + U.ravel()[:, None] * eu + W.ravel()[:, None] * ev, U.shape
 
 
 def label_points(pts, bodies_by_pipe, cache, order):
@@ -531,29 +619,59 @@ def dice(a, b):
     return float(2 * (a & b).sum() / s) if s else float("nan")
 
 
+def disc_contact(disc_path, below_path, above_path, cache, probe=1.5, dprobe=0.05):
+    """How a disc sits between its vertebrae. For each face of the disc
+    facing a vertebra (|normal . disc axis| > 0.7), the distance along its
+    outward normal to that vertebra's bone: 0 = touching or embedded.
+    Returned as area-weighted fractions and percentiles."""
+    V, T = stlio.read_stl(disc_path)
+    a, b, c = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    n = np.cross(b - a, c - a)
+    area = 0.5 * np.linalg.norm(n, axis=1)
+    n = n / np.maximum(2 * area, 1e-30)[:, None]
+    cen = (a + b + c) / 3
+    axis = np.linalg.svd(V - V.mean(0), full_matrices=False)[2][2]
+    if (V[np.argmax(V[:, 2])] - V.mean(0)) @ axis < 0:
+        axis = -axis
+    out = {}
+    for side, path, sgn in (("lower", below_path, -1), ("upper", above_path, 1)):
+        face = (n @ axis) * sgn > 0.7
+        if path is None or not face.any():
+            out[side] = None
+            continue
+        tester = cache.get(path)
+        gap = np.full(face.sum(), np.inf)
+        for dd in np.arange(0, probe + 1e-9, dprobe):
+            hit = tester(cen[face] + dd * n[face])
+            gap = np.where(np.isinf(gap) & hit, dd, gap)
+        w = area[face] / area[face].sum()
+        srt = np.argsort(gap)
+        cw = np.cumsum(w[srt])
+        out[side] = {"vertebra": os.path.basename(path),
+                     "facing_area_mm2": round(float(area[face].sum()), 1),
+                     "touching_fraction": round(float(w[gap <= dprobe].sum()), 4),
+                     "gap_p50_mm": float(gap[srt][np.searchsorted(cw, 0.50)]),
+                     "gap_p95_mm": float(gap[srt][np.searchsorted(cw, 0.95)]),
+                     "beyond_probe_fraction": round(float(w[np.isinf(gap)].sum()), 4)}
+    return out
+
+
 # --------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--levels", type=int, default=4, help="vertebral levels to add above the top")
-    ap.add_argument("--kyphosis-deg-per-level", type=float, default=0.0,
-                    help="bending per added level, in RADO's own sense (0 = straight; "
-                         "RADO's own top step is ~5.87)")
-    ap.add_argument("--spacing", default="top", help="level spacing: 'top' (RADO's top step), "
-                    "'mean' (mean of RADO's steps) or a number in mm of arc length")
     ap.add_argument("--join-back", type=float, default=10.0,
-                    help="mm below each continuous body's top end where its section is "
-                         "taken and its extension starts (= overlap with the original). "
-                         "RADO's continuous bodies are not the constant section within "
-                         "~3-8 mm of their ends (measured), so keep this >= 10")
-    ap.add_argument("--attach", choices=["roots", "vertebra", "fit"], default="roots",
-                    help="where the copied top unit is pinned to the centreline (see docstring)")
+                    help="mm below the lowest top of the continuous bodies where all of them "
+                         "are cut and the sweeps start. RADO's continuous bodies are not the "
+                         "constant section within ~3-8 mm of their ends (measured), so keep "
+                         "this >= 10")
     ap.add_argument("--out", default=None)
     ap.add_argument("--no-check", action="store_true", help="skip the section checks and figure")
     args = ap.parse_args()
     t0 = time.time()
     K = args.levels
     warnings = []
-    out = args.out or os.path.join(C.OUT, "geometry", "rado_up%d_kyph%g" % (K, args.kyphosis_deg_per_level))
+    out = args.out or os.path.join(C.OUT, "geometry", "rado_up%d" % K)
     if os.path.exists(out):
         shutil.rmtree(out)
     os.makedirs(out)
@@ -578,64 +696,43 @@ def main():
     print("%d source STLs: %d anatomical (%d continuous, %d per-level), %d lead hardware/other"
           % (len(bodies), len(anatomy), len(continuous), len(per_level), len(bodies) - len(anatomy)))
 
-    # ---- centreline ----------------------------------------------------------
+    # ---- the vertebral step S ------------------------------------------------
+    verts = sorted([b for b in per_level if b["pipe"] == "vertebra"], key=lambda b: b["centroid"][2])
+    P = [b["tri"].reshape(-1, 3) for b in verts]
+    rado_steps = []
+    for a, b, va, vb in zip(P[:-1], P[1:], verts[:-1], verts[1:]):
+        R, t, res = rigid_fit(a, b)
+        assert res < RIGID_TOL_MM, "vertebrae are no longer exact rigid copies"
+        M = np.eye(4)
+        M[:3, :3], M[:3, 3] = R, t
+        st = Step(M)
+        rado_steps.append({"from": va["stem"], "to": vb["stem"], "matrix": M.round(9).tolist(),
+                           "angle_deg": round(st.angle_deg(), 4), "axis": st.axis().round(5).tolist(),
+                           "centre_yz_mm": st.centre_yz().round(2).tolist(),
+                           "radius_at_vertebra_centroid_mm": round(float(np.linalg.norm(
+                               vb["centroid"][1:] - st.centre_yz())), 1),
+                           "fit_residual_max_mm": res})
+        print("  RADO step %s -> %s: %.3f deg about %s, centre (y, z) = (%.1f, %.1f), radius %.0f mm at the vertebra"
+              % (va["stem"][8:], vb["stem"][8:], rado_steps[-1]["angle_deg"], rado_steps[-1]["axis"],
+                 *rado_steps[-1]["centre_yz_mm"], rado_steps[-1]["radius_at_vertebra_centroid_mm"]))
+    step = st          # the top step, T11 -> T10
+    print("new levels are S^k, S = the top step")
+
+    # ---- centreline (selection, checks and figure only) ----------------------
     cpaths = C.TISSUE_BODIES["white"] + C.TISSUE_BODIES["grey"]
     cen = cord_centroids(cpaths)
     coef = np.polyfit(cen[:, 2], cen[:, 1], 3)
     fit_res = cen[:, 1] - np.polyval(coef, cen[:, 2])
     x0 = float(cen[:, 0].mean())
-    ext_len = K * 40.0 + 120.0
-    curve = Curve(coef, x0, cen[0, 2] - 12.0, cen[-1, 2], ext_len, 0.0)
+    # The cubic runs past the cord data to the top of the tallest continuous
+    # body (the aorta, 12 mm above the cord), so every body's top projects to
+    # its own arc length instead of clamping at the end of the data.
+    z_hi = max(float(b["tri"][:, :, 2].max()) for b in continuous) + 5.0
+    curve = Curve.cubic(coef, x0, cen[0, 2] - 12.0, z_hi)
     print("centreline: cubic y(z) residual rms %.4f mm max %.4f mm; x drift sd %.4f mm"
           % (np.sqrt(np.mean(fit_res ** 2)), np.abs(fit_res).max(), cen[:, 0].std()))
-
-    # ---- vertebra attachments: make the frame reproduce RADO's steps ------
-    verts = sorted([b for b in per_level if b["pipe"] == "vertebra"], key=lambda b: b["centroid"][2])
-    P = [b["tri"].reshape(-1, 3) for b in verts]
-    steps_measured = []
-    for a, b in zip(P[:-1], P[1:]):
-        R, t, res = rigid_fit(a, b)
-        assert res < RIGID_TOL_MM, "vertebrae are no longer exact rigid copies"
-        steps_measured.append({"rot_x_deg": rot_x_deg(R), "R": R, "t": t})
-    sub = np.arange(0, len(P[0]), max(1, len(P[0]) // 3000))
-    Ps = [p[sub] for p in P]
-
-    def objective(sv):
-        e = 0.0
-        for i in range(len(Ps) - 1):
-            e += np.mean(np.sum((apply(curve.frame_map(sv[i], sv[i + 1]), Ps[i]) - Ps[i + 1]) ** 2, 1))
-        return e
-    s_init = np.array([curve.project(p.mean(0))[0] for p in P])
-    fit = minimize(objective, s_init, method="Nelder-Mead",
-                   options={"xatol": 1e-5, "fatol": 1e-12, "maxiter": 20000})
-    s_att = fit.x
-    fit_steps = []
-    for i in range(len(P) - 1):
-        M = curve.frame_map(s_att[i], s_att[i + 1])
-        r = np.linalg.norm(apply(M, P[i]) - P[i + 1], axis=1)
-        fit_steps.append({"from": verts[i]["stem"], "to": verts[i + 1]["stem"],
-                          "rado_rot_x_deg": steps_measured[i]["rot_x_deg"],
-                          "frame_rot_x_deg": float(np.degrees(curve.phi(s_att[i]) - curve.phi(s_att[i + 1]))),
-                          "arc_length_mm": float(s_att[i + 1] - s_att[i]),
-                          "residual_rms_mm": float(np.sqrt(np.mean(r ** 2))),
-                          "residual_max_mm": float(r.max())})
-        print("  frame vs RADO step %s->%s: RADO %.3f deg, frame %.3f deg, arc %.2f mm, residual rms %.3f max %.3f mm"
-              % (verts[i]["stem"][8:], verts[i + 1]["stem"][8:], fit_steps[-1]["rado_rot_x_deg"],
-                 fit_steps[-1]["frame_rot_x_deg"], fit_steps[-1]["arc_length_mm"],
-                 fit_steps[-1]["residual_rms_mm"], fit_steps[-1]["residual_max_mm"]))
-        if fit_steps[-1]["residual_max_mm"] > 0.5:
-            warnings.append("frame reproduces RADO step %d only to %.2f mm max" % (i, fit_steps[-1]["residual_max_mm"]))
-    s3 = float(s_att[-1])
-    if args.spacing == "top":
-        D = float(s_att[-1] - s_att[-2])
-    elif args.spacing == "mean":
-        D = float(np.mean(np.diff(s_att)))
-    else:
-        D = float(args.spacing)
-
-    # rebuild the curve with the requested extension curvature
-    kappa = np.radians(args.kyphosis_deg_per_level) / D
-    curve = Curve(coef, x0, cen[0, 2] - 12.0, cen[-1, 2], ext_len, kappa)
+    s_vref = float(curve.project(verts[-1]["centroid"])[0])
+    D = float(s_vref - curve.project(verts[-2]["centroid"])[0])
 
     # ---- group per-level bodies into families of rigid copies -------------
     fams = []          # list of lists of bodies
@@ -660,13 +757,11 @@ def main():
     groups["discs"] = [b for b in per_level if b["pipe"] == "disc"]
 
     # Which members form the top level: measured from the top vertebra's
-    # CENTROID (the fitted attachment s3 is a frame position, not a centre).
-    # RADO's levels are rigid copies but were NOT placed by one repeated
-    # transform (e.g. the left DRG steps 31.3 / 27.6 / 25.8 mm with sideways
-    # shifts while the vertebrae step 31.9 / 30.8 mm), so the TOP level is
-    # copied as one rigid snapshot of RADO's own top-level arrangement. Each
-    # group's own top step is recorded for reference, not as a pass/fail.
-    s_vref = float(curve.project(verts[-1]["centroid"])[0])
+    # centroid along the centreline. RADO's levels are rigid copies but were
+    # NOT placed by one repeated transform (e.g. the left DRG steps 31.3 /
+    # 27.6 / 25.8 mm with sideways shifts while the vertebrae step 31.9 /
+    # 30.8 mm), so the TOP level is copied as one rigid snapshot of RADO's own
+    # top-level arrangement.
     copy_set, group_report = [], []
     for key, mem in sorted(groups.items()):
         sc = np.array([curve.project(b["centroid"])[0] for b in mem])
@@ -676,64 +771,28 @@ def main():
         include = offset > -0.5
         if -0.65 < offset < -0.35:
             warnings.append("group %s top member is ambiguously placed (%.2f levels from the top vertebra)" % (key, offset))
-        own_step = None
-        lower = [b for b, s in zip(mem, sc) if top - 1.5 * D <= s < top - 0.5 * D]
-        if lower:
-            tb = tops[0]
-            cand = [lb for lb in lower if lb["tri"].shape == tb["tri"].shape]
-            if cand:
-                lb = min(cand, key=lambda b: abs(b["centroid"][0] - tb["centroid"][0]))   # same side
-                R, t, r = rigid_fit(lb["tri"].reshape(-1, 3), tb["tri"].reshape(-1, 3))
-                if r < RIGID_TOL_MM:
-                    own_step = {"rot_x_deg": round(rot_x_deg(R), 3), "translation_mm": t.round(3).tolist()}
         group_report.append({"group": key, "class": mem[0]["pipe"], "members": len(mem),
                              "top_members": [b["stem"] for b in tops],
                              "top_offset_levels_from_top_vertebra_centroid": round(float(offset), 3),
-                             "copied": bool(include), "rado_own_top_step": own_step})
+                             "copied": bool(include)})
         if include:
             copy_set.extend(tops)
     print("per-level groups: %d (%d copied as the top-level unit, %d bodies per new level)"
           % (len(groups), sum(g["copied"] for g in group_report), len(copy_set)))
 
-    # ---- where the copied unit is pinned ------------------------------------
-    # RADO's top unit was shaped around a CURVED canal; above RADO the canal is
-    # straight (or differently curved), so the copy cannot match everywhere.
-    # Wherever it is pinned, it matches exactly there and drifts by roughly
-    # curvature x distance^2 / 2 away from it. Pinned at the fitted vertebra
-    # attachment, rootlets ended up to 3.5 mm off their RADO position relative
-    # to the cord; pinned at the middle of the root complex, 0.2 mm, with the
-    # vertebra ~1 mm off instead. Bone is the right place to put the error:
-    # any gap it opens is filled with background at 0.04 S/m, the vertebra's
-    # own conductivity, while roots, rootlets and their CSF sleeves are
-    # stimulation targets. Both offsets are measured and recorded below.
-    root_cx = [b for b in copy_set if b["pipe"] in ("root", "drg", "csf", "dura")]
-    rc_pts = np.vstack([b["tri"].reshape(-1, 3)[::7] for b in root_cx])
-    s_roots = float(np.median(curve.project(rc_pts)))
-    s_attach = {"roots": s_roots, "vertebra": s_vref, "fit": s3}[args.attach]
-
-    def radial_min(P):
-        sp = curve.project(P)
-        c = np.array([curve.point(x) for x in sp])
-        n = np.array([curve.normal(x) for x in sp])
-        r = P - c
-        return np.hypot(r[:, 0], np.einsum("ij,ij->i", r, n))
-    attach_check = {}
-    M2 = curve.frame_map(s_attach, s_attach + 2 * D)
-    for label, cls in (("roots_and_rootlets", ("root",)), ("drg", ("drg",)), ("vertebra", ("vertebra",))):
-        bs = [b for b in copy_set if b["pipe"] in cls]
-        d = [float(radial_min(apply(M2, b["tri"].reshape(-1, 3))).min() - radial_min(b["tri"].reshape(-1, 3)).min())
-             for b in bs]
-        attach_check[label] = {"bodies": len(bs), "innermost_radius_change_mean_mm": round(float(np.mean(d)), 3),
-                               "innermost_radius_change_max_abs_mm": round(float(np.max(np.abs(d))), 3)}
-    print("pinned at '%s' (s = %.2f; roots %.2f, vertebra centroid %.2f, fit %.2f). Copy vs RADO, distance "
-          "to the cord axis: roots/rootlets max %.2f mm, DRG max %.2f mm, vertebra max %.2f mm"
-          % (args.attach, s_attach, s_roots, s_vref, s3,
-             attach_check["roots_and_rootlets"]["innermost_radius_change_max_abs_mm"],
-             attach_check["drg"]["innermost_radius_change_max_abs_mm"],
-             attach_check["vertebra"]["innermost_radius_change_max_abs_mm"]))
-    if attach_check["roots_and_rootlets"]["innermost_radius_change_max_abs_mm"] > 0.5:
-        warnings.append("copied roots/rootlets sit up to %.2f mm off their RADO position relative to the cord"
-                        % attach_check["roots_and_rootlets"]["innermost_radius_change_max_abs_mm"])
+    # ---- sympathetic trunk joins ------------------------------------------
+    trunks = [b for b in copy_set if "sympathetic_a" in b["stem"]]
+    ganglia = [b for b in copy_set if "sympathetic_ball" in b["stem"]]
+    joined, chain_report = {}, []
+    for b in trunks:
+        gang = min(ganglia, key=lambda g: np.linalg.norm(g["centroid"] - b["centroid"]))
+        tri_j, info = join_trunk(b["tri"], gang["centroid"], step)
+        joined[b["stem"]] = tri_j
+        info.update({"segment": b["stem"], "ganglion": gang["stem"]})
+        chain_report.append(info)
+        print("  trunk %s: top end moved %.2f mm (axial %.2f, lateral %.2f) over %.1f mm above its ganglion, "
+              "bend <= %.1f deg" % (b["stem"][8:], info["gap_closed_mm"], info["axial_mm"], info["lateral_mm"],
+                                    info["bent_length_mm"], info["max_bend_deg"]))
 
     # ---- level names -------------------------------------------------------
     top_disc = max(groups["discs"], key=lambda b: b["centroid"][2])
@@ -742,18 +801,25 @@ def main():
     levels = []
     for k in range(1, K + 1):
         v = top_vert_disc_naming - k
+        Mk = step.power(k)
         levels.append({"k": k, "vertebra_disc_naming": "T%d" % v, "vertebra_paper_naming": "T%d" % (v - 1),
                        "disc_above_disc_naming": "T%d/T%d" % (v - 1, v),
-                       "pin_arc_length_mm": s_attach + k * D,
-                       "vertebra_centroid_arc_length_mm": float(curve.project(apply(
-                           curve.frame_map(s_attach, s_attach + k * D), verts[-1]["centroid"][None])[0])[0]),
-                       "transform_from_top_level": curve.frame_map(s_attach, s_attach + k * D).round(9).tolist(),
-                       "rot_x_deg_from_top_level": float(np.degrees(curve.phi(s_attach) - curve.phi(s_attach + k * D)))})
+                       "vertebra_centroid_mm": apply(Mk, verts[-1]["centroid"][None])[0].round(3).tolist(),
+                       "transform_from_top_level": Mk.round(9).tolist(),
+                       "rot_deg_from_top_level": round(k * step.angle_deg(), 3)})
 
-    # ---- copy everything, write the new per-level bodies -------------------
+    # ---- write: RADO's files, minus the ones replaced ----------------------
+    replaced = {b["file"] for b in continuous} | {b["file"] for b in trunks}
     outputs = []
     for b in bodies:
-        shutil.copy2(b["path"], os.path.join(out, b["file"]))
+        if b["file"] not in replaced:
+            shutil.copy2(b["path"], os.path.join(out, b["file"]))
+    for b in trunks:
+        stem = b["stem"] + "__joined"
+        assert class_of(stem, entries) == b["cls"], stem
+        write_stl(os.path.join(out, stem + ".STL"), joined[b["stem"]])
+        outputs.append({"file": stem + ".STL", "kind": "joined", "source": b["file"], "class": b["pipe"],
+                        "triangles": len(joined[b["stem"]])})
     for L in levels:
         k = L["k"]
         M = np.array(L["transform_from_top_level"])
@@ -765,144 +831,124 @@ def main():
             else:
                 stem = "%s__up%d" % (b["stem"], k)
             assert class_of(stem, entries) == b["cls"], stem
-            tri = apply(M, b["tri"].reshape(-1, 3)).reshape(-1, 3, 3)
-            path = os.path.join(out, stem + ".STL")
-            write_stl(path, tri)
+            # every trunk copy but the topmost carries the bend that joins it upward
+            src = joined[b["stem"]] if b["stem"] in joined and k < K else b["tri"]
+            tri = apply(M, src.reshape(-1, 3)).reshape(-1, 3, 3)
+            write_stl(os.path.join(out, stem + ".STL"), tri)
             outputs.append({"file": stem + ".STL", "kind": "copy", "level_k": k, "source": b["file"],
                             "class": b["pipe"], "triangles": len(tri)})
-    print("wrote %d level copies" % len(outputs))
+    print("wrote %d level copies" % sum(o["kind"] == "copy" for o in outputs))
 
-    # ---- sweep the continuous bodies --------------------------------------
-    # Canal contents are constant sections in the centreline frame, so they are
-    # swept along the extended centreline. A body that is NOT constant in that
-    # frame (the aorta runs on its own path) is extruded straight along its
-    # own top axis instead. The choice is made by measurement, per body.
-    sweep_report, open_outputs = [], []
-    dz_new = float(curve.point(curve.s_data_end + K * D)[2] - curve.point(curve.s_data_end)[2])
+    # ---- extend the continuous bodies ---------------------------------------
+    # Canal contents are cut perpendicular to the cord centreline; a body that
+    # is not constant in that frame (the aorta runs on its own path) is cut
+    # perpendicular to its own top axis instead. Measured per body. Either way
+    # the sweep follows the S-orbit, as the vertebrae do.
+    # All are cut at ONE plane, --join-back below the lowest top: the nested
+    # canal layers (cord, CSF, dura, epidural) then keep sections taken at the
+    # same place, which are consistent with each other. Cut at their own tops
+    # (up to 1.8 mm apart) they left 2.3x more unassigned canal points. Each
+    # body still ends where RADO's own does relative to the top level (the
+    # aorta 12 mm above the cord).
+    s_tops = {b["file"]: float(curve.project(b["tri"].reshape(-1, 3)).max()) for b in continuous}
+    s_cut = min(s_tops.values()) - args.join_back
+    ext_report = []
     for b in continuous:
         V, T = stlio.weld(b["tri"])
-        s_top = float(curve.project(V).max())
-        s_join = s_top - args.join_back
-        s_end = s_top + K * D
+        s_top = s_tops[b["file"]]
+        s_join = s_cut
         ex = np.array([1.0, 0, 0])
-        loops_hi, dropped = section_loops(V, T, curve.point(s_join), ex, curve.normal(s_join), curve.tangent(s_join))
+        loops_hi, _ = section_loops(V, T, curve.point(s_join), ex, curve.normal(s_join), curve.tangent(s_join))
         loops_lo, _ = section_loops(V, T, curve.point(s_join - 20), ex, curve.normal(s_join - 20),
                                     curve.tangent(s_join - 20))
         constancy = loops_dice(loops_hi, loops_lo)
         drift = float(np.linalg.norm(loops_centroid(loops_hi) - loops_centroid(loops_lo)))
         if drift < 1.0:
             method = "centreline"
-            loops2 = loops_hi
-            samples = sweep_samples(curve, s_join, s_end)
-            frames = curve_frames(curve, samples)
-            sm = s_join + 0.5 * args.join_back
-            mid = (curve.point(sm), ex, curve.normal(sm), curve.tangent(sm))
+            p0, eu, ev, nrm = curve.point(s_join), ex, curve.normal(s_join), curve.tangent(s_join)
         else:
             method = "own_axis"
             z_top = float(V[:, 2].max())
-            p_axis, d = own_axis(V, T, z_top)
-            p0 = p_axis + d * ((z_top - args.join_back - p_axis[2]) / d[2])
-            eu = ex - (ex @ d) * d
+            p_axis, nrm = own_axis(V, T, z_top)
+            p0 = p_axis + nrm * ((z_top - args.join_back - p_axis[2]) / nrm[2])
+            eu = ex - (ex @ nrm) * nrm
             eu /= np.linalg.norm(eu)
-            ev = np.cross(d, eu)
-            loops2, dropped = section_loops(V, T, p0, eu, ev, d)
-            length = (z_top + dz_new - p0[2]) / d[2]
-            samples = np.array([0.0, length])
-            frames = line_frames(p0, d, eu, ev, samples)
-            mid = (p0 + 0.5 * args.join_back / d[2] * d, eu, ev, d)
-        tri, methods = sweep_body(frames, loops2)
-        stem = "%s__sweep_up%d" % (b["stem"], K)
+            ev = np.cross(nrm, eu)
+        orbit = step.L[:3, :3] @ p0 + step.L[:3, 3]
+        turn = float(np.degrees(np.arccos(np.clip(orbit @ nrm / np.linalg.norm(orbit), -1, 1))))
+        below_top = s_top - s_join if method == "centreline" else args.join_back
+        t_end = K + below_top / step.speed(p0)
+        Vx, Tx, loops_uv, methods = extend_body(b["tri"], p0, eu, ev, nrm, step, t_end)
+        stem = "%s__extended_up%d" % (b["stem"], K)
         assert class_of(stem, entries) == b["cls"], stem
-        write_stl(os.path.join(out, stem + ".STL"), tri)
-        # Open DISPLAY / SIZE-FIELD surface: the original cut at the join
-        # plane + the sweep's walls and top end. No interior caps, no doubled
-        # walls in the overlap. Written to a SUBDIRECTORY on purpose:
-        # config.py classifies every .stl at the top level of the geometry
-        # directory, and an open surface there would become a tissue body and
-        # break the parity containment test. Never classify these.
-        c_j, n_j = frames[0][0], np.cross(frames[0][1], frames[0][2])
-        n_j = n_j / np.linalg.norm(n_j)
-        if n_j @ (frames[-1][0] - frames[0][0]) < 0:
-            n_j = -n_j
-        walls_top, _ = sweep_body(frames, loops2, caps=("top",))
-        open_tri = np.concatenate([clip_below(b["tri"], c_j, n_j), walls_top])
-        os.makedirs(os.path.join(out, OPEN_DIR), exist_ok=True)
-        open_name = "%s__open_surface_up%d.STL" % (b["stem"], K)
-        write_stl(os.path.join(out, OPEN_DIR, open_name), open_tri)
-        cap_closed = (cap_area_near(b["tri"], c_j, n_j) + cap_area_near(tri, c_j, n_j))
-        cap_open = cap_area_near(open_tri, c_j, n_j)
-        sweep_report.append({"source": b["file"], "class": b["pipe"], "file": stem + ".STL",
-                             "method": method,
-                             "constancy_dice_in_centreline_frame_20mm": round(constancy, 4),
-                             "section_centroid_drift_in_centreline_frame_20mm": round(drift, 4),
-                             "loops": len(loops2), "loop_points": [len(q) for q in loops2],
-                             "dropped_tiny_loops": dropped, "caps": methods,
-                             "s_join_mm": s_join, "s_end_mm": s_end, "overlap_mm": args.join_back,
-                             "path_samples": len(samples), "triangles": len(tri),
-                             "mid_overlap_frame": {"centre": mid[0].tolist(), "e_u": mid[1].tolist(),
-                                                   "e_v": mid[2].tolist(), "normal": mid[3].tolist()},
-                             "open_surface": OPEN_DIR + "/" + open_name,
-                             "cap_area_near_join_mm2": {"closed_pair": round(cap_closed, 3),
-                                                        "open_surface": round(cap_open, 3)},
-                             "loops_uv": [q.round(5).tolist() for q in loops2]
-                             if b["pipe"] == "epidural" else None})
-        outputs.append({"file": stem + ".STL", "kind": "sweep", "source": b["file"], "class": b["pipe"],
-                        "triangles": len(tri)})
-        open_outputs.append({"file": OPEN_DIR + "/" + open_name, "kind": "open_surface_display_size_only",
-                             "source": b["file"], "class": b["pipe"], "triangles": len(open_tri)})
-        if cap_open > 0.01 * max(cap_closed, 1e-9) + 0.05:
-            warnings.append("%s: open surface still has %.2f mm2 of cap-like area near the join" % (open_name, cap_open))
+        write_stl(os.path.join(out, stem + ".STL"), Vx[Tx])
+        topo = topology(Vx, Tx)
+        topo_file = topology(*stlio.weld(read_raw(os.path.join(out, stem + ".STL")), tol=1e-5))
+        topo_src = topology(V, T)
+        ext_report.append({"source": b["file"], "class": b["pipe"], "file": stem + ".STL", "method": method,
+                           "constancy_dice_in_centreline_frame_20mm": round(constancy, 4),
+                           "section_centroid_drift_in_centreline_frame_20mm": round(drift, 4),
+                           "turn_at_join_deg": round(turn, 3),
+                           "join_frame": {"centre": p0.tolist(), "e_u": eu.tolist(), "e_v": ev.tolist(),
+                                          "normal": nrm.tolist()},
+                           "cut_below_own_top_mm": round(below_top, 3), "t_end_levels": round(t_end, 4), "mm_per_level_at_join": round(step.speed(p0), 3),
+                           "loops": len(loops_uv), "loop_points": [len(q) for q in loops_uv], "caps": methods,
+                           "topology": topo, "topology_as_written_float32": topo_file,
+                           "topology_source": topo_src,
+                           "loops_uv": [q.round(5).tolist() for q in loops_uv] if b["pipe"] == "epidural" else None})
+        outputs.append({"file": stem + ".STL", "kind": "extended", "source": b["file"], "class": b["pipe"],
+                        "triangles": len(Tx)})
+        bad = {k: topo_file[k] - topo_src[k] for k in ("boundary_edges", "nonmanifold_edges", "misoriented_edges")}
+        if any(bad.values()):
+            warnings.append("%s: not a clean closed surface as written (%s more than the source)" % (stem, bad))
         if "fan" in methods:
             warnings.append("%s: a cap used the fan fallback (parity-correct, geometrically folded)" % stem)
-        print("  %-10s %-28s section over 20 mm: Dice %.3f, centroid drift %.3f mm; %d loop(s), caps %s"
-              % (method, b["stem"][8:], constancy, drift, len(loops2), "/".join(sorted(set(methods)))))
+        print("  %-10s %-28s cut %.1f mm below its top, turns %.2f deg there; %d loop(s); closed: %d open / "
+              "%d non-manifold / %d misoriented edges (source %d/%d/%d)"
+              % (method, b["stem"][8:], below_top, turn, len(loops_uv), topo_file["boundary_edges"],
+                 topo_file["nonmanifold_edges"], topo_file["misoriented_edges"], topo_src["boundary_edges"],
+                 topo_src["nonmanifold_edges"], topo_src["misoriented_edges"]))
 
-    for o in outputs + open_outputs:
+    for o in outputs:
         o["sha256"] = sha256(os.path.join(out, o["file"]))
-    print("open display/size-field surfaces in %s/: interior cap area near the joins %.1f mm2 "
-          "(closed pairs) -> %.2f mm2 (open)" % (OPEN_DIR,
-          sum(r["cap_area_near_join_mm2"]["closed_pair"] for r in sweep_report),
-          sum(r["cap_area_near_join_mm2"]["open_surface"] for r in sweep_report)))
+
+    # The checks' and figure's centreline: the cubic, then the S-orbit of its
+    # point at the cord's join.
+    wm = next(r for r in ext_report if r["class"] == "white")
+    s_join_wm = float(curve.project(np.array(wm["join_frame"]["centre"]))[0])
+    curve_ext = curve.continued(s_join_wm, step, wm["t_end_levels"])
 
     # ---- checks ------------------------------------------------------------
     checks = {}
     if not args.no_check:
-        checks = run_checks(curve, out, bodies, outputs, levels, s_vref, D, sweep_report, warnings)
+        checks = run_checks(curve_ext, step, out, bodies, replaced, outputs, levels, s_vref, D,
+                            ext_report, chain_report, warnings)
 
     manifest = {
         "tool": "src/extend/extend_rado.py",
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "parameters": {"levels": K, "kyphosis_deg_per_level": args.kyphosis_deg_per_level,
-                       "spacing": args.spacing, "join_back_mm": args.join_back},
+        "parameters": {"levels": K, "join_back_mm": args.join_back, "chain_overlap_mm": CHAIN_OVERLAP_MM,
+                       "sweep_max_deg_between_rings": SWEEP_MAX_DEG},
         "inputs": {b["file"]: sha256(b["path"]) for b in bodies},
         "tissue_map_sha256": sha256(C.TISSUE_MAP_YAML),
-        "centreline": {"model": "x = x0; y = cubic(z) inside the cord, then dphi/ds = -kappa",
+        "step": {"note": "new level k = S^k applied to RADO's top-level unit; S = RADO's top vertebral step",
+                 "rado_steps": rado_steps, "S": step.M.round(9).tolist(), "S_angle_deg": step.angle_deg()},
+        "centreline": {"model": "x = x0; y = cubic(z) inside the cord, then the S-orbit (checks/figure only)",
                        "x0_mm": x0, "cubic_coef_high_first": coef.tolist(),
                        "fit_residual_rms_mm": float(np.sqrt(np.mean(fit_res ** 2))),
                        "fit_residual_max_mm": float(np.abs(fit_res).max()),
                        "x_drift_sd_mm": float(cen[:, 0].std()),
-                       "data_z_range_mm": [float(cen[0, 2]), float(cen[-1, 2])],
-                       "tilt_deg_at_data_top": float(np.degrees(curve.phi(curve.s_data_end))),
-                       "kappa_rad_per_mm": float(kappa)},
-        "vertebra_attachment_fit": {"arc_lengths_mm": s_att.tolist(), "steps": fit_steps,
-                                    "objective": float(fit.fun)},
+                       "data_z_range_mm": [float(cen[0, 2]), float(cen[-1, 2])]},
         "level_spacing_arc_mm": D,
-        "pin": {"mode": args.attach, "arc_length_mm": s_attach, "roots_mm": s_roots,
-                "vertebra_centroid_mm": s_vref, "vertebra_fit_mm": s3, "check_level_k2": attach_check},
         "new_levels": levels,
         "level_naming_note": "disc naming (default, used in new disc filenames) makes RADO's "
                              "vertebrae T10-T12; the paper's naming is one level higher. "
                              "See src/freecad/README.md 'Vertebral levels'.",
         "per_level_groups": group_report,
-        "sweeps": sweep_report,
+        "replaced_rado_files": sorted(replaced),
+        "sympathetic_joins": chain_report,
+        "continuous_extensions": ext_report,
         "outputs": outputs,
-        "open_surfaces_display_and_size_field_only": {
-            "dir": OPEN_DIR,
-            "note": "NOT closed, NEVER classify. One surface per continuous tissue: the "
-                    "original cut at the join plane + the sweep's walls and top end. For "
-                    "visualiser surfaces and mesh size-field clouds; the closed bodies at "
-                    "the top level remain the classification set.",
-            "files": open_outputs},
         "checks": checks,
         "warnings": warnings,
         "elapsed_s": round(time.time() - t0, 1),
@@ -912,27 +958,30 @@ def main():
     print("\n%d warning(s)" % len(warnings))
     for w in warnings:
         print("  - " + w)
-    print("wrote %s (%d new STLs) in %.0f s" % (out, len(outputs), time.time() - t0))
+    print("wrote %s (%d new STLs, %d RADO files replaced) in %.0f s" % (out, len(outputs), len(replaced),
+                                                                       time.time() - t0))
 
 
-def run_checks(curve, out, bodies, outputs, levels, s_vref, D, sweep_report, warnings):
-    """Three checks, each aimed at one way the extension could be wrong.
+def run_checks(curve, step, out, bodies, replaced, outputs, levels, s_vref, D, ext_report, chain_report, warnings):
+    """Each check aimed at one way the extension could be wrong.
 
-    1. seams: the swept extension against the original body, mid-overlap.
-    2. copies: RADO's top-level unit + its continuous bodies against copy k +
-       the sweeps, on the same frame-relative sections. Only the copied bodies
-       take part: RADO's levels were each placed individually, so comparing
-       whole levels compares different arrangements, not copy fidelity.
-    3. gaps: in the new region, every point inside the canal's outer outline
+    1. joins: each extended body against the original, just above the cut
+       (where the original still exists) and just below it (must be identical).
+    2. copies: RADO's top unit + the extended bodies, sectioned and carried by
+       S^k, against copy k + the extended bodies on the same points.
+    3. sympathetic trunk: every junction overlaps.
+    4. discs: how each disc meets its vertebrae, RADO's own against the new.
+    5. gaps: in the new region, every point inside the canal's outer outline
        must belong to some tissue (a gap would become 0.04 S/m background).
     """
     entries = parse_tissue_map(C.TISSUE_MAP_YAML)
     order = [p for p, _ in C.ANATOMY_CLASS]
     cache = TesterCache()
+    files = [b["file"] for b in bodies if b["file"] not in replaced] + [o["file"] for o in outputs]
 
-    def index(files):
+    def index(fs):
         by = {}
-        for fn in files:
+        for fn in fs:
             path = os.path.join(out, fn)
             pipe = PIPE_OF_CLASS.get(class_of(os.path.splitext(fn)[0], entries))
             if not pipe:
@@ -942,89 +991,141 @@ def run_checks(curve, out, bodies, outputs, levels, s_vref, D, sweep_report, war
         return by
     res = {}
 
-    # 1. seams ---------------------------------------------------------------
-    seams = []
-    for sw in sweep_report:
-        f = sw["mid_overlap_frame"]
+    # 1. joins -----------------------------------------------------------------
+    joins = []
+    for r in ext_report:
+        f = r["join_frame"]
         c, eu, ev, nrm = (np.array(f[k]) for k in ("centre", "e_u", "e_v", "normal"))
-        src, ext = os.path.join(out, sw["source"]), os.path.join(out, sw["file"])
-        V, T = stlio.read_stl(src)
-        loops, _ = section_loops(V, T, c, eu, ev, nrm)
-        allp = np.vstack(loops)
-        h = 0.05
-        u = np.arange(allp[:, 0].min() - .5, allp[:, 0].max() + .5, h)
-        w = np.arange(allp[:, 1].min() - .5, allp[:, 1].max() + .5, h)
-        U, W = np.meshgrid(u, w, indexing="ij")
-        pts = c + U.ravel()[:, None] * eu + W.ravel()[:, None] * ev
-        a, b = cache.get(src)(pts), cache.get(ext)(pts)
-        seams.append({"body": sw["source"], "method": sw["method"], "dice": round(dice(a, b), 4),
-                      "area_original_mm2": round(float(a.sum() * h * h), 3),
-                      "area_extension_mm2": round(float(b.sum() * h * h), 3),
-                      "xor_area_mm2": round(float((a ^ b).sum() * h * h), 4)})
-    res["seams"] = seams
-    print("seams (Dice, mismatched area): " + ", ".join(
-        "%s %.3f/%.3fmm2" % (s["body"][8:].split("-")[0][:13], s["dice"], s["xor_area_mm2"]) for s in seams))
+        src, ext = os.path.join(C.STL, r["source"]), os.path.join(out, r["file"])
+        row = {"body": r["source"]}
+        for name, dz in (("below_cut", -5.0), ("above_cut", 5.0)):
+            cc = c + dz * nrm
+            V, T = stlio.read_stl(src)
+            loops, _ = section_loops(V, T, cc, eu, ev, nrm)
+            allp = np.vstack(loops)
+            h = 0.05
+            u = np.arange(allp[:, 0].min() - .5, allp[:, 0].max() + .5, h)
+            w = np.arange(allp[:, 1].min() - .5, allp[:, 1].max() + .5, h)
+            U, W = np.meshgrid(u, w, indexing="ij")
+            pts = cc + U.ravel()[:, None] * eu + W.ravel()[:, None] * ev
+            a, b = cache.get(src)(pts), cache.get(ext)(pts)
+            row[name] = {"dice": round(dice(a, b), 4), "xor_area_mm2": round(float((a ^ b).sum() * h * h), 4)}
+        joins.append(row)
+    res["joins"] = joins
+    print("joins, extended vs original 5 mm below / above the cut (Dice): " + ", ".join(
+        "%s %.3f/%.3f" % (j["body"][8:].split("-")[0][:13], j["below_cut"]["dice"], j["above_cut"]["dice"])
+        for j in joins))
+    for j in joins:
+        if j["below_cut"]["dice"] < 0.999:
+            warnings.append("%s: extended body differs from the original below the cut" % j["body"])
 
-    # 2. copies --------------------------------------------------------------
-    # Label a section through RADO's top unit (+ the original continuous
-    # bodies), then label the SAME points carried by M_k in copy k + sweeps.
-    # Copies are exact, so disagreement can only come from the sweeps (canal
-    # straight above RADO, curved inside it) or from a transform error.
-    cont = [sw["source"] for sw in sweep_report]
-    sweeps = [sw["file"] for sw in sweep_report]
+    # 2. copies ------------------------------------------------------------------
+    ext_files = [r["file"] for r in ext_report]
     unit_src = sorted({o["source"] for o in outputs if o["kind"] == "copy"})
-    by_ref = index(unit_src + cont)
-    s_join_min = min(sw["s_join_mm"] for sw in sweep_report)
+    unit_src = [s if s not in replaced else s[:-4] + "__joined.STL" for s in unit_src]
+    by_ref = index(unit_src + ext_files)
+    per_level_cls = [order.index(c) for c in ("drg", "root", "sympathetic", "disc", "vertebra")]
+    # The extended bodies end --join-back mm above the topmost unit, so the
+    # topmost level's sections beyond that compare against an empty end of
+    # the model (and its trunk copy is deliberately left unbent). Recorded,
+    # not gated.
+    f_top = min((r["t_end_levels"] - len(levels)) * r["mm_per_level_at_join"] for r in ext_report) / D
     reps = []
     for L in levels:
         M = np.array(L["transform_from_top_level"])
-        by_k = index([o["file"] for o in outputs if o["kind"] == "copy" and o["level_k"] == L["k"]] + sweeps)
+        by_k = index([o["file"] for o in outputs if o["kind"] == "copy" and o["level_k"] == L["k"]] + ext_files)
         for f in (-0.25, 0.0, 0.25, 0.5, 0.75):
-            p0, _ = section_grid(curve, s_vref + f * D, 45, -45, 40, 0.2)
+            s = s_vref + f * D
+            p0, _ = section_grid(curve.point(s), np.array([1.0, 0, 0]), curve.normal(s), 45, -45, 40, 0.2)
             l0 = label_points(p0, by_ref, cache, order)
             l1 = label_points(apply(M, p0), by_k, cache, order)
             occ = (l0 >= 0) | (l1 >= 0)
-            per_level_cls = np.isin(l0, [order.index(c) for c in
-                                         ("drg", "root", "sympathetic", "disc", "vertebra")])
+            pl = np.isin(l0, per_level_cls)
             reps.append({"level_k": L["k"], "offset_levels": f,
                          "agreement_where_occupied": round(float((l0 == l1)[occ].mean()), 5),
-                         "agreement_on_per_level_tissue": round(float((l0 == l1)[per_level_cls].mean()), 5)
-                         if per_level_cls.any() else None,
-                         "points_occupied": int(occ.sum())})
-        # Gate on per-level tissue only: continuous bodies follow the LOCAL
-        # frame, so carrying them with the top unit's M_k shifts them by
-        # (distance from centreline) x (RADO's curvature between the section
-        # and s3); the aorta, 40 mm anterior, moves most. Sections beyond the
-        # sweep join compare against RADO's own non-constant end zone.
-        mine = [r for r in reps if r["level_k"] == L["k"]]
-        for r in mine:
-            r["reference_in_rado_end_zone"] = bool(s_vref + r["offset_levels"] * D > s_join_min)
+                         "agreement_on_per_level_tissue": round(float((l0 == l1)[pl].mean()), 5)
+                         if pl.any() else None, "points_occupied": int(occ.sum()),
+                         "beyond_model_top": bool(L["k"] == len(levels) and f > f_top)})
+        mine = [r for r in reps if r["level_k"] == L["k"] and not r["beyond_model_top"]]
         worst_pl = min(r["agreement_on_per_level_tissue"] for r in mine if r["agreement_on_per_level_tissue"] is not None)
-        worst = min(r["agreement_where_occupied"] for r in mine if not r["reference_in_rado_end_zone"])
-        print("  copy check level +%d (%s): per-level tissue agreement >= %.4f; all tissue >= %.4f "
-              "(outside RADO's end zone)" % (L["k"], L["vertebra_disc_naming"], worst_pl, worst))
+        worst = min(r["agreement_where_occupied"] for r in mine)
+        print("  copy check level +%d (%s): per-level tissue agreement >= %.4f; all tissue >= %.4f"
+              % (L["k"], L["vertebra_disc_naming"], worst_pl, worst))
         if worst_pl < 0.98:
             warnings.append("copy check level +%d: per-level tissue agreement %.4f" % (L["k"], worst_pl))
     res["copies"] = reps
 
-    # 3. gaps ----------------------------------------------------------------
-    epi = next(sw for sw in sweep_report if sw["class"] == "epidural")
+    # 3. sympathetic trunk ---------------------------------------------------------
+    # Each junction: the lower segment's top end centre, pulled back 0.2 mm
+    # along its axis, must lie inside the segment above.
+    seg_files = {}
+    for o in outputs:
+        if "sympathetic_a" in o["file"]:
+            src = o["source"]
+            seg_files.setdefault(src, {})[o.get("level_k", 0)] = o["file"]
+    junctions = []
+    for src, by_k in sorted(seg_files.items()):
+        for k in range(0, len(levels)):
+            lo, hi = os.path.join(out, by_k[k]), os.path.join(out, by_k[k + 1])
+            Pl = read_raw(lo).reshape(-1, 3)
+            _, top, d = seg_ends(Pl)
+            inside = bool(cache.get(hi)((top - 0.2 * d)[None])[0])
+            dist = float(cKDTree(stlio.read_stl(hi)[0]).query(top)[0])
+            junctions.append({"lower": by_k[k], "upper": by_k[k + 1], "top_end_inside_upper": inside})
+            if not inside:
+                warnings.append("sympathetic junction %s -> %s does not overlap (end %.2f mm away)"
+                                % (by_k[k], by_k[k + 1], dist))
+    res["sympathetic_junctions"] = junctions
+    print("  sympathetic trunk: %d of %d junctions overlap" % (sum(j["top_end_inside_upper"] for j in junctions),
+                                                              len(junctions)))
+
+    # 4. discs ---------------------------------------------------------------------
+    disc_files = [fn for fn in files if PIPE_OF_CLASS.get(class_of(os.path.splitext(fn)[0], entries)) == "disc"]
+    vert_files = [fn for fn in files if PIPE_OF_CLASS.get(class_of(os.path.splitext(fn)[0], entries)) == "vertebra"]
+    vc = {fn: read_raw(os.path.join(out, fn)).reshape(-1, 3).mean(0) for fn in vert_files}
+    discs = []
+    for fn in disc_files:
+        dc = read_raw(os.path.join(out, fn)).reshape(-1, 3).mean(0)
+        s_d = curve.project(dc)[0]
+        below = [v for v in vert_files if curve.project(vc[v])[0] < s_d]
+        above = [v for v in vert_files if curve.project(vc[v])[0] > s_d]
+        b = max(below, key=lambda v: curve.project(vc[v])[0]) if below else None
+        a = min(above, key=lambda v: curve.project(vc[v])[0]) if above else None
+        r = disc_contact(os.path.join(out, fn), b and os.path.join(out, b), a and os.path.join(out, a), cache)
+        r["disc"] = fn
+        r["new"] = "__up" in fn
+        discs.append(r)
+    res["discs"] = discs
+    print("  discs (fraction of facing area touching bone, lower/upper; 95th percentile gap mm):")
+    for r in sorted(discs, key=lambda r: curve.project(read_raw(os.path.join(out, r["disc"])).reshape(-1, 3).mean(0))[0]):
+        f = lambda s: "%.2f (p95 %.2f)" % (r[s]["touching_fraction"], r[s]["gap_p95_mm"]) if r[s] else "   -   "
+        print("     %-34s %s  lower %s  upper %s" % (r["disc"][8:42], "new " if r["new"] else "RADO", f("lower"), f("upper")))
+
+    # 5. gaps ----------------------------------------------------------------------
+    # Sections along the epidural extension's own frames above its cut, and
+    # along the cubic centreline below it; outline = the epidural outer loop.
+    epi = next(r for r in ext_report if r["class"] == "epidural")
     loops = [np.array(q) for q in epi["loops_uv"]]
     outer = max(loops, key=lambda q: abs(area2(q)))
-    by_ext = index([b["file"] for b in bodies] + [o["file"] for o in outputs])
+    jf = epi["join_frame"]
+    c0, eu0, ev0 = (np.array(jf[k]) for k in ("centre", "e_u", "e_v"))
+    lo, hi = outer.min(0), outer.max(0)
+    U, W = np.meshgrid(np.arange(lo[0], hi[0], 0.1), np.arange(lo[1], hi[1], 0.1), indexing="ij")
+    inside = loops_mask([outer], U, W).ravel()
+    uv = np.column_stack([U.ravel()[inside], W.ravel()[inside]])
+    by_ext = index(files)
     gaps = []
-    s_hi = s_vref + (len(levels) + 0.75) * D
-    s_join_min = min(sw["s_join_mm"] for sw in sweep_report)
-    base = list(np.arange(s_vref - 2.0 * D, s_join_min - 2.0, 5.0))   # RADO's own canal
-    for s in base + list(np.arange(s_join_min - 2.0, s_hi, 5.0)):
-        lo, hi = outer.min(0), outer.max(0)
-        U, W = np.meshgrid(np.arange(lo[0], hi[0], 0.1), np.arange(lo[1], hi[1], 0.1), indexing="ij")
-        inside = loops_mask([outer], U, W).ravel()
-        pts = curve.point(s) + U.ravel()[inside, None] * np.array([1.0, 0, 0]) + W.ravel()[inside, None] * curve.normal(s)
+    s_join = float(curve.project(c0)[0])
+    frames = [("rado", curve.point(s), np.array([1.0, 0, 0]), curve.normal(s))
+              for s in np.arange(s_vref - 2.0 * D, s_join - 2.0, 5.0)]
+    for t in np.arange(0.1, epi["t_end_levels"] - 0.15, 5.0 / epi["mm_per_level_at_join"]):
+        M = step.power(t)
+        frames.append(("extension", apply(M, c0[None])[0], M[:3, :3] @ eu0, M[:3, :3] @ ev0))
+    for region, c, eu, ev in frames:
+        pts = c + uv[:, :1] * eu + uv[:, 1:] * ev
         lab = label_points(pts, by_ext, cache, order)
-        gaps.append({"s_mm": round(float(s), 2), "z_mm": round(float(curve.point(s)[2]), 2),
-                     "region": "rado" if s < s_join_min - 2.0 else "extension",
-                     "canal_points": int(inside.sum()), "background_points": int((lab == -1).sum())})
+        gaps.append({"z_mm": round(float(c[2]), 2), "region": region, "canal_points": int(len(pts)),
+                     "background_points": int((lab == -1).sum())})
     # Background inside the canal outline is NOT zero in RADO itself: its
     # compartments are not tessellated compatibly, so thin unassigned slivers
     # sit along shared interfaces and around the root sleeves. The test is
@@ -1042,14 +1143,14 @@ def run_checks(curve, out, bodies, outputs, levels, s_vref, D, sweep_report, war
     res["gaps"] = gaps
 
     try:
-        plot(curve, by_ext, cache, order, entries, levels, s_vref, D, out)
+        plot(curve, step, by_ext, cache, order, entries, levels, s_vref, out)
         res["figure"] = "extension_check.png"
     except Exception as e:      # the figure is a convenience, never a gate
         warnings.append("figure failed: %r" % (e,))
     return res
 
 
-def plot(curve, by_ext, cache, order, entries, levels, s3, D, out):
+def plot(curve, step, by_ext, cache, order, entries, levels, s_vref, out):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1061,41 +1162,43 @@ def plot(curve, by_ext, cache, order, entries, levels, s3, D, out):
             rgb[pipe] = np.array(t["color_rgb"]) / 255.0
     cols = [(0.08, 0.08, 0.1)] + [tuple(rgb.get(p, (0.5, 0.5, 0.5))) for p in order]
     cmap = ListedColormap(cols)
-    h = 0.3
-    s_lo, s_hi = curve.S[0], s3 + (len(levels) + 0.9) * D
-    ss = np.arange(s_lo, s_hi, h)
-    # midsagittal plane x = x0, in (s, v) coordinates
-    vv = np.arange(-50, 35, h)
-    S_, V_ = np.meshgrid(ss, vv, indexing="ij")
-    P = np.array([curve.point(s) for s in ss])
-    N = np.array([curve.normal(s) for s in ss])
-    pts = (P[:, None, :] + V_[..., None] * N[:, None, :]).reshape(-1, 3)
-    lab_sag = label_points(pts, by_ext, cache, order).reshape(S_.shape)
-    # curved coronal: through the centreline, spanning left-right
+    h = 0.4
+    # left: the true midsagittal plane x = x0, so the curve shows as it is
+    ys = np.arange(curve.Y.min() - 70, curve.Y.max() + 50, h)
+    zs = np.arange(curve.Z.min() - 5, curve.Z.max() + 15, h)
+    Y_, Z_ = np.meshgrid(ys, zs, indexing="ij")
+    pts = np.column_stack([np.full(Y_.size, curve.x0), Y_.ravel(), Z_.ravel()])
+    lab_sag = label_points(pts, by_ext, cache, order).reshape(Y_.shape)
+    # right: curved coronal through the centreline, spanning left-right
+    ss = np.arange(curve.S[0], curve.S[-1], h)
     uu = np.arange(-45, 45, h)
     S2, U2 = np.meshgrid(ss, uu, indexing="ij")
+    P = np.array([curve.point(s) for s in ss])
     pts = (P[:, None, :] + U2[..., None] * np.array([1.0, 0, 0])).reshape(-1, 3)
     lab_cor = label_points(pts, by_ext, cache, order).reshape(S2.shape)
 
-    fig, axs = plt.subplots(1, 2, figsize=(13, 9), gridspec_kw={"width_ratios": [85, 90]})
-    for ax, lab, x_ext, xl in ((axs[0], lab_sag, (vv[0], vv[-1]), "v (mm): anterior <-  -> posterior"),
-                               (axs[1], lab_cor, (uu[0], uu[-1]), "u (mm): patient right <-  -> patient left")):
-        ax.imshow(lab + 1, origin="lower", cmap=cmap, vmin=0, vmax=len(order),
-                  extent=(x_ext[0], x_ext[1], ss[0], ss[-1]), aspect="equal", interpolation="nearest")
-        ax.axhline(curve.s_data_end, color="w", ls=":", lw=0.8)
-        for L in levels:
-            ax.text(x_ext[1], L["vertebra_centroid_arc_length_mm"], " " + L["vertebra_disc_naming"], color="tab:orange",
-                    va="center", fontsize=8)
-        ax.text(x_ext[1], s3, " T%s (RADO top)" % (int(levels[0]["vertebra_disc_naming"][1:]) + 1),
-                color="w", va="center", fontsize=8)
-        ax.set_xlabel(xl)
-        ax.set_ylabel("arc length along centreline (mm)")
-    axs[0].set_title("midsagittal (straightened along the centreline)", fontsize=10)
+    fig, axs = plt.subplots(1, 2, figsize=(14, 10), gridspec_kw={"width_ratios": [np.ptp(ys), 90]})
+    axs[0].imshow((lab_sag + 1).T, origin="lower", cmap=cmap, vmin=0, vmax=len(order),
+                  extent=(ys[0], ys[-1], zs[0], zs[-1]), aspect="equal", interpolation="nearest")
+    axs[0].plot(curve.Y, curve.Z, color="w", lw=0.6, ls=":")
+    cy, cz = step.centre_yz()
+    for L in levels:
+        c = L["vertebra_centroid_mm"]
+        axs[0].text(c[1] - 30, c[2], L["vertebra_disc_naming"] + " ", color="tab:orange", ha="right",
+                    va="center", fontsize=9)
+    axs[0].set_xlabel("y (mm): anterior <-  -> posterior")
+    axs[0].set_ylabel("z (mm)")
+    axs[0].set_title("midsagittal plane x = %.1f mm (S rotates about y = %.0f, z = %.0f)" % (curve.x0, cy, cz),
+                     fontsize=10)
+    axs[1].imshow(lab_cor + 1, origin="lower", cmap=cmap, vmin=0, vmax=len(order),
+                  extent=(uu[0], uu[-1], ss[0], ss[-1]), aspect="equal", interpolation="nearest")
+    axs[1].set_xlabel("u (mm): patient right <-  -> patient left")
+    axs[1].set_ylabel("arc length along the centreline (mm)")
     axs[1].set_title("curved coronal through the cord centre", fontsize=10)
     handles = [plt.Rectangle((0, 0), 1, 1, fc=cols[i + 1]) for i in range(len(order))]
     fig.legend(handles, order, loc="lower center", ncol=6, fontsize=8)
-    fig.suptitle("RADO extended by %d level(s); dotted line = top of RADO's cord data; "
-                 "orange = new vertebral levels (disc naming)" % len(levels), fontsize=10)
+    fig.suptitle("RADO extended by %d level(s), each S = RADO's T11->T10 step (%.2f deg); orange = new "
+                 "vertebrae (disc naming)" % (len(levels), step.angle_deg()), fontsize=10)
     fig.tight_layout(rect=(0, 0.05, 1, 0.97))
     fig.savefig(os.path.join(out, "extension_check.png"), dpi=110)
 
