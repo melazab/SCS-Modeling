@@ -131,7 +131,7 @@ manifest; a failure becomes a warning.
 2. **The cut.** 5 mm below the cut the extended body is the original
    (Dice 1.000). 5 mm above it, the 1.5° turn has moved the section about
    0.1 mm. That gives Dice 0.92–1.00 for thick bodies and 0.71–0.84 for the
-   0.3 mm dura and ~1 mm vessels. RADO's own end zone starts there anyway.
+   0.5 mm dura and ~1 mm vessels. RADO's own end zone starts there anyway.
 3. **Copies.** A section through RADO's top unit, carried by S^k, against
    level k on the same points: per-level tissue agreement ≥ 0.994 and all
    tissue ≥ 0.964, at every level. Sections of the topmost level beyond the
