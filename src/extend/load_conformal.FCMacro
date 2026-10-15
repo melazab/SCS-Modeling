@@ -38,16 +38,21 @@ def main():
         groups[pipe] = doc.addObject("App::DocumentObjectGroup", "G_" + pipe)
         groups[pipe].Label = label
     for o in report["outputs"]:
+        # no fixDegenerations: it deletes facets (256 on the epidural body), so
+        # the preview would no longer be the file
         m = Mesh.Mesh(os.path.join(SRC, o["file"]))
-        m.fixDegenerations(1e-6)
-        m.removeDuplicatedPoints()
         obj = doc.addObject("Mesh::Feature", sanitize(os.path.splitext(o["file"])[0])[:60])
         obj.Mesh = m
         members = o["members"]
         src = None
         if tmpl is not None:
             for mem in members:
-                src = tmpl.getObject(sanitize(os.path.splitext(mem)[0]))
+                stem = os.path.splitext(mem)[0]
+                # continuous bodies are named "<RADO stem>__extended_up4"
+                for name in (stem, re.sub(r"__extended_up\d+$", "", stem)):
+                    src = tmpl.getObject(sanitize(name))
+                    if src is not None:
+                        break
                 if src is not None:
                     break
         base = src.Label if src is not None else os.path.splitext(members[0])[0][8:]
