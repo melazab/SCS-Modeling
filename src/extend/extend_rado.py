@@ -917,6 +917,7 @@ def main():
     wm = next(r for r in ext_report if r["class"] == "white")
     s_join_wm = float(curve.project(np.array(wm["join_frame"]["centre"]))[0])
     curve_ext = curve.continued(s_join_wm, step, wm["t_end_levels"])
+    write_centreline(curve_ext, s_join_wm, os.path.join(out, "centreline.json"))
 
     # ---- checks ------------------------------------------------------------
     checks = {}
@@ -960,6 +961,21 @@ def main():
         print("  - " + w)
     print("wrote %s (%d new STLs, %d RADO files replaced) in %.0f s" % (out, len(outputs), len(replaced),
                                                                        time.time() - t0))
+
+
+def write_centreline(curve, s_join, path, ds=0.5):
+    """The cord centreline of the extended set, sampled for other tools: the
+    cubic fit inside RADO's cord, then the S-orbit of its point at the cut."""
+    s = np.arange(curve.S[0], curve.S[-1], ds)
+    P = np.array([curve.point(x) for x in s])
+    T = np.array([curve.tangent(x) for x in s])
+    with open(path, "w") as f:
+        json.dump({"frame": "RADO STL mm, LPS: +x patient left, +y posterior, +z superior",
+                   "definition": "x = x0; y = cubic(z) up to arc length s_cut, then the orbit of that point "
+                                 "under S^t (manifest.json step.S); tangent points superior",
+                   "x0_mm": curve.x0, "s_cut_mm": round(float(s_join), 4), "ds_mm": ds,
+                   "s_mm": s.round(4).tolist(), "points_mm": P.round(5).tolist(),
+                   "tangents": T.round(6).tolist()}, f)
 
 
 def run_checks(curve, step, out, bodies, replaced, outputs, levels, s_vref, D, ext_report, chain_report, warnings):
