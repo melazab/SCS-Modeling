@@ -166,3 +166,56 @@ poster mesh settings, expect ~2.2× the tetrahedra.
 
 A free side result: solving the existing T10 leads on both geometries measures
 how much the original model's short length was truncating the field.
+
+## Fused, blended and overlap-free: `conform.py`
+
+```bash
+systemd-run --user --scope -q -p MemoryMax=14G -p MemorySwapMax=0 nice -n 19 \
+    src/extend/.venv/bin/python src/extend/conform.py --workers 14      # ~50 min
+src/extend/.venv/bin/python src/extend/conform_check.py                 # labels vs fem's view of the source
+fem/.venv/bin/python src/extend/overlap_audit.py fem/out/geometry/rado_up4_conformal
+src/extend/.venv/bin/python src/extend/render_set.py DIR out.png --tissues dura
+```
+
+It runs in `src/extend/.venv` (numpy, scipy, manifold3d, scikit-image,
+pyvista), not `fem/.venv`, because `fem/requirements.txt` is hashed. Output:
+`fem/out/geometry/rado_up4_conformal/`: 89 bodies, a `conform_report.json`, and
+per-tissue checkpoints in `stage1/`.
+
+1. **Fuse** each tissue exactly (manifold3d), one cluster of actually
+   intersecting bodies at a time. Clustering by bounding box chained all 263
+   root bodies into one union and ran out of memory. The sympathetic trunk is
+   first rebuilt as one smooth tube. Results: one chain per side, 32 root
+   complexes, the dural sac and its sleeves as one body.
+2. **Blend** with a 0.25 mm smooth minimum, only where two pieces meet at
+   20° or more. The surface is re-made in 4 mm tiles of one global 0.05 mm
+   lattice, so neighbouring tiles join without seams. Then simplify to 5 µm.
+   **Roots are fused but not blended** (`--no-blend root`). RADO's root bodies
+   are layered (a core inside a thin middle layer, rootlets side by side), and
+   a blend there adds collars and +0.7% (k 0.1) to +3.4% (k 0.25) root volume
+   in the rootlet entry zone.
+3. **Partition** by the FEM's priority, piece by piece. Each tissue loses the
+   space any higher-priority fused tissue overlapping it claims.
+
+Checked on 2026-10-14:
+- 0 open edges in all 89 bodies. 21 have a few pinch edges, where two pieces
+  of one body touch after the cut; that does not matter for the inside test.
+- `overlap_audit.py`: **0** overlap between different tissues (the source:
+  38.8 cm³), 0 within one.
+- `conform_check.py` on 400,000 points: labels agree with fem's priority
+  labelling of the source set at 99.993% of points spread over the model, and
+  99.49% within ~0.15 mm of a surface. No point is in two bodies. The
+  differences are the rebuilt trunk and the vessel fillets.
+
+What the partition shows about RADO, because fem/ already solves it this way:
+- Roots lose 29% of their volume to the DRG (dorsal roots run through it) and
+  to the cord (rootlets end inside the white matter).
+- CSF loses 12% to rootlets and cord-surface vessels.
+- Dura loses 22%, mostly the inside of the root sleeves.
+- Each vertebra loses a slab of its posterior body, cut off by the epidural
+  space, disc and vessels.
+- Segmental vessels cut the sympathetic trunk where RADO passes them
+  through it.
+
+Interfaces coincide; each side keeps its own triangulation. RADO's gaps
+(tissues that never touched) are unchanged.
