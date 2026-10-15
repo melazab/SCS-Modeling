@@ -73,9 +73,31 @@ Each continuous body is written as **one closed surface**: the original cut
 at a plane, walls swept from the cut points themselves, and a cap at the new
 top end. All eight are cut at **one shared plane**, 10 mm below the lowest
 top (the cord's), so the nested canal layers keep sections taken at the same
-place. Cut at their own tops, up to 1.8 mm apart, they left 2.3× more
-unassigned canal points. Each body still ends where RADO's own does relative
-to the top level; the aorta ends 12 mm above the cord.
+place. Cut each 10 mm below its own furthest point along the cord (up to
+1.8 mm apart, see below) they left 2.3× more unassigned canal points.
+
+**The top end.** RADO's canal bodies (grey, white, CSF, dura, epidural and the
+two blood layers) end flush in **one plane**, as nested rings that do not
+overlap. That plane is tilted about 7° from perpendicular to the cord, so the
+wider a body, the further its rim reaches along the cord: up to 1.8 mm more
+for the epidural space than for the grey matter. Every body with a cap in that
+plane is swept a little past S⁴ of it and cut there, so the extension ends the
+way RADO does, flush and four levels higher. The plane is recorded in the
+manifest (`rado_top_plane`). The aorta has no cap there and keeps its own end,
+12 mm above the cord.
+
+Each top cap is the section's region, holes included: a ring section (an
+outer loop and a hole) is closed by one ring of triangles, with each hole
+joined to its outline by a slit for the ear clipping.
+
+*Fixed 2026-10-15.* Before then, each body was swept to its own furthest
+point. The ends were staggered (white matter 0.25 mm above the grey, CSF
+1.0, dura 1.15 and epidural 1.8 mm), which left empty wells up to 0.75 mm deep
+over the inner layers. Each loop was also capped on its own: a ring got a full
+disc over its outline plus an opposite one over its hole. That is
+parity-correct for fem's inside test, but the two coincident discs showed as
+dark z-fighting streaks in FreeCAD and left slivers in conform.py's booleans.
+Mohamed noticed the top end in FreeCAD.
 
 Cut and walls share vertices, so the result is closed and consistently
 oriented. The run verifies this on the file as written (float32): 0 open,

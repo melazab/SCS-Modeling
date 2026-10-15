@@ -34,7 +34,9 @@ the orbit, so the extension turns by 1.5 deg there.
 
 ONE BODY PER CONTINUOUS TISSUE. Each continuous body is written as one closed
 surface: the original cut at one plane shared by all eight, walls swept from
-the cut points themselves, and a top cap. The cut and the walls share vertices, so the result
+the cut points themselves, and a top cap: RADO's own top plane carried up by
+S^K for the canal bodies, which end flush in it as RADO's do, each section
+capped as one region with its holes. The cut and the walls share vertices, so the result
 is closed and consistently oriented; that is checked, not assumed. It replaces
 the original file in the set.
 
@@ -340,10 +342,13 @@ def area2(P):
     return 0.5 * float(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
 
 
-def earclip(P):
+def earclip(P, ids=None):
     """Triangulate a simple polygon (n, 2); returns index triples, or None.
-    Triangles run along increasing index if area2(P) > 0, else decreasing."""
+    Triangles run along increasing index if area2(P) > 0, else decreasing.
+    ids: vertex identity per point, for polygons that pass through a point
+    twice (bridged holes); such repeats never block an ear."""
     n = len(P)
+    ids = np.arange(n) if ids is None else np.asarray(ids)
     idx = list(range(n)) if area2(P) > 0 else list(range(n))[::-1]
     tris, guard, i = [], 0, 0
     while len(idx) > 3:
@@ -355,7 +360,8 @@ def earclip(P):
         cr = (pb[0] - pa[0]) * (pc[1] - pb[1]) - (pb[1] - pa[1]) * (pc[0] - pb[0])
         ear = cr > 1e-14
         if ear:
-            others = np.array([j for j in idx if j not in (a, b, c)])
+            own = (ids[a], ids[b], ids[c])
+            others = np.array([j for j in idx if ids[j] not in own])
             if len(others):
                 Q = P[others]
                 d1 = (pb[0] - pa[0]) * (Q[:, 1] - pa[1]) - (pb[1] - pa[1]) * (Q[:, 0] - pa[0])
@@ -498,10 +504,108 @@ def chain_loops(edges):
     return loops
 
 
-def extend_body(tri, p0, eu, ev, nrm, step, t_end):
+def point_in_polygon(P, q):
+    x, y = P[:, 0], P[:, 1]
+    x2, y2 = np.roll(x, -1), np.roll(y, -1)
+    cross = (y > q[1]) != (y2 > q[1])
+    xi = x + (q[1] - y) * (x2 - x) / np.where(cross, y2 - y, 1.0)
+    return bool(np.count_nonzero(cross & (q[0] < xi)) % 2)
+
+
+def _orient(p, q, r):
+    return (q[..., 0] - p[..., 0]) * (r[..., 1] - p[..., 1]) - (q[..., 1] - p[..., 1]) * (r[..., 0] - p[..., 0])
+
+
+def bridge_holes(outer, holes):
+    """One polygon from a CCW outer loop and CW holes, each (points (n, 2),
+    vertex ids (n,)): every hole is joined to the outer boundary by a two-way
+    slit from its rightmost point to the nearest boundary vertex the slit can
+    reach without crossing an edge and without leaving the region."""
+    P, ids = outer
+    region_outer, region_holes = outer[0], [h[0] for h in holes]
+    for H, hid in sorted(holes, key=lambda h: -h[0][:, 0].max()):
+        m = int(np.argmax(H[:, 0]))
+        M = H[m]
+        blockers = [P] + [h for h in region_holes]
+        A = np.vstack([b for b in blockers])
+        B = np.vstack([np.roll(b, -1, 0) for b in blockers])
+        for j in np.argsort(np.linalg.norm(P - M, axis=1)):
+            Q = P[j]
+            d1, d2 = _orient(A, B, M), _orient(A, B, Q)
+            d3, d4 = _orient(M, Q, A), _orient(M, Q, B)
+            if np.any((d1 * d2 < 0) & (d3 * d4 < 0)):
+                continue
+            mid = 0.5 * (M + Q)
+            if not point_in_polygon(region_outer, mid) or any(point_in_polygon(h, mid) for h in region_holes):
+                continue
+            break
+        else:
+            raise RuntimeError("no slit from a hole to its outer loop")
+        Hr, hr = np.roll(H, -m, 0), np.roll(hid, -m)
+        P = np.vstack([P[:j + 1], Hr, Hr[:1], P[j:]])
+        ids = np.concatenate([ids[:j + 1], hr, hr[:1], ids[j:]])
+    return P, ids
+
+
+def cap_loops(Q, L):
+    """Faces closing planar boundary loops: Q the loops in 2D plane
+    coordinates, L their vertex ids, both in the direction the walls run the
+    loops' edges, so the cap runs each the other way. Loops may nest (a ring
+    section is an outer loop and a hole): each outer loop is capped together
+    with the holes directly inside it, so the cap is the region itself. (Capping
+    each loop alone gives a full disc per loop: parity-correct, but two
+    coincident opposite discs over every hole.) Returns (faces, methods)."""
+    n = len(Q)
+    depth = [sum(point_in_polygon(Q[j], Q[i][0]) for j in range(n) if j != i) for i in range(n)]
+    faces, methods = [], []
+    for i in range(n):
+        if depth[i] % 2:
+            continue
+        holes = [j for j in range(n) if depth[j] == depth[i] + 1 and point_in_polygon(Q[i], Q[j][0])]
+        ccw = area2(Q[i]) > 0
+        outer = (Q[i], L[i]) if ccw else (Q[i][::-1], L[i][::-1])
+        hs = [(Q[j][::-1], L[j][::-1]) if area2(Q[j]) > 0 else (Q[j], L[j]) for j in holes]
+        P, ids = bridge_holes(outer, hs) if hs else outer
+        ct = earclip(P, ids)
+        if ct is None:
+            raise RuntimeError("cap triangulation failed (%d points, %d holes)" % (len(P), len(hs)))
+        tri = np.asarray(ids)[np.array(ct)]     # counter-clockwise in the plane
+        faces.append(tri[:, ::-1] if ccw else tri)
+        methods.append("earclip" + (" with %d hole(s)" % len(hs) if hs else ""))
+    return np.vstack(faces), methods
+
+
+def top_cap_plane(tri, band=4.0):
+    """The plane of a tube's top cap, the largest set of coplanar triangles
+    near its top: (point, unit normal pointing up)."""
+    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    a = 0.5 * np.linalg.norm(n, axis=1)
+    nu = n / np.maximum(2 * a, 1e-30)[:, None]
+    near = tri.mean(1)[:, 2] > tri[:, :, 2].max() - band
+    key, inv = np.unique(np.round(nu[near], 3), axis=0, return_inverse=True)
+    best = np.argmax(np.bincount(inv.ravel(), weights=a[near]))
+    P = tri[near][inv.ravel() == best].reshape(-1, 3)
+    c = P.mean(0)
+    nrm = np.linalg.svd(P - c)[2][2]
+    return c, nrm if nrm[2] > 0 else -nrm
+
+
+def area_on_plane(tri, p, nrm, tol=0.01):
+    """Area of the triangles lying in the plane (p, nrm)."""
+    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    a = 0.5 * np.linalg.norm(n, axis=1)
+    on = (np.abs((tri - p) @ nrm).max(1) < tol) & (np.abs(n @ nrm) > 0.999 * 2 * a)
+    return float(a[on].sum())
+
+
+def extend_body(tri, p0, eu, ev, nrm, step, t_end, top=None):
     """One closed surface: tri cut at the plane (p0, nrm), walls swept from the
-    cut points along S^t for t in [0, t_end], and a cap at t_end. nrm points
-    into the swept part. Returns (V, T, loops_uv, cap_methods)."""
+    cut points along S^t for t in [0, t_end], and a cap. nrm points into the
+    swept part. Without `top` the cap closes the last ring, at t_end. With
+    top = (point, normal pointing away from the body) the walls, swept past
+    that plane, are cut by it and the cap lies in it. Either way all of a
+    section's loops are capped together, holes as holes.
+    Returns (V, T, loops_uv, cap_methods)."""
     V, T = stlio.weld(tri)
     Vc, Tc, edges = clip_indexed(V, T, p0, nrm)
     loops = chain_loops(edges)
@@ -509,7 +613,7 @@ def extend_body(tri, p0, eu, ev, nrm, step, t_end):
     ts = np.linspace(0, t_end, max(2, int(np.ceil(ang / SWEEP_MAX_DEG)) + 1))
     Ms = [step.power(t) for t in ts[1:]]
     verts, faces, nv = [Vc], [Tc], len(Vc)
-    loops_uv, methods = [], []
+    loops_uv, last = [], []
     for L in loops:
         ring0 = Vc[L]
         n = len(L)
@@ -521,24 +625,24 @@ def extend_body(tri, p0, eu, ev, nrm, step, t_end):
             # The cut face runs j -> k, so the wall must run k -> j.
             faces.append(np.column_stack([r0[k], r0[j], r1[j]]))
             faces.append(np.column_stack([r0[k], r1[j], r1[k]]))
-        Q = np.column_stack([(ring0 - p0) @ eu, (ring0 - p0) @ ev])
-        loops_uv.append(Q)
-        top = rings[-1]
-        ct = earclip(Q)
-        if ct is not None:
-            ct, flip = np.array(ct), area2(Q) > 0
-            methods.append("earclip")
-        else:
-            # Centroid fan: still right for the ray-PARITY containment test
-            # fem/ uses (each interior point is covered an odd number of times).
-            verts.append(apply(Ms[-1], ring0.mean(0)[None]))
-            top = np.concatenate([top, [nv]])
-            nv += 1
-            ct, flip = np.array([(n, a, (a + 1) % n) for a in range(n)]), True
-            methods.append("fan")
-        # The walls end running j -> k on the top ring, so the cap runs k -> j.
-        faces.append(top[ct[:, ::-1]] if flip else top[ct])
-    return np.vstack(verts), np.vstack(faces), loops_uv, methods
+        loops_uv.append(np.column_stack([(ring0 - p0) @ eu, (ring0 - p0) @ ev]))
+        last.append(rings[-1])
+    Vx, Tx = np.vstack(verts), np.vstack(faces)
+    if top is None:
+        # The walls end running j -> k on the last ring, which is a rigid copy
+        # of the cut ring, so the cut's 2D loops describe it.
+        cap, methods = cap_loops(loops_uv, last)
+    else:
+        pt, nt = top
+        reach = float(((Vx[np.concatenate(last)] - pt) @ nt).min())
+        assert reach > 0, "the sweep stops %.3f mm short of the top plane" % -reach
+        Vx, Tx, cut = clip_indexed(Vx, Tx, pt, nt)
+        cl = chain_loops(cut)
+        fu = eu - (eu @ nt) * nt
+        fu /= np.linalg.norm(fu)
+        fv = np.cross(nt, fu)
+        cap, methods = cap_loops([np.column_stack([(Vx[c] - pt) @ fu, (Vx[c] - pt) @ fv]) for c in cl], cl)
+    return Vx, np.vstack([Tx, cap]), loops_uv, methods
 
 
 def seg_axis(P):
@@ -846,12 +950,20 @@ def main():
     # the sweep follows the S-orbit, as the vertebrae do.
     # All are cut at ONE plane, --join-back below the lowest top: the nested
     # canal layers (cord, CSF, dura, epidural) then keep sections taken at the
-    # same place, which are consistent with each other. Cut at their own tops
-    # (up to 1.8 mm apart) they left 2.3x more unassigned canal points. Each
-    # body still ends where RADO's own does relative to the top level (the
-    # aorta 12 mm above the cord).
+    # same place, which are consistent with each other. Cut 10 mm below their
+    # own furthest points (up to 1.8 mm apart) they left 2.3x more unassigned
+    # canal points. The aorta keeps its own end, 12 mm above the cord.
     s_tops = {b["file"]: float(curve.project(b["tri"].reshape(-1, 3)).max()) for b in continuous}
     s_cut = min(s_tops.values()) - args.join_back
+    # RADO's canal bodies all end flush in ONE top plane, tilted ~7 deg off
+    # perpendicular to the cord, as nested rings. Their furthest points along
+    # the cord (s_tops) therefore differ with their width, by up to 1.8 mm;
+    # sweeping each to its own s_top (as an earlier version did) staggered the
+    # ends. Every body with a cap in that plane now ends in S^K of it.
+    grey = next(b for b in continuous if b["pipe"] == "grey")
+    p_top, n_top = top_cap_plane(grey["tri"])
+    MK = step.power(K)
+    top_ext = (apply(MK, p_top[None])[0], MK[:3, :3] @ n_top)
     ext_report = []
     for b in continuous:
         V, T = stlio.weld(b["tri"])
@@ -878,7 +990,18 @@ def main():
         turn = float(np.degrees(np.arccos(np.clip(orbit @ nrm / np.linalg.norm(orbit), -1, 1))))
         below_top = s_top - s_join if method == "centreline" else args.join_back
         t_end = K + below_top / step.speed(p0)
-        Vx, Tx, loops_uv, methods = extend_body(b["tri"], p0, eu, ev, nrm, step, t_end)
+        cap_area = area_on_plane(b["tri"], p_top, n_top)
+        on_top = method == "centreline" and cap_area > 1.0
+        for margin in (1.5, 3.0, 6.0):
+            # swept a little past the plane, then cut by it
+            t_sweep = t_end + margin / step.speed(p0) if on_top else t_end
+            try:
+                Vx, Tx, loops_uv, methods = extend_body(b["tri"], p0, eu, ev, nrm, step, t_sweep,
+                                                        top_ext if on_top else None)
+                break
+            except AssertionError as e:
+                if not on_top or "short of the top plane" not in str(e):
+                    raise
         stem = "%s__extended_up%d" % (b["stem"], K)
         assert class_of(stem, entries) == b["cls"], stem
         write_stl(os.path.join(out, stem + ".STL"), Vx[Tx])
@@ -892,6 +1015,8 @@ def main():
                            "join_frame": {"centre": p0.tolist(), "e_u": eu.tolist(), "e_v": ev.tolist(),
                                           "normal": nrm.tolist()},
                            "cut_below_own_top_mm": round(below_top, 3), "t_end_levels": round(t_end, 4), "mm_per_level_at_join": round(step.speed(p0), 3),
+                           "top": "RADO's top plane carried by S^%d" % K if on_top else "last swept ring",
+                           "rado_top_plane_cap_mm2": round(cap_area, 3), "t_sweep_levels": round(t_sweep, 4),
                            "loops": len(loops_uv), "loop_points": [len(q) for q in loops_uv], "caps": methods,
                            "topology": topo, "topology_as_written_float32": topo_file,
                            "topology_source": topo_src,
@@ -948,6 +1073,9 @@ def main():
         "per_level_groups": group_report,
         "replaced_rado_files": sorted(replaced),
         "sympathetic_joins": chain_report,
+        "rado_top_plane": {"point": p_top.round(5).tolist(), "normal": n_top.round(6).tolist(),
+                           "extended_point": top_ext[0].round(5).tolist(),
+                           "extended_normal": top_ext[1].round(6).tolist()},
         "continuous_extensions": ext_report,
         "outputs": outputs,
         "checks": checks,
