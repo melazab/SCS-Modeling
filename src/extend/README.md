@@ -219,15 +219,20 @@ per-tissue checkpoints in `stage1/`.
 3. **Partition** by the FEM's priority, piece by piece. Each tissue loses the
    space any higher-priority fused tissue overlapping it claims.
 
-Checked on 2026-10-14:
-- 0 open edges in all 89 bodies. 21 have a few pinch edges, where two pieces
+Checked on 2026-10-15, rerun after the top-end fix (see "The top end"):
+- 0 open edges in all 89 bodies. 22 have a few pinch edges, where two pieces
   of one body touch after the cut; that does not matter for the inside test.
+  The new one is a single 0.0055 mm edge in the white matter, in the top plane
+  where its end ring meets the grey matter's.
 - `overlap_audit.py`: **0** overlap between different tissues (the source:
   38.8 cm³), 0 within one.
 - `conform_check.py` on 400,000 points: labels agree with fem's priority
-  labelling of the source set at 99.993% of points spread over the model, and
-  99.49% within ~0.15 mm of a surface. No point is in two bodies. The
+  labelling of the source set at 99.991% of points spread over the model, and
+  99.51% within ~0.15 mm of a surface. No point is in two bodies. The
   differences are the rebuilt trunk and the vessel fillets.
+- At the model's top end, the blend's marching cubes bevels the rims of 5 of
+  the 7 small epidural vessels (0.55 mm across) by about one 0.05 mm grid step,
+  where a blend tile around a vessel junction reaches the cut. Cosmetic.
 
 What the partition shows about RADO, because fem/ already solves it this way:
 - Roots lose 29% of their volume to the DRG (dorsal roots run through it) and
