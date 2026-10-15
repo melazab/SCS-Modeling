@@ -46,6 +46,12 @@ from chain_demo import Grid, exact_distance, point_triangle_distance, smin, surf
 SIMPLIFY_MM = 0.005
 CUT_SIMPLIFY_MM = 1e-5
 MIN_PIECE_MM3 = 1e-3
+# Loose pieces thinner than this on average are cutting slivers. Measured on
+# rado_up4 (2026-10-15), every such piece is <= 40 um; the thinnest real ones
+# are 98 um (a trunk fragment), then 140-160 um vessels and >= 430 um roots.
+MIN_THICKNESS_MM = 0.05
+END_SLAB_MM = 0.3                 # exact (unblended) geometry this deep at the canal's cut ends
+END_EXTEND_MM = 0.01              # canal tissues are cut this far past their end plane, then trimmed back
 
 
 def log(msg):
@@ -263,12 +269,79 @@ def blend_tile(t):
     return np.asarray(mesh.vert_properties)[:, :3].copy(), np.asarray(mesh.tri_verts).copy()
 
 
-def fuse_and_blend(pipe, bodies, k, h, tile, workers):
+def end_regions(src, slab=END_SLAB_MM, margin=1.0, beyond=0.5, reach=8.0):
+    """The canal's two cut ends (RADO's bottom, and its top carried up by the
+    extension), where the canal tissues all stop in one plane. The epidural
+    space, the widest of them, gives each plane and its outward normal: its
+    cap there is the largest set of coplanar triangles. The region covers the
+    caps of EVERY body ending in that plane within `reach` mm of the epidural
+    cap's rim (a vessel end can stick out past the epidural outline), grown by
+    `margin` in the plane, from `slab` mm inside the plane to `beyond` mm
+    outside it. Returns ([(region, outward normal, plane offset)], the set of
+    tissues with a cap in either plane)."""
+    import manifold3d as m3
+    f = [x for x in os.listdir(src) if "EpiduralSpace" in x and x.lower().endswith(".stl")]
+    if len(f) != 1:
+        return [], set()
+
+    def faces(tri):
+        nn = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        a = 0.5 * np.linalg.norm(nn, axis=1)
+        return a, nn / np.maximum(2 * a, 1e-30)[:, None]
+    tri = K.read_tri(os.path.join(src, f[0])).astype(np.float64)
+    a, nu = faces(tri)
+    z = tri.mean(1)[:, 2]
+    planes = []
+    for near in (z > z.max() - 6.0, z < z.min() + 6.0):
+        key, inv = np.unique(np.round(nu[near], 3), axis=0, return_inverse=True)
+        best = np.argmax(np.bincount(inv.ravel(), weights=a[near]))
+        n = key[best] / np.linalg.norm(key[best])
+        P = tri[near][inv.ravel() == best].reshape(-1, 3)
+        planes.append((n, float(np.median(P @ n)), P.mean(0), float(np.linalg.norm(P - P.mean(0), axis=1).max())))
+    caps, pipes = [[] for _ in planes], set()
+    for fn in os.listdir(src):
+        pipe = K.pipe_of(os.path.splitext(fn)[0]) if fn.lower().endswith(".stl") else None
+        if not pipe:
+            continue
+        t = K.read_tri(os.path.join(src, fn)).astype(np.float64)
+        ta, tn = faces(t)
+        for i, (n, d, c, rad) in enumerate(planes):
+            on = (np.abs(t @ n - d).max(1) < 0.01) & (np.abs(tn @ n) > 0.999)
+            on &= np.linalg.norm(t.mean(1) - c, axis=1) < rad + reach
+            caps[i].append(t[on].reshape(-1, 3))
+            if ta[on].sum() > 0.01:
+                pipes.add(pipe)
+    out = []
+    for (n, d, c, rad), Ps in zip(planes, caps):
+        P = np.vstack(Ps)
+        r = P - c
+        r = r - np.outer(r @ n, n)
+        P = P + margin * r / np.maximum(np.linalg.norm(r, axis=1), 1e-9)[:, None]
+        out.append((m3.Manifold.hull_points(np.vstack([P - slab * n, P + beyond * n])), n, d))
+    return out, pipes
+
+
+def past_ends(M, ends, e=END_EXTEND_MM):
+    """M carried e mm past each canal end plane, inside that end's region: the
+    slice of M within 2e of the plane, moved e outward and unioned on. It
+    overlaps M by e, so no faces coincide (a union of exactly touching faces
+    leaves them in place)."""
+    for R, n, off in ends:
+        if not boxes_overlap(np.array(M.bounding_box()), np.array(R.bounding_box())):
+            continue
+        sl = (M ^ R).trim_by_plane(list(n), off - 2 * e).trim_by_plane(list(-n), -off)
+        if not sl.is_empty():
+            M = M + sl.translate(list(e * n))
+    return M
+
+
+def fuse_and_blend(pipe, bodies, k, h, tile, workers, ends=()):
     import multiprocessing
     import manifold3d as m3
     global _TILE_JOB
     t0 = time.time()
     U = union_clusters(bodies)
+    U_exact = U
     t1 = time.time()
     rep = {"bodies": len(bodies), "union_volume_mm3": round(U.volume(), 2), "union_s": round(t1 - t0, 1)}
     crease = crease_points(U, bodies) if k > 0 else np.zeros((0, 3))
@@ -306,6 +379,20 @@ def fuse_and_blend(pipe, bodies, k, h, tile, workers):
         U = K.drop_slivers(U)
         rep.update({"blend_s": round(t2 - t1, 1), "splice_s": round(time.time() - t2, 1),
                     "blended_volume_mm3": round(U.volume(), 2)})
+        # At the canal's cut ends the exact union goes back in. Marching cubes
+        # on the 0.05 mm lattice cannot keep a tilted flat end flat: it left
+        # vessel ends up to 0.044 mm short of the top plane, and the partition
+        # then filled that with a film of CSF or epidural (2026-10-15).
+        restored = 0.0
+        for R, _, _ in ends:
+            if (U_exact ^ R).is_empty() and (U ^ R).is_empty():
+                continue
+            U = (U - R) + (U_exact ^ R)
+            U.num_tri()
+            restored += (U_exact ^ R).volume()
+        if ends:
+            U = K.drop_slivers(U)
+            rep["end_slab_exact_mm3"] = round(restored, 3)
     # Drops the marching-cubes slivers and pinch edges and thins the 0.05 mm
     # patch triangles ~5x; no surface moves more than SIMPLIFY_MM. Done before
     # the partition, so the cut faces copy the higher-priority surfaces exactly.
@@ -318,6 +405,15 @@ def fuse_and_blend(pipe, bodies, k, h, tile, workers):
 # --------------------------------------------------------------------------
 # Partition, naming, output
 # --------------------------------------------------------------------------
+def drop_thin(M, vmin, tmin):
+    """Keep the shells (pieces and voids) with |volume| > vmin and mean
+    thickness, |volume| / (area / 2), at least tmin."""
+    import manifold3d as m3
+    keep = [c for c in M.decompose()
+            if abs(c.volume()) > vmin and abs(c.volume()) / max(c.surface_area() / 2, 1e-12) >= tmin]
+    return m3.Manifold.compose(keep) if keep else m3.Manifold()
+
+
 def group_shells(M):
     """Split into bodies: each positive shell with the voids it encloses."""
     import manifold3d as m3
@@ -388,6 +484,8 @@ def load_parts(path):
 
 def stage1(a, stage_dir, only):
     """Fuse and blend each tissue, one at a time, checkpointing each to disk."""
+    ends, _ = end_regions(a.src)
+    log("  canal cut ends: %d (exact geometry kept %.2f mm deep there)" % (len(ends), END_SLAB_MM))
     for pipe in K.ORDER:
         if only and pipe not in only:
             continue
@@ -399,7 +497,7 @@ def stage1(a, stage_dir, only):
         if pipe not in by:
             continue
         k = 0.0 if pipe in set(filter(None, a.no_blend.split(","))) else a.k
-        U, rep = fuse_and_blend(pipe, by[pipe], k, a.h, a.tile, a.workers)
+        U, rep = fuse_and_blend(pipe, by[pipe], k, a.h, a.tile, a.workers, ends)
         rep["k_mm"] = k
         parts = group_shells(U)
         names = name_parts(pipe, parts, by[pipe])
@@ -417,30 +515,55 @@ def stage2(a, stage_dir, out):
         path = os.path.join(stage_dir, pipe)
         if os.path.exists(path + ".json"):
             tissues[pipe] = load_parts(path)
+    # The canal tissues all end flush in the two cut planes, so cutting one by
+    # another there pits coincident end faces against each other; manifold3d
+    # resolves that differently at each end, and at the top it left the
+    # epidural and CSF with zero-thickness lids over the vessel ends (cream
+    # wedges in FreeCAD, 2026-10-15). So those tissues are carried
+    # END_EXTEND_MM past the planes, cut there, and trimmed back flush: any
+    # debris from the coincident faces lies in the part trimmed off.
+    ends, end_pipes = end_regions(a.src)
+    beyond = [R.trim_by_plane(list(n), off) for R, n, off in ends]
+    log("  canal end planes: %d; cut %.2f mm past them, then trimmed: %s" % (len(ends), END_EXTEND_MM, sorted(end_pipes)))
     outputs, report, higher = [], {"src": a.src, "k_mm": a.k, "h_mm": a.h, "priority": K.ORDER, "tissues": {}}, []
     for pipe in K.ORDER:
         if pipe not in tissues:
             continue
         parts, rep = tissues[pipe]
+        at_ends = pipe in end_pipes
         vol_in, vol_out, n_out = 0.0, 0.0, 0
         for name, members, P in parts:
             vol_in += P.volume()
+            if at_ends:
+                P = past_ends(P, ends)
             bb = np.array(P.bounding_box())
             for hb, H in higher:
                 if boxes_overlap(bb, hb):
                     P = P - H
                     P.num_tri()
+            if at_ends:
+                for B in beyond:
+                    P = P - B
+                P.num_tri()
             # One file per fused part, however many pieces the cut leaves (a
             # root complex is cut by its DRG and by the cord into ~50 pieces;
             # 1,637 separate root files would swamp FreeCAD). Pieces under
-            # MIN_PIECE_MM3 are numerical slivers from grazing contacts.
-            P = K.drop_slivers(P, MIN_PIECE_MM3)
+            # MIN_PIECE_MM3, or on average thinner than MIN_THICKNESS_MM, are
+            # numerical slivers. RADO's touching tissues have surfaces that
+            # nearly coincide and cross back and forth by microns, so cutting
+            # one by the other leaves skins mostly 1-3 um thick. As loose sheets
+            # up to 16 mm long they passed the volume test: 233 in the
+            # vertebrae, as streaks on the canal wall, and 126 of the dura's 128
+            # pieces (2026-10-15).
+            P = drop_thin(P, MIN_PIECE_MM3, MIN_THICKNESS_MM)
             if P.is_empty():
                 continue
             # removes the pinch edges and degenerate triangles that cutting
             # along nearly coincident surfaces leaves (CSF inner vs cord);
             # moves no surface more than 10 nm, so shared faces stay shared
             P = P.simplify(CUT_SIMPLIFY_MM)
+            # simplify can pinch sub-micron crumbs off (29 in the dura)
+            P = drop_thin(P, MIN_PIECE_MM3, MIN_THICKNESS_MM)
             tri = K.manifold_tri(P)
             K.write_stl(os.path.join(out, name), tri, b"src/extend/conform.py")
             au = K.stlio.audit(*K.stlio.weld(K.read_tri(os.path.join(out, name)), tol=1e-9))
@@ -451,8 +574,11 @@ def stage2(a, stage_dir, out):
                             "nonmanifold_edges": au["nonmanifold_edges"]})
             vol_out += P.volume()
             n_out += 1
-        # this tissue's FUSED parts (before its own cut) are what lower tissues lose
-        higher += [(np.array(Pf.bounding_box()), Pf) for _, _, Pf in parts]
+        # this tissue's FUSED parts (before its own cut) are what lower tissues
+        # lose; a canal tissue cuts as carried past the end planes
+        for _, _, Pf in parts:
+            Hc = past_ends(Pf, ends) if at_ends else Pf
+            higher.append((np.array(Hc.bounding_box()), Hc))
         rep.update({"fused_volume_mm3": round(vol_in, 2), "final_volume_mm3": round(vol_out, 2), "bodies_out": n_out})
         report["tissues"][pipe] = rep
         log("  %-12s %.1f mm3 fused -> %.1f mm3 after higher-priority tissues, %d bodies (%.0f s)"

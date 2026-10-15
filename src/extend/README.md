@@ -212,27 +212,51 @@ per-tissue checkpoints in `stage1/`.
 2. **Blend** with a 0.25 mm smooth minimum, only where two pieces meet at
    20° or more. The surface is re-made in 4 mm tiles of one global 0.05 mm
    lattice, so neighbouring tiles join without seams. Then simplify to 5 µm.
+   **At the canal's two cut ends** (RADO's bottom and the extension's top),
+   the exact union replaces the blended surface for 0.3 mm. The planes come
+   from the epidural space's end caps, and each region covers the caps of
+   every body ending in that plane. A first version used only the epidural
+   outline plus 1 mm, and missed a vessel end that sticks out past it. Marching cubes cannot keep a tilted flat end
+   flat. Before this, vessel ends at the top sat up to 0.044 mm short of the
+   plane, and the partition filled the gap with a patchy film of CSF or
+   epidural (Mohamed saw them as smeared vessel ends).
    **Roots are fused but not blended** (`--no-blend root`). RADO's root bodies
    are layered (a core inside a thin middle layer, rootlets side by side), and
    a blend there adds collars and +0.7% (k 0.1) to +3.4% (k 0.25) root volume
    in the rootlet entry zone.
 3. **Partition** by the FEM's priority, piece by piece. Each tissue loses the
-   space any higher-priority fused tissue overlapping it claims.
+   space any higher-priority fused tissue overlapping it claims. Loose pieces
+   under 0.001 mm³, or on average under 50 µm thick (volume / half the
+   area), are dropped as cutting slivers. RADO's touching tissues have
+   surfaces that nearly coincide and cross back and forth by microns, so a cut
+   leaves skins 1–40 µm thick, up to 16 mm long. They passed the volume test
+   alone: 233 in the vertebrae (streaks on the canal wall, noticed by Mohamed
+   in FreeCAD), 126 shells in the dura, 96 in the roots. The thinnest real
+   pieces are 98 µm (a trunk fragment) and up. The filter runs again after the
+   final 10 nm simplify, which can pinch sub-micron crumbs off.
+   **At the two end planes** the canal tissues (grey, white, CSF, dura,
+   epidural, blood) are carried 0.01 mm past the plane, cut there and trimmed
+   back flush. Cut exactly at the plane, their end faces coincide, and
+   manifold3d resolves coincident faces differently at the two ends. At the
+   top it left the epidural and CSF with zero-thickness lids over 40% of the
+   vessel ends (cream wedges in FreeCAD); at the bottom, none. With the trim,
+   the top has 0.02 mm² of such faces on 2.7 mm² of vessel ends, and the
+   bottom still none.
 
-Checked on 2026-10-15, rerun after the top-end fix (see "The top end"):
-- 0 open edges in all 89 bodies. 22 have a few pinch edges, where two pieces
+Checked on 2026-10-15, after the top-end fix, the end slabs, the end-plane
+trim and the sliver filter:
+- 0 open edges in all 89 bodies. 20 have a few pinch edges, where two pieces
   of one body touch after the cut; that does not matter for the inside test.
-  The new one is a single 0.0055 mm edge in the white matter, in the top plane
-  where its end ring meets the grey matter's.
-- `overlap_audit.py`: **0** overlap between different tissues (the source:
-  38.8 cm³), 0 within one.
+- `overlap_audit.py`: no overlap between tissues (the source: 38.8 cm³). One
+  0.25 mm grid point (0.016 mm³) falls on the shared dura/epidural surface.
 - `conform_check.py` on 400,000 points: labels agree with fem's priority
-  labelling of the source set at 99.991% of points spread over the model, and
-  99.51% within ~0.15 mm of a surface. No point is in two bodies. The
-  differences are the rebuilt trunk and the vessel fillets.
-- At the model's top end, the blend's marching cubes bevels the rims of 5 of
-  the 7 small epidural vessels (0.55 mm across) by about one 0.05 mm grid step,
-  where a blend tile around a vessel junction reaches the cut. Cosmetic.
+  labelling of the source set at 99.990% of points spread over the model, and
+  99.47% within ~0.15 mm of a surface. No point is in two bodies. The
+  differences are the rebuilt trunk, the vessel fillets and the dropped
+  10–35 µm dura sheets (58 points).
+- End planes: both ends have flat vessel ends in the plane. The top has
+  0.02 mm² of other tissues' faces on 2.7 mm² of vessel ends; the bottom has
+  none. Every vertebra is one body with no loose pieces.
 
 What the partition shows about RADO, because fem/ already solves it this way:
 - Roots lose 29% of their volume to the DRG (dorsal roots run through it) and
