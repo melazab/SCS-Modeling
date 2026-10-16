@@ -109,6 +109,8 @@ def main():
         accepted_residual=float(result["accepted_residual"]),
         phi_min=float(phi.min()), phi_max=float(phi.max()),
         v_min=float(result["V"].min()), v_max=float(result["V"].max()),
+        fibres=json.loads(str(result.get("fibre_info", "{}"))),
+        dropped_islands=json.loads(str(result.get("dropped_islands", "{}"))),
     )
     print("SOLVE_JSON " + json.dumps(report))
 

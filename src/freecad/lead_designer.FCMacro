@@ -89,8 +89,15 @@ were two buttons once, which meant the interface never said which state you were
 in -- the button now IS the state.
 
 That is the whole design: there is ONE model document, NBF_RADO-SCS.FCStd,
-holding anatomy only -- 240 bodies, 11 groups, no lead of any kind -- and a lead
-is a handful of numbers plus a directory of STLs. Trying ten arrangements must
+holding anatomy only -- the extended T6-T12 model, 503 bodies, no lead of any
+kind -- and a lead is a handful of numbers plus a directory of STLs.
+
+THE CHECKS DO NOT READ THE DOCUMENT. Fit, containment and DRG checks load the
+anatomy as STL files from disk (src/freecad/anatomy.py): by default the
+extended model's separate bodies in fem/out/geometry/rado_up4, the same bodies
+the document shows and the source of the fused set the FEM meshes. Levels
+T6-T12 come from lead_defaults.yaml; ganglia L1_T6 .. R1_T9 are the extended
+levels' copies of L1 and R1. Trying ten arrangements must
 not mean ten copies of a 25 MB document. Explore, export the one you want, and
 close the document WITHOUT SAVING.
 
@@ -386,7 +393,9 @@ class LeadPage(QtWidgets.QWidget):
         if name != CUSTOM:
             self.loading = True
             try:
-                self.z_center.setValue(float(self.panel.cfg["levels"][name]))
+                # A ventral lead reaches the extended levels at a different z
+                # (lead_defaults.yaml, ventral_levels).
+                self.z_center.setValue(self.panel.blc.level_z(self.panel.cfg, self.kind, name))
             finally:
                 self.loading = False
         self.touched()
@@ -452,10 +461,12 @@ class LeadPage(QtWidgets.QWidget):
         if not g:
             self.ganglion_note.setText("")
             return
+        where = ("a copy of %s at the %s level (extended model), " % (g["copy_of"], g["level"])
+                 if g.get("copy_of") else "")
         self.ganglion_note.setText(
-            "%s side, ganglion centre %.1f mm from the midline; the foramen is a "
+            "%s side, %sganglion centre %.1f mm from the midline; the foramen is a "
             "measurable channel from %.1f to %.1f mm out."
-            % (g["side"], g["ganglion_u_centre"], g["usable_u"][0], g["usable_u"][1]))
+            % (g["side"], where, g["ganglion_u_centre"], g["usable_u"][0], g["usable_u"][1]))
 
     # -- reading and writing ----------------------------------------------
     def load(self, params):
@@ -524,7 +535,9 @@ class LeadDesigner(QtWidgets.QWidget):
             self.foramen = blc.load_foramen_corridors()["ganglia"]
         except Exception:
             self.foramen = {}
-        self.ganglia = sorted(self.foramen) or ["L3"]
+        # Left then right, each rostral to caudal: L1_T6 .. L1_T9, L1 .. L4.
+        self.ganglia = sorted(self.foramen, key=lambda t: (
+            self.foramen[t]["side"] != "left", -self.foramen[t]["ganglion_centroid"][2])) or ["L3"]
 
         self.meshes = None                  # loaded lazily; several MB of STL
         self.outcome = None                 # last validation, for Preview/Export
@@ -641,12 +654,12 @@ class LeadDesigner(QtWidgets.QWidget):
     # absorb the recovery's own error (~0.02 mm, measured).
     LEVEL_MATCH_MM = 0.1
 
-    def level_for_z(self, z):
+    def level_for_z(self, z, kind="dorsal"):
         """Name the vertebral level a recovered z_center sits at, else CUSTOM."""
         best, best_d = None, self.LEVEL_MATCH_MM
-        for name, lz in (self.cfg.get("levels") or {}).items():
+        for name in (self.cfg.get("levels") or {}):
             try:
-                d = abs(float(lz) - float(z))
+                d = abs(self.blc.level_z(self.cfg, kind, name) - float(z))
             except (TypeError, ValueError):
                 continue
             if d <= best_d:
@@ -697,7 +710,7 @@ class LeadDesigner(QtWidgets.QWidget):
                                                self.tabs.count() + 1, 1)
                 for key in rec["_recovered"]:
                     params[key] = rec[key]
-                params["level"] = self.level_for_z(params["z_center"])
+                params["level"] = self.level_for_z(params["z_center"], kind)
                 if self.add_lead(kind, params) is not None:
                     loaded += 1
                     if rec["_label_type"] is None:

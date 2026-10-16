@@ -173,6 +173,41 @@ def sweep_path(segments, point_of, radius, contact_thickness=None):
     return shapes
 
 
+def arc_length_path(x, y_of_z, z_lo, z_hi, step=0.02):
+    """(s_of_z, point_of_s) for the curve (x, y(z), z) over z_lo..z_hi.
+
+    WHY ARC LENGTH. segment_plan() lays contacts and gaps out along its
+    parameter, and sweep_path() puts each cylinder between point_of(t) and
+    point_of(t + length). With t = z, a contact planned as 3 mm comes out
+    3 mm / cos(tilt) long on a canal tilted from z: 3.05 mm at RADO's T11,
+    3.2 mm at T12 (~20 deg) and 3.3 mm at T6 (~23 deg) in the extended model.
+    Parametrising by arc length makes every contact and gap its planned
+    length wherever the lead sits. (Each cylinder is the chord of its 3 mm of
+    arc; on a canal curving at R >= 300 mm the two differ by ~1e-5 mm.)
+
+    s is measured from z_lo along the curve, sampled every `step` mm of z and
+    interpolated linearly; point_of_s(s) = (x, y(z(s)), z(s)).
+    """
+    import numpy as np
+    n = max(2, int(math.ceil((z_hi - z_lo) / step)) + 1)
+    zs = np.linspace(z_lo, z_hi, n)
+    ys = np.array([y_of_z(float(z)) for z in zs])
+    s = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(zs), np.diff(ys)))])
+
+    def s_of_z(z):
+        if not z_lo - 1e-9 <= z <= z_hi + 1e-9:
+            raise ValueError("z %.2f outside the path z %.2f..%.2f" % (z, z_lo, z_hi))
+        return float(np.interp(z, zs, s))
+
+    def point_of_s(t):
+        if not -1e-9 <= t <= s[-1] + 1e-9:
+            raise ValueError("arc length %.2f outside the path 0..%.2f" % (t, s[-1]))
+        z = float(np.interp(t, s, zs))
+        return (x, y_of_z(z), z)
+
+    return s_of_z, point_of_s
+
+
 def sweep_segments(segments, x, y_of_z, radius):
     """Sweep a rostro-caudal lead: the dorsal/ventral case of sweep_path().
 
@@ -230,12 +265,19 @@ def main():
     if side not in corridor["sides"]:
         raise SystemExit("side must be dorsal or ventral")
     s = corridor["sides"][side]
-    coef = s["centre_poly_coef_high_to_low"]
     z_usable = s["usable_z"]
     if z_center is None:
         z_center = 0.5 * (z_usable[0] + z_usable[1])
 
-    segments, z0, total = segment_plan(n_contacts, c_len, gap, tail, z_center)
+    # The stored stations cover the whole canal; one cubic cannot (it turns
+    # ~43 deg over T6-T12), so fit one around this lead only. MIDLINE ONLY:
+    # build_lead_config.py re-measures at any other x.
+    half = 0.5 * (n_contacts * c_len + (n_contacts - 1) * gap + 2 * tail) + 6.0
+    from measure_corridor import local_fit
+    y_of_z = local_fit(s["stations"], z_center - half, z_center + half)
+    s_of_z, point_of = arc_length_path(x, y_of_z, z_center - half, z_center + half)
+    segments, t0, total = segment_plan(n_contacts, c_len, gap, tail, s_of_z(z_center))
+    z0 = point_of(t0)[2]
     r = 0.5 * dia
 
     tag = tag or "%s_z%.0f_%dc" % (side, z_center, n_contacts)
@@ -247,20 +289,21 @@ def main():
     log = lines.append
     log("SCS lead: %s, %d contacts x %.2f mm, %.2f mm gaps, %.2f mm dia"
         % (side, n_contacts, c_len, gap, dia))
-    log("swept along the measured %s centreline; x = %.2f, z %.2f..%.2f (centre %.2f)"
-        % (side, x, z0, z0 + total, z_center))
+    z_end = point_of(t0 + total)[2]
+    log("swept along the measured %s centreline by arc length; x = %.2f, z %.2f..%.2f (centre %.2f)"
+        % (side, x, z0, z_end, z_center))
     log("channel thickness there: min %.2f mm, median %.2f mm"
         % (s["thickness_min_mm"], s["thickness_median_mm"]))
     if dia > s["thickness_min_mm"]:
         log("WARNING: %.2f mm lead exceeds the %.2f mm minimum channel thickness -- it "
             "will overlap dura or the canal wall somewhere along its length."
             % (dia, s["thickness_min_mm"]))
-    if z0 < z_usable[0] or z0 + total > z_usable[1]:
+    if z0 < z_usable[0] or z_end > z_usable[1]:
         log("WARNING: lead spans z %.1f..%.1f but the centreline is only measured "
             "over %.1f..%.1f; ends are extrapolated."
-            % (z0, z0 + total, z_usable[0], z_usable[1]))
+            % (z0, z_end, z_usable[0], z_usable[1]))
 
-    shapes = sweep_segments(segments, x, lambda z: polyval(coef, z), r)
+    shapes = sweep_path(segments, point_of, r)
 
     doc = App.newDocument("scs_lead")
     written = []
@@ -271,26 +314,26 @@ def main():
         obj.Shape = shape
         p = os.path.join(outdir, "SCS Lead Electrode %d.stl" % idx)
         Mesh.export([obj], p)
-        written.append((os.path.basename(p), zs, ln, polyval(coef, zs)))
+        written.append((os.path.basename(p), point_of(zs)[2], ln, point_of(zs)[1]))
 
     ins = doc.addObject("Part::Feature", "insulator")
     ins.Shape = fuse_insulator(shapes)
     pi = os.path.join(outdir, "SCS Lead Insulator.stl")
     Mesh.export([ins], pi)
-    written.append((os.path.basename(pi), z0, total, polyval(coef, z0)))
+    written.append((os.path.basename(pi), z0, total, point_of(t0)[1]))
 
-    tilt = math.degrees(math.atan2(polyval(coef, z0 + total) - polyval(coef, z0), total))
+    y0, y1 = point_of(t0)[1], point_of(t0 + total)[1]
+    tilt = math.degrees(math.atan2(y1 - y0, z_end - z0))
     log("")
     log("centreline y: %.2f at the caudal end -> %.2f at the rostral end (%.2f mm rise, %.1f deg)"
-        % (polyval(coef, z0), polyval(coef, z0 + total),
-           polyval(coef, z0 + total) - polyval(coef, z0), tilt))
+        % (y0, y1, y1 - y0, tilt))
     log("")
     log("wrote %d files to %s" % (len(written), outdir))
     for name, zs, ln, y in written:
         log("   %-30s z0 %7.2f  len %6.2f  y %6.2f" % (name, zs, ln, y))
     log("")
     log("contact centres (z, y): " + ", ".join(
-        "(%.1f, %.2f)" % (sz + 0.5 * sl, polyval(coef, sz + 0.5 * sl))
+        "(%.1f, %.2f)" % (point_of(sz + 0.5 * sl)[2], point_of(sz + 0.5 * sl)[1])
         for k, _, sz, sl in segments if k == "contact"))
 
     open(os.path.join(outdir, "lead_report.txt"), "w").write("\n".join(lines) + "\n")

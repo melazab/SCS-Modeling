@@ -13,6 +13,15 @@ bytes, and comparing the bytes is how you find out.
 
 It has caught real drift twice. It is not a formality.
 
+RE-PINNED 2026-10-15, deliberately: dorsal and ventral leads are now laid out
+by ARC LENGTH along the canal (make_scs_lead.arc_length_path), so a 3 mm
+contact is 3 mm along the curve instead of 3 mm in z (it was 3.05 mm at this
+z, 3.2-3.3 mm at the 20-23 deg ends of the extended T6-T12 canal), and the
+centreline is fitted locally from the extended model's corridor stations. Both
+files were rebuilt from the parameters below. Nothing in fem/ was meshed from
+these two directories; the frozen field-of-record lead is fem/leads/
+fem_dorsal_T10, a separate copy.
+
 This used to be an entry in a `configs:` catalogue -- "export dorsal_z110_8c and
 diff it". The catalogue is gone (see build_lead_config.py's docstring), so the
 two parameter sets live HERE, written out in full, which is strictly better for
@@ -153,7 +162,7 @@ def check_drg(say):
 
     ok = True
     say("=" * 72)
-    say("DRG -- RADO's own lead, copied onto all eight ganglia")
+    say("DRG -- RADO's own lead, copied onto every ganglion (RADO's eight and the extended levels' copies)")
 
     # 0. the constant is not stale: re-derive which ganglion RADO's lead is on.
     foramen = rdl.load_foramen()
@@ -308,7 +317,7 @@ def main():
         write(out)
         return 1
     say("all %d swept leads reproduced their %d committed STLs byte for byte, "
-        "and the DRG fixture holds on all eight ganglia",
+        "and the DRG fixture holds on every ganglion",
         len(CASES), len(CASES) * len(EXPECTED))
     say("")
     say("RESULT: PASS")

@@ -28,7 +28,9 @@ src/freecad/drop_rado_lead_report.txt
 src/freecad/test_regression_report.txt
 src/freecad/foramen_report.txt
 
-# THERE IS ONE MODEL DOCUMENT: NBF_RADO-SCS.FCStd, holding anatomy only.
+# THERE IS ONE MODEL DOCUMENT PER ANATOMY SET, anatomy only: NBF_RADO-SCS.FCStd
+# (separate bodies, read by the Lead Designer) and NBF_RADO-SCS_extended.FCStd
+# (the fused set the FEM meshes; see the exception at the bottom).
 #
 # NBF_RADO-SCS_dorsal.FCStd and _ventral.FCStd used to be tracked here, one per
 # arm of the dorsal-vs-ventral study, built by make_lead_variants.py. They are
@@ -77,6 +79,9 @@ docs/*.pdf
 # model; every variant is reproducible from its Lead Designer parameters, so
 # tracking 80 MB binaries per placement buys nothing.
 NBF_RADO-SCS_*.FCStd
+# Not a lead variant: the fused T6-T12 anatomy the FEM meshes (2026-10-16),
+# anatomy only, with hand-made grouping and labels a headless run cannot rebuild.
+!NBF_RADO-SCS_extended.FCStd
 
 # The poster itself lives in Box; poster.pptx is a symlink to it and would be a
 # dangling link in any clone. Review copies and exports are one-offs.

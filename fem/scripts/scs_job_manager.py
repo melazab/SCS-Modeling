@@ -10,6 +10,9 @@ except ImportError:
 import scs_jobs as J
 from scs_job_service import service
 
+# Read-only cluster check (scs_jobs.ssh_probe_args). See check_connection().
+PROBE_TIMEOUT_MS = 90000
+
 
 class JobManager(QtWidgets.QWidget):
     def __init__(self):
@@ -176,9 +179,16 @@ class JobManager(QtWidgets.QWidget):
         self.probe.errorOccurred.connect(self.probe_error)
         self.check.setEnabled(False);self.notice.setText('Checking the cluster…')
         self.probe.start('ssh',args)
+        # The cluster Python's first import of numpy/scipy/gmsh/vtk from the
+        # NFS home takes ~16 s when cold (5 s warm), measured 2026-10-15; a 20 s
+        # limit killed healthy checks and reported "exit code 9".
+        self.probe_timed_out=False
         self.probe_timeout=QtCore.QTimer(self);self.probe_timeout.setSingleShot(True)
-        self.probe_timeout.timeout.connect(self.probe.kill);self.probe_timeout.start(20000)
+        self.probe_timeout.timeout.connect(self.probe_expired);self.probe_timeout.start(PROBE_TIMEOUT_MS)
         self.probe_text='Checking the cluster…';self.show_details()
+
+    def probe_expired(self):
+        self.probe_timed_out=True;self.probe.kill()
 
     def probe_error(self,error):
         self.check.setEnabled(True)
@@ -189,6 +199,10 @@ class JobManager(QtWidgets.QWidget):
         self.probe_timeout.stop();self.check.setEnabled(True)
         output=bytes(self.probe.readAllStandardOutput()).decode('utf8','replace')
         verdict,details=J.describe_probe(code,output,self.probe_profile)
+        if self.probe_timed_out:
+            verdict=('Timed out after %d s, with the steps above done. The usual cause is the '
+                     'cluster Python importing numpy/scipy/gmsh/vtk from a cold NFS cache; '
+                     'check again.' % (PROBE_TIMEOUT_MS//1000))
         self.notice.setText(verdict)
         self.probe_text=verdict+'\n\n'+details+'\n\nNothing was submitted. Click a job row to return to job details.'
         self.show_details()

@@ -5,7 +5,8 @@
 # default fem/out/geometry/rado_up4_conformal. Groups, labels and colours are
 # taken from the open template document (NBF_RADO_SCS) when it is open: each
 # body gets the label of its largest member, plus "(fused, N parts)".
-# Nothing is saved; save from the GUI if you want to keep it.
+# Nothing is saved; save from the GUI as NBF_RADO-SCS_extended.FCStd (repo root)
+# if you want to keep it. An open copy with unsaved changes is never replaced.
 import json
 import os
 import re
@@ -15,7 +16,8 @@ import Mesh
 
 ROOT = "/home/mohamed/Projects/SCS-Modeling"
 SRC = os.environ.get("SCS_CONFORMAL_DIR", os.path.join(ROOT, "fem/out/geometry/rado_up4_conformal"))
-DOC = "RADO_conformal_preview"
+DOC = "NBF_RADO_SCS_extended"          # FreeCAD names cannot hold "-"
+LABEL = "NBF_RADO-SCS_extended"
 GROUPS = {"vertebra": "01 Vertebrae", "disc": "02 Discs", "blood": "03 Vasculature", "epidural": "04 Epidural space",
           "dura": "05 Dura and meninges", "csf": "06 CSF", "white": "07 White matter", "grey": "08 Grey matter",
           "root": "09 Nerve roots", "drg": "10 DRG", "sympathetic": "11 Sympathetic chain"}
@@ -31,8 +33,11 @@ def main():
     report = json.load(open(os.path.join(SRC, "conform_report.json")))
     tmpl = App.listDocuments().get("NBF_RADO_SCS")
     if DOC in App.listDocuments():
+        import FreeCADGui as Gui
+        if Gui.getDocument(DOC).Modified:
+            raise SystemExit("%s has unsaved changes; save or close it first" % LABEL)
         App.closeDocument(DOC)
-    doc = App.newDocument(DOC)
+    doc = App.newDocument(DOC, LABEL)
     groups = {}
     for pipe, label in GROUPS.items():
         groups[pipe] = doc.addObject("App::DocumentObjectGroup", "G_" + pipe)

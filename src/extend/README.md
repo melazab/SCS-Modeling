@@ -172,22 +172,27 @@ manifest; a failure becomes a warning.
 `extension_check.png` shows the true midsagittal plane (the arc through all
 seven vertebrae) and a curved coronal section along the cord.
 
-## Using the set in the FEM
+## Using the set in the FEM and the Lead Designer (wired in 2026-10-15)
 
-The `fem/` box mesher labels tets by "inside any body of this class", using
-one point-in-shell tester per body. To mesh this set, `fem/` needs a way to
-point at a geometry directory instead of `STL_files/`. The 5-entry
-`config.TISSUE_STL` (one path per primary compartment, used for size fields,
-the cost model and the visualiser surfaces) must then name the extended
-bodies (`<stem>__extended_up4.STL`). Each is one closed shell, so one path per
-compartment still works. Those files belong to the fem/HPC work and are not
-changed here.
+- **FEM:** `fem/scripts/config.py` meshes the FUSED set
+  (`rado_up4_conformal`, below) by default. `SCS_GEOMETRY=rado` selects RADO's
+  own `STL_files/`. `config.TISSUE_STL` finds the five primary bodies by RADO
+  stem in either set. White-matter fibres follow `centreline.json`.
+- **Lead Designer:** `src/freecad/anatomy.py` points the fit checks at THIS
+  set (`rado_up4`), whose separate bodies are what `NBF_RADO-SCS.FCStd` shows.
+  It also still has the per-foramen blocks and ganglia a DRG lead needs.
+- **Pinned to RADO's originals:** this directory's `extend_rado.py` (it reads
+  RADO as its source) and the atlas scripts pin `SCS_GEOMETRY=rado`.
+- **Document:** `NBF_RADO-SCS_extended.FCStd` (repo root) is the fused set as
+  FreeCAD shows it: 89 bodies in an "Anatomy" group of tissue groups, plus T6–T12
+  vertebra labels (`src/freecad/add_vertebra_labels.py`). `load_conformal.FCMacro`
+  rebuilds the bodies and tissue groups from the set; the "Anatomy" group and the
+  labels were added by hand afterwards. Save from the GUI, never `freecadcmd`.
 
-Expected cost: the model grows from z ≈ 48–176 mm to about 48–290 mm. At
-poster mesh settings, expect ~2.2× the tetrahedra.
-
-A free side result: solving the existing T10 leads on both geometries measures
-how much the original model's short length was truncating the field.
+The model grows from z ≈ 48–176 mm to about 47–288 mm. At the poster's mesh
+settings the whole fused model is ~33.5 M tets, and ~16.5 M with the
+Mesh Generator's 50 mm crop around the lead; fem/README.md has the measured
+truncation error.
 
 ## Fused, blended and overlap-free: `conform.py`
 

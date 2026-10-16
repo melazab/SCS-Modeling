@@ -10,11 +10,16 @@ def batch_size():
     return max(1, min(100_000, int(memory * 1e9 * .02 / 1024)))
 
 
-def elements(nodes, tets, sigma, batch=None):
+def elements(nodes, tets, sigma, batch=None, fibre=None):
     """Yield (start, positive volumes in m^3, local stiffness matrices).
 
     Signed Jacobian inversion handles either orientation. Absolute volume
     supplies the integration weight; connectivity need not be copied/flipped.
+
+    `sigma` is each element's isotropic (or, if anisotropic, transverse)
+    conductivity. `fibre` is (fibre_bin, fibre_a) from fibres.fibre_field():
+    an element with fibre_bin >= 0 has conductivity sigma I + a a^T with
+    a = fibre_a[fibre_bin], so its stiffness gains vol (G a)(G a)^T.
     """
     batch = batch_size() if batch is None else int(batch)
     if batch < 1:
@@ -36,14 +41,20 @@ def elements(nodes, tets, sigma, batch=None):
         g[:, 0] = -g[:, 1:].sum(axis=1)
         ke = np.einsum('eik,ejk->eij', g, g)
         ke *= (sigma[start:start + len(tet)] * volume)[:, None, None]
+        if fibre is not None:
+            fb = fibre[0][start:start + len(tet)]
+            m = fb >= 0
+            if m.any():
+                ga = np.einsum('eik,ek->ei', g[m], fibre[1][fb[m]])
+                ke[m] += volume[m][:, None, None] * ga[:, :, None] * ga[:, None, :]
         yield start, volume, ke
 
 
-def assemble(nodes, tets, sigma, batch=None):
+def assemble(nodes, tets, sigma, batch=None, fibre=None):
     """Reference sparse assembly without global element matrices/triplets."""
     matrix = sp.csr_matrix((len(nodes), len(nodes)), dtype=np.float64)
     volumes = np.empty(len(tets))
-    for start, vol, ke in elements(nodes, tets, sigma, batch):
+    for start, vol, ke in elements(nodes, tets, sigma, batch, fibre):
         tet = tets[start:start + len(vol)]
         volumes[start:start + len(vol)] = vol
         rows = np.repeat(tet, 4, axis=1).ravel()
@@ -53,10 +64,10 @@ def assemble(nodes, tets, sigma, batch=None):
     return matrix, volumes, tets
 
 
-def action(nodes, tets, sigma, values, batch=None):
+def action(nodes, tets, sigma, values, batch=None, fibre=None):
     """Compute A @ values without constructing the global sparse matrix."""
     result = np.zeros(len(nodes))
-    for start, vol, ke in elements(nodes, tets, sigma, batch):
+    for start, vol, ke in elements(nodes, tets, sigma, batch, fibre):
         tet = tets[start:start + len(vol)]
         local = np.einsum('eij,ej->ei', ke, values[tet])
         np.add.at(result, tet.ravel(), local.ravel())

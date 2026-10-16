@@ -36,7 +36,7 @@ one with a plain QProcess of its own.
 PROTOCOL
     stdout, first line:  {"ready": true, "ram_gb": 30.4, "n_samples": 123456}
     stdin,  per request: {"id": 7, "H_MIN": 0.2, "H_MAX": 2.5,
-                          "FIELDS": [["dura",0.25,0.4,1.0], ...]}
+                          "FIELDS": [["dura",0.25,0.4,1.0], ...], "CROP_MM": 0}
     stdout, per reply:   {"id": 7, "sev": "ok", "text": "3.5 M tets, ...",
                           "n_tets": 3500000.0, "ram_gb_lo": ..., "ram_gb_hi": ...,
                           "mesh_seconds": ...}
@@ -65,7 +65,8 @@ def _params_from(req):
     estimate (the estimator has its own ESTIMATE_GRID_MM)."""
     return dict(H_MIN=float(req["H_MIN"]), H_MAX=float(req["H_MAX"]),
                 FIELDS=[(str(f[0]), float(f[1]), float(f[2]), float(f[3]))
-                        for f in req["FIELDS"]])
+                        for f in req["FIELDS"]],
+                CROP_MM=float(req.get("CROP_MM", 0.0) or 0.0))
 
 
 def main():

@@ -49,7 +49,9 @@ def model_signature(stage='mesh'):
         # 2e-9 of span against the workstation) permanently invalid locally.
         # The solution records which build produced it (elmer_bin, elmer_version).
         names += ['assign_and_solve.py', 'solve_lead.py', 'element_batches.py',
-                  'elmer_backend.py', 'solve_resources.py']
+                  'elmer_backend.py', 'solve_resources.py', 'fibres.py']
+        if C.SIGMA_ANISO:
+            paths.append(C.FIBRE_CENTRELINE)
     paths += [str(here / name) for name in names]
     # Classification shares a module with the solver. Hash its actual code
     # separately, so changing CG/AMG does not invalidate a completed mesh.

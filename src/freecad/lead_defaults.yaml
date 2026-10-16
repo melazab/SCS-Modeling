@@ -22,7 +22,9 @@
 # THE DURABLE ARTEFACTS
 # ---------------------
 # There is exactly ONE model document, NBF_RADO-SCS.FCStd, and it holds ANATOMY
-# ONLY -- 240 bodies in 11 groups, no lead of any kind. A lead is geometry
+# ONLY -- the extended T6-T12 model, 503 bodies, no lead of any kind. (The fit
+# checks do not read it: they load the same bodies as STLs from disk, see
+# src/freecad/anatomy.py.) A lead is geometry
 # generated on demand: previewed into the open document as disposable bodies,
 # exported to src/freecad/generated_leads/<name>/ when it is worth keeping, and
 # the document closed WITHOUT SAVING.
@@ -111,10 +113,47 @@ max_leads_per_type: 2
 # Use a level by naming it instead of z_center:  `--level T10`, or the combo box.
 # z_center is the centre of the contact array (the tails are symmetric, so it is
 # also the centre of the whole lead).
+#
+# T6-T9 AND THE DISCS ABOVE T9-T10 ARE THE EXTENDED MODEL'S (2026-10-15).
+# Each new level k is RADO's own top vertebral step S applied k times to the
+# T10 level (src/extend/extend_rado.py, manifest step.S), so the number here is
+# the z of S^k applied to the point where a midline lead at RADO's T10 (or disc)
+# z sits in the channel. A "T7" lead therefore sits on T7 exactly as a T10 lead
+# sits on T10. The canal leans further from vertical each level up (23 deg at
+# T6), so the dorsal and ventral channels reach the same level at different z:
+# 5 mm apart at T6. `levels` is the DORSAL channel's; `ventral_levels` below
+# is the ventral one's, and a ventral lead uses that. RADO's own three levels
+# are the vertebral body's z, as before, for both.
 levels:
+  T6: 263.03              # extended model
+  T7: 232.72              # extended model
+  T8: 201.70              # extended model
+  T9: 170.30              # extended model
   T10: 138.83             # body spans z 129.02 .. 148.63 (19.6 mm)
   T11: 110.26             # body spans z 102.11 .. 118.41 (16.3 mm)
   T12: 80.44              # body spans z  73.45 ..  87.42 (14.0 mm)
+  T5-T6_disc: 275.79      # extended model
+  T6-T7_disc: 245.92      # extended model
+  T7-T8_disc: 215.20      # extended model
+  T8-T9_disc: 183.94      # extended model
+  T9-T10_disc: 152.49
+  T10-T11_disc: 123.71
+  T11-T12_disc: 94.76
+  T12-L1_disc: 66.28
+
+# The same levels for a VENTRAL lead (see above). Same names, same order.
+ventral_levels:
+  T6: 258.03
+  T7: 228.93
+  T8: 199.15
+  T9: 169.01
+  T10: 138.83
+  T11: 110.26
+  T12: 80.44
+  T5-T6_disc: 270.81
+  T6-T7_disc: 242.14
+  T7-T8_disc: 212.65
+  T8-T9_disc: 182.67
   T9-T10_disc: 152.49
   T10-T11_disc: 123.71
   T11-T12_disc: 94.76

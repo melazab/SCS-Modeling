@@ -65,6 +65,7 @@ against FreeCAD 26.3.0 / Python 3.14.4.
 | `test_regression.py` | `freecadcmd` | rebuilds the two committed leads and asserts their 18 STLs are byte-identical |
 | `make_tissue_groups.py` | running FreeCAD GUI | puts every body in a group named for its tissue |
 | `drop_rado_lead.py` | running FreeCAD GUI | strips RADO's own 4-contact DRG lead, and its two now-empty groups, out of the anatomy document |
+| `add_vertebra_labels.py` | running FreeCAD GUI | puts a T6–T12 Draft Label beside each vertebra, in a "Labels" group; view-only, never read by the mesh or solve |
 | `check_laterality.py` | `python3` | re-derives left/right from geometry and validates `body_aliases.yaml` |
 | `find_floating_bodies.py` | `python3` | proximity graph over the STL surfaces; finds electrically isolated islands |
 
@@ -326,11 +327,36 @@ volume they share and how much of one lead's sampled surface is inside the other
 Both leads of that second pair fit the channel perfectly well on their own; that
 is the whole point of checking the set as well as each lead.
 
-Lateral offsets get their **own** centreline. The stored polynomial in
-`epidural_corridor.json` is measured at the midline, and the channel centre
-migrates about 1.1 mm of *y* by 4 mm off-midline, so `build_lead_config.py`
-re-ray-casts and re-fits at the requested *x*. At the midline it uses the stored
-fit and prints how far the two disagree, so they cannot drift apart unnoticed.
+Every lead gets its **own** centreline, ray cast every 1 mm at its own *x* over
+its own span and fitted with a cubic there. (The channel centre migrates about
+1.1 mm of *y* by 4 mm off-midline, and the extended canal turns ~43° between
+T12 and T6, which no single polynomial follows.) `epidural_corridor.json` holds
+the midline stations every 2 mm over the whole canal, and the report prints how
+far a midline lead's curve strays from them.
+
+### The anatomy the checks read (2026-10-15)
+
+None of these checks reads the open document. They load STL files from disk,
+and `anatomy.py` says which set: by default the extended T6–T12 model's
+separate bodies, `fem/out/geometry/rado_up4/`. That is the same set
+`NBF_RADO-SCS.FCStd` shows, and the source of the fused set the FEM meshes.
+It is generated, so run `src/extend/extend_rado.py` if it is missing.
+`SCS_GEOMETRY=rado` switches both this and the FEM back to RADO's own
+`STL_files/`. After changing the set, re-run `measure_corridor.py` and
+`measure_foramen.py`.
+
+Three changes came with the extended model:
+
+- **Contacts are laid out along the curve, not along z.** `make_scs_lead.
+  arc_length_path()` gives every contact and gap its planned length along the
+  canal. With z as the parameter, a 3 mm contact came out 3 mm / cos(tilt):
+  3.05 mm at T11, 3.2 mm at T12 and 3.3 mm at T6. The two committed regression
+  leads were rebuilt for this.
+- **Channel thickness is measured normal to the canal.** A +Y ray reads a
+  tilted channel as thicker than it is, by 6–9 % at the 20–23° ends.
+- **The top of the canal ends in a tilted plane**, so above z ≈ 278 only the
+  dorsal fat remains. Single-channel slices that continue the dorsal curve are
+  accepted there, which takes the dorsal corridor to z = 285.4.
 
 ### Vertebral levels
 
@@ -344,6 +370,23 @@ anterior mass of each vertebra STL — the two derivations agree to 0.6 mm.
 are T10–T12, while the paper says T9–T11 and RADO's filenames say “T8-10”. All
 three disagree and nothing in the geometry settles it. The *z* coordinates are
 solid; the level *names* are RADO's, taken at face value.
+
+**T6–T9 (extended model).** Level k above T10 is RADO's own top vertebral step
+S applied k times (`src/extend/extend_rado.py`). So the `levels` value is the z
+of S^k applied to the point where a midline lead at T10's z sits in the
+channel, and a T7 lead sits on T7 exactly as a T10 lead sits on T10. The canal
+leans further from vertical each level up, so the ventral channel reaches the
+same level about 5 mm lower at T6. Ventral leads therefore read
+`ventral_levels`; the dorsal and ventral values are equal for RADO's own three
+levels.
+
+**Extended DRG targets.** The copied ganglia are targets `L1_T9`…`L1_T6` and
+`R1_T9`…`R1_T6`, matching the tree labels "DRG L1 — ganglion core [T9 level]".
+`measure_foramen.py` records each copy's S^k. `rado_drg_lead.py` builds the
+copy's frame as S^k of L1's or R1's frame, and checks that the copy's
+centroid lands where that predicts. A lead on `L1_T7` is therefore RADO's lead
+on L1, moved up three levels. RADO's own eight targets and their corridors are
+unchanged.
 
 ## Generated output, and why there is no `.FCStd` per lead
 

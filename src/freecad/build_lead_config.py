@@ -70,15 +70,20 @@ principle that a typo'd `diamter: 2.0` is an error rather than a silently kept
 default -- and so, now, is `contacts` on a DRG lead, which is not a typo but a
 request for something this type of lead cannot do.
 
-WHY LATERAL OFFSETS RE-MEASURE THE CENTRELINE
----------------------------------------------
-epidural_corridor.json holds the centreline y(z) measured at the MIDLINE. The
-channel centre moves as you go lateral -- about 1.1 mm of y at 4 mm off the
-midline -- so a lead swept along the midline curve at x = midline + 4 sits about
-half its clearance off centre before it has done anything else. Any lead with a
-non-zero x_offset therefore gets its own centreline, ray cast and fitted at ITS
-x over ITS z span. At x_offset = 0 this reproduces the stored polynomial; the
-report prints the agreement so the two can never silently diverge.
+WHY EVERY LEAD RE-MEASURES ITS CENTRELINE
+-----------------------------------------
+epidural_corridor.json holds the channel measured at the MIDLINE, every 2 mm
+over the whole canal. The channel centre moves as you go lateral -- about 1.1 mm
+of y at 4 mm off the midline -- and the extended T6-T12 canal turns ~43 deg,
+which no single polynomial follows. So every lead gets its own centreline, ray
+cast and fitted at ITS x over ITS z span, and is swept along it by ARC LENGTH
+(make_scs_lead.arc_length_path) so its contacts are their planned length on a
+tilted canal. At x_offset = 0 the report prints how far that curve strays from
+the stored stations, so the two can never silently diverge.
+
+THE ANATOMY IS READ FROM DISK, NOT FROM THE DOCUMENT: anatomy.py says which STL
+set -- by default the extended model's separate bodies (fem/out/geometry/
+rado_up4), the same ones NBF_RADO-SCS.FCStd shows.
 
 The DRG side does the same thing for the same reason: the stored quartic in
 foraminal_corridors.json is the reference, and the block is re-measured along
@@ -226,15 +231,23 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 DEFAULTS_YAML = os.path.join(HERE, "lead_defaults.yaml")
 DEFAULT_CORRIDOR = os.path.join(HERE, "epidural_corridor.json")
 DEFAULT_FORAMEN = os.path.join(HERE, "foraminal_corridors.json")
-DEFAULT_STL = os.path.join(REPO, "STL_files")
 DEFAULT_OUT = os.path.join(HERE, "generated_leads")
 DEFAULT_REPORT = os.path.join(HERE, "build_lead_config_report.txt")
 
-MIDLINE_X = 56.60
-EPIDURAL_STL = "T8-10 - neuro_EpiduralSpace-1.STL"
-DURA_STL = "T8-10 - neuro_Meninges-1.STL"
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import anatomy  # noqa: E402
 
-# RADO's own 4-contact DRG lead, as it ships in STL_files/. Not part of any
+# The anatomy every check reads, from disk -- never from the open document.
+# Default: the extended T6-T12 model as separate bodies (anatomy.py).
+DEFAULT_STL = anatomy.STL_DIR
+
+MIDLINE_X = 56.60
+EPIDURAL_STL = anatomy.stl_name("neuro_EpiduralSpace-1")
+DURA_STL = anatomy.stl_name("neuro_Meninges-1")
+
+# RADO's own 4-contact DRG lead, as it ships in STL_files/ (copied unchanged
+# into the extended set). Not part of any
 # generated lead -- it is the independent reference the DRG trajectory is
 # checked against by compare_rado(); the parameters that reproduce it are in
 # this module's docstring, under USAGE.
@@ -451,6 +464,10 @@ def parse_defaults_file(path=None):
             raise ValueError("%s: no %r section" % (path, required))
     top.setdefault("epidural_defaults", {})
     top.setdefault("drg_defaults", {})
+    top.setdefault("ventral_levels", {})
+    extra = sorted(set(top["ventral_levels"]) - set(top["levels"]))
+    if extra:
+        raise ValueError("%s: ventral_levels names %s, which `levels` does not" % (path, ", ".join(extra)))
     top.setdefault("max_leads_per_type", DEFAULT_MAX_LEADS_PER_TYPE)
     return top
 
@@ -615,7 +632,7 @@ def resolve_lead(cfg, entry, index=1, of=1, overrides=None):
             # z_center wins; that is what "later wins" means when both are
             # present, and the only way to tell is which layer each came from.
             if _layer_of("z_center", layers) <= _layer_of("level", layers):
-                params["z_center"] = float(cfg["levels"][level])
+                params["z_center"] = level_z(cfg, kind, level)
         params["x"] = MIDLINE_X + float(params["x_offset"])
 
     if kind != "drg":
@@ -627,6 +644,15 @@ def resolve_lead(cfg, entry, index=1, of=1, overrides=None):
     params.setdefault("label", default_label(params, index, of))
     check_sane(params)
     return params
+
+
+def level_z(cfg, kind, level):
+    """z_center of a named level for a dorsal or ventral lead. A ventral lead
+    takes `ventral_levels` where it names the level (the extended levels sit at
+    a different z in the ventral channel; lead_defaults.yaml says why)."""
+    if kind == "ventral" and level in cfg.get("ventral_levels", {}):
+        return float(cfg["ventral_levels"][level])
+    return float(cfg["levels"][level])
 
 
 def lead_type(*layers):
@@ -693,9 +719,9 @@ def check_sane(params):
             problems.append("contact thickness must be finite and non-negative")
     if params["type"] == "drg":
         target = str(params.get("target", ""))
-        if not re.match(r"^[LR][1-9]\d*$", target):
+        if not re.match(r"^[LR][1-9]\d*(_T\d+)?$", target):
             problems.append(
-                "target must name a ganglion, like L3 or R2, not %r" % target
+                "target must name a ganglion, like L3, R2 or L1_T7, not %r" % target
             )
     if problems:
         raise ValueError("; ".join(problems))
@@ -849,11 +875,10 @@ def channel_at(epi, x, z, side):
 def measure_centreline(epi, x, side, z_lo, z_hi, step=1.0, degree=3):
     """Ray cast the channel at this x over this z span and fit its centre y(z).
 
-    Returns (coef, stations, skipped) where stations is [(z, y_centre, thickness)]
-    and skipped is the list of z where the slice was not clean. The fit is the
-    same cubic-by-normal-equations measure_corridor.py uses; the sampling is
-    finer (1 mm rather than 2 mm) because it only has to cover one lead rather
-    than the whole model.
+    Returns (y_of_z, stations, skipped): y_of_z a callable, stations
+    [(z, y_centre, thickness_along_y)] and skipped the z where the slice was
+    not clean. The cubic is fitted in z - z_ref (measure_corridor.local_fit),
+    which stays well conditioned at z ~ 280 where raw powers of z do not.
 
     Raises when there are too few clean slices to fit -- that is a real answer
     about the anatomy at that x, not a numerical inconvenience, and the caller
@@ -876,50 +901,62 @@ def measure_centreline(epi, x, side, z_lo, z_hi, step=1.0, degree=3):
             "only %d clean slices of the %s channel at x = %.2f over z %.1f..%.1f -- "
             "not enough to follow it" % (len(stations), side, x, z_lo, z_hi)
         )
-    coef = mc.polyfit([s[0] for s in stations], [s[1] for s in stations], degree)
-    return coef, stations, skipped
+    # Beyond the last two-channel slice at either end -- the tilted top of the
+    # canal, where the ventral fat has ended -- take single-channel slices
+    # that continue this channel's own curve (measure_corridor.accept_single).
+    if skipped:
+        lo_clean, hi_clean = stations[0][0], stations[-1][0]
+        up = mc.extend_single(epi, x, stations, step, min(z_hi, bb.ZMax - 0.5), +1) \
+            if any(z > hi_clean for z in skipped) else []
+        down = mc.extend_single(epi, x, stations, step, max(z_lo, bb.ZMin + 0.5), -1) \
+            if any(z < lo_clean for z in skipped) else []
+        got = {round(st[0], 6) for st in up + down}
+        skipped = [z for z in skipped if round(z, 6) not in got]
+        stations = sorted(stations + up + down)
+    y_of_z = mc.local_fit(stations, z_lo, z_hi, degree)
+    return y_of_z, stations, skipped
 
 
 def centreline_for(params, epi, corridor, span):
-    """Choose the curve to sweep along, and say why. Returns (y_of_z, info).
+    """The curve to sweep along, measured at THIS lead's x over ITS span.
+    Returns (y_of_z, info).
 
-    At the midline the stored polynomial from epidural_corridor.json is used --
-    it is measured over the whole 98 mm at 2 mm and is the curve the existing
-    generated leads were built on, so reusing it keeps them bit-for-bit
-    reproducible. Off the midline it is the wrong curve (see the module
-    docstring), so the channel is re-measured at the requested x.
+    Always measured here, ray cast every 1 mm and fitted with a cubic over the
+    lead's own span. epidural_corridor.json used to hold one midline cubic for
+    RADO's whole 98 mm canal, and a midline lead swept along that; the
+    extended canal turns ~43 deg between T12 and T6, which no single cubic
+    follows, so the file now holds the measured stations and serves as the
+    cross-check: info["max_disagreement_mm"] is how far this lead's curve
+    strays from the stored stations near it (midline only -- off the midline
+    the channel centre genuinely moves, see the module docstring).
 
-    info carries the agreement between the two at the midline, which is a live
-    check that the local measurement and the stored fit have not diverged.
+    The stations' thicknesses are converted to the channel's NORMAL
+    thickness, t * cos(theta), theta the local tilt of the fitted curve from
+    z: a +Y ray reads a tilted channel as thicker than it is.
     """
     _fc, _Mesh, _p, _msl, mc, _mf = _geometry_modules()
     side = params["type"]
-    stored = corridor["sides"][side]["centre_poly_coef_high_to_low"]
     z_lo, z_hi = span
+    y_of_z, raw, skipped = measure_centreline(epi, params["x"], side, z_lo, z_hi)
 
-    local_coef, stations, skipped = measure_centreline(
-        epi, params["x"], side, z_lo, z_hi
-    )
-    diff = [
-        abs(mc.polyval(stored, z) - mc.polyval(local_coef, z)) for z, _y, _t in stations
-    ]
+    def tilt(z, h=0.5):
+        return math.atan((y_of_z(z + h) - y_of_z(z - h)) / (2 * h))
+
+    stations = [(z, y, t * math.cos(tilt(z))) for z, y, t in raw]
+    stored = corridor["sides"][side].get("stations", [])
+    diff = []
+    if abs(float(params["x_offset"])) < 1e-9 and stored:
+        for st in stored:
+            if z_lo <= st[0] <= z_hi:
+                diff.append(abs(y_of_z(st[0]) - st[1]))
     info = {
         "stations": stations,
         "skipped": skipped,
         "max_disagreement_mm": max(diff) if diff else 0.0,
+        "max_tilt_deg": max(abs(math.degrees(tilt(z))) for z, _y, _t in raw),
+        "source": "centreline measured at x = %.2f (%d slices)" % (params["x"], len(raw)),
     }
-
-    if abs(float(params["x_offset"])) < 1e-9:
-        info["source"] = "stored midline centreline (epidural_corridor.json)"
-        coef = stored
-    else:
-        info["source"] = "centreline re-measured at x = %.2f (%d slices)" % (
-            params["x"],
-            len(stations),
-        )
-        coef = local_coef
-    info["coef"] = coef
-    return (lambda z: mc.polyval(coef, z)), info
+    return y_of_z, info
 
 
 # -- foraminal (DRG) --------------------------------------------------------
@@ -1090,6 +1127,91 @@ def inside(mesh, point, direction=(0.0, 1.0, 0.0)):
     return votes * 2 > 1 + len(TIEBREAK_DIRECTIONS)
 
 
+class _Rays(object):
+    """Forward-crossing parity along ONE direction for many points at once.
+
+    The same test as _parity_inside(mesh, p, direction), vectorised. In a
+    frame whose second axis is the ray direction, a ray keeps its first and
+    third coordinates, so only triangles whose third-coordinate range
+    contains the point's can be hit; they are binned on it once per mesh and
+    direction. The extended model's canal bodies are swept in 0.2 deg rings --
+    ~61 000 triangles each against RADO's 3 500 -- and foraminate() tests every
+    triangle for every ray, which made one fit check take minutes.
+    """
+    BIN_MM = 1.0
+
+    def __init__(self, mesh, direction):
+        import numpy as np
+        d = np.asarray(direction, float) / np.linalg.norm(direction)
+        e1 = np.cross(d, [0.0, 0.0, 1.0]) if abs(d[2]) < 0.9 else np.cross(d, [1.0, 0.0, 0.0])
+        e1 /= np.linalg.norm(e1)
+        self.R = np.array([e1, d, np.cross(e1, d)])          # rows: e1, ray, e2
+        pts, facets = mesh.Topology
+        v = np.array([(p.x, p.y, p.z) for p in pts], float) @ self.R.T
+        self.tri = v[np.array(facets, int)]                    # (n, 3, 3), frame coords
+        lo, hi = self.tri[:, :, 2].min(1), self.tri[:, :, 2].max(1)
+        self.w0 = float(lo.min())
+        b0 = np.floor((lo - self.w0) / self.BIN_MM).astype(int)
+        b1 = np.floor((hi - self.w0) / self.BIN_MM).astype(int)
+        bins = {}
+        for i in range(len(self.tri)):
+            for k in range(b0[i], b1[i] + 1):
+                bins.setdefault(k, []).append(i)
+        self.bins = {k: np.array(ix) for k, ix in bins.items()}
+
+    def inside(self, points):
+        """bool per point: odd number of crossings ahead of it."""
+        import numpy as np
+        p = np.asarray(points, float).reshape(-1, 3) @ self.R.T
+        out = np.zeros(len(p), bool)
+        key = np.floor((p[:, 2] - self.w0) / self.BIN_MM).astype(int)
+        for k in np.unique(key):
+            ix = self.bins.get(int(k))
+            if ix is None:
+                continue
+            sel = np.flatnonzero(key == k)
+            t = self.tri[ix]
+            a, b, c = t[:, 0], t[:, 1], t[:, 2]
+            # barycentric coordinates in the plane normal to the ray
+            d = (b[:, 0] - a[:, 0]) * (c[:, 2] - a[:, 2]) - (c[:, 0] - a[:, 0]) * (b[:, 2] - a[:, 2])
+            ok = np.abs(d) > 1e-15
+            a, b, c, d = a[ok], b[ok], c[ok], d[ok]
+            px, pw = p[sel, 0][:, None], p[sel, 2][:, None]
+            u = ((px - a[:, 0]) * (c[:, 2] - a[:, 2]) - (c[:, 0] - a[:, 0]) * (pw - a[:, 2])) / d
+            v = ((b[:, 0] - a[:, 0]) * (pw - a[:, 2]) - (px - a[:, 0]) * (b[:, 2] - a[:, 2])) / d
+            hit = (u >= 0) & (v >= 0) & (u + v <= 1)
+            along = a[:, 1] + u * (b[:, 1] - a[:, 1]) + v * (c[:, 1] - a[:, 1])
+            out[sel] = (hit & (along - p[sel, 1][:, None] > 1e-9)).sum(1) % 2 == 1
+        return out
+
+
+_RAYS = {}
+
+
+def _rays(mesh, direction):
+    key = (id(mesh), tuple(direction))
+    if key not in _RAYS or _RAYS[key][0] is not mesh:
+        _RAYS[key] = (mesh, _Rays(mesh, direction))
+    return _RAYS[key][1]
+
+
+def inside_many(mesh, points):
+    """[inside(mesh, p) for p in points], vectorised, with inside()'s own
+    rule: inside if the +Y ray says so, otherwise inside only if at least two
+    of the three TIEBREAK_DIRECTIONS do. Agreement with inside() is checked on
+    random points around the canal (src/freecad/README.md)."""
+    import numpy as np
+    if not points:
+        return []
+    result = _rays(mesh, (0.0, 1.0, 0.0)).inside(points)
+    rest = np.flatnonzero(~result)
+    if len(rest):
+        sub = [points[i] for i in rest]
+        votes = sum(_rays(mesh, d).inside(sub).astype(int) for d in TIEBREAK_DIRECTIONS)
+        result[rest] = votes * 2 > len(TIEBREAK_DIRECTIONS)
+    return [bool(f) for f in result]
+
+
 def inside_any(mesh, points):
     """The subset of `points` inside `mesh`, bounding-box filtered first.
 
@@ -1099,17 +1221,9 @@ def inside_any(mesh, points):
     point per body.
     """
     bb = mesh.BoundBox
-    out = []
-    for p in points:
-        if not (
-            bb.XMin <= p[0] <= bb.XMax
-            and bb.YMin <= p[1] <= bb.YMax
-            and bb.ZMin <= p[2] <= bb.ZMax
-        ):
-            continue
-        if inside(mesh, p):
-            out.append(p)
-    return out
+    near = [p for p in points
+            if bb.XMin <= p[0] <= bb.XMax and bb.YMin <= p[1] <= bb.YMax and bb.ZMin <= p[2] <= bb.ZMax]
+    return [p for p, hit in zip(near, inside_many(mesh, near)) if hit]
 
 
 def min_distance_to_mesh(points, mesh, max_mesh_points=1500):
@@ -1169,23 +1283,63 @@ def _validate_epidural(params, meshes, corridor, max_samples):
     epi, dura = meshes["epidural"], meshes["dura"]
     side = params["type"]
     checks, numbers = [], {}
+    _fc, _Mesh, _p, msl, _mc, _mf = _geometry_modules()
+    usable = corridor["sides"][side]["usable_z"]
+    numbers["usable_z"] = usable
 
+    # -- 1. follow the channel around this lead ---------------------------
+    # Measured over the lead's length plus 6 mm each side, in z; along a
+    # tilted canal the lead covers less z than its length, so this is ample.
     length = total_length(params)
-    z0 = params["z_center"] - 0.5 * length
-    z1 = z0 + length
-    c0 = params["z_center"] - 0.5 * array_length(params)
-    c1 = c0 + array_length(params)
+    pad = 0.5 * length + 6.0
+    span = (params["z_center"] - pad, params["z_center"] + pad)
+    try:
+        y_of_z, cinfo = centreline_for(params, epi, corridor, span)
+    except ValueError as exc:
+        a0 = params["z_center"] - 0.5 * array_length(params)
+        a1 = a0 + array_length(params)
+        if a0 < usable[0] or a1 > usable[1]:
+            title, why = ("Reaches past the model",
+                          "The contacts would reach z %.1f-%.1f mm, but this model's %s "
+                          "epidural space is only measured over z %.1f-%.1f mm. Move the "
+                          "lead %s, or use fewer contacts."
+                          % (a0, a1, side, usable[0], usable[1],
+                             "rostral" if a0 < usable[0] else "caudal"))
+        else:
+            title, why = ("No usable channel here",
+                          "The %s epidural space could not be followed at this "
+                          "position: %s. This usually means the lead is off the end "
+                          "of the dural sac or beside a nerve-root sleeve rather "
+                          "than in the canal." % (side, exc))
+        checks.append(("FAIL", title, why))
+        return {"ok": False, "checks": checks, "numbers": numbers,
+                "shapes": None, "params": params}
+
+    # -- 2. build it along the curve, by ARC LENGTH -----------------------
+    # make_scs_lead.arc_length_path(): contacts and gaps are their planned
+    # length along the canal however much it tilts, instead of their length
+    # in z. z_center stays the z of the middle of the contact array.
+    s_of_z, point_of = msl.arc_length_path(params["x"], y_of_z, span[0], span[1])
+    shapes, segments, t0, total = build_shapes(params, (point_of, s_of_z(params["z_center"])))
+    contacts = [(ts, ln) for kind, _i, ts, ln in segments if kind == "contact"]
+    z0, z1 = point_of(t0)[2], point_of(t0 + total)[2]
+    c0, c1 = point_of(contacts[0][0])[2], point_of(contacts[-1][0] + contacts[-1][1])[2]
+    chords = [sh.Volume / (math.pi * (0.5 * params["diameter"] + params.get("contact_thickness", 0.0)) ** 2)
+              for kind, _i, sh in shapes if kind == "contact"]
     numbers.update(
         lead_z=[z0, z1],
         contacts_z=[c0, c1],
         length_mm=length,
         array_mm=array_length(params),
         x=params["x"],
+        contact_length_built_mm=[min(chords), max(chords)],
+        max_tilt_deg=cinfo["max_tilt_deg"],
     )
+    numbers["centreline_source"] = cinfo["source"]
+    numbers["centreline_vs_stored_max_mm"] = cinfo["max_disagreement_mm"]
+    numbers["skipped_slices"] = len(cinfo["skipped"])
 
-    # -- 1. does the centreline reach this far? --------------------------
-    usable = corridor["sides"][side]["usable_z"]
-    numbers["usable_z"] = usable
+    # -- 3. is it inside the measured canal? ------------------------------
     if c0 < usable[0] or c1 > usable[1]:
         checks.append(
             (
@@ -1237,36 +1391,8 @@ def _validate_epidural(params, meshes, corridor, max_samples):
             )
         )
 
-    # -- 2. build it, following the right curve ---------------------------
-    try:
-        y_of_z, cinfo = centreline_for(params, epi, corridor, (z0, z1))
-    except ValueError as exc:
-        checks.append(
-            (
-                "FAIL",
-                "No usable channel here",
-                "The %s epidural space could not be followed at this "
-                "position: %s. This usually means the lead is off the end "
-                "of the dural sac or beside a nerve-root sleeve rather "
-                "than in the canal." % (side, exc),
-            )
-        )
-        return {
-            "ok": False,
-            "checks": checks,
-            "numbers": numbers,
-            "shapes": None,
-            "params": params,
-        }
-
-    numbers["centreline_source"] = cinfo["source"]
-    numbers["centreline_vs_stored_max_mm"] = cinfo["max_disagreement_mm"]
-    numbers["skipped_slices"] = len(cinfo["skipped"])
-    shapes, segments, _z0, _total = build_shapes(
-        params, (lambda z: (params["x"], y_of_z(z), z), params["z_center"])
-    )
-
-    if cinfo["skipped"]:
+    skipped = [z for z in cinfo["skipped"] if z0 - 1e-9 <= z <= z1 + 1e-9]
+    if skipped:
         checks.append(
             (
                 "WARN",
@@ -1276,17 +1402,20 @@ def _validate_epidural(params, meshes, corridor, max_samples):
                 "where a nerve root leaves; the centreline is interpolated "
                 "through them."
                 % (
-                    len(cinfo["skipped"]),
-                    len(cinfo["skipped"]) + len(cinfo["stations"]),
-                    ", ".join("%.0f" % z for z in cinfo["skipped"][:8]),
+                    len(skipped),
+                    len(skipped) + sum(1 for st in cinfo["stations"] if z0 <= st[0] <= z1),
+                    ", ".join("%.0f" % z for z in skipped[:8]),
                 ),
             )
         )
 
     # -- 3. does the lead fit the channel where it actually lies? ---------
-    thicknesses = [t for _z, _y, t in cinfo["stations"]]
+    # Only the slices the lead actually spans; the measurement ran 6 mm past
+    # both ends. Thicknesses are normal to the canal (centreline_for).
+    along = [st for st in cinfo["stations"] if z0 - 1e-9 <= st[0] <= z1 + 1e-9] or cinfo["stations"]
+    thicknesses = [t for _z, _y, t in along]
     t_min, t_med = min(thicknesses), sorted(thicknesses)[len(thicknesses) // 2]
-    z_at_min = min(cinfo["stations"], key=lambda s: s[2])[0]
+    z_at_min = min(along, key=lambda s: s[2])[0]
     contact_diameter = params["diameter"] + 2 * params.get("contact_thickness", 0.0)
     clearance = t_min - contact_diameter
     numbers.update(
@@ -1369,8 +1498,9 @@ def _validate_epidural(params, meshes, corridor, max_samples):
 
     # -- 4. is the built lead actually in the fat, and out of the dura? ---
     pts = sample_points(shapes, max_samples=max_samples)
-    in_fat = [p for p in pts if inside(epi, p)]
-    in_dura = [p for p in pts if inside(dura, p)]
+    fat_flags = inside_many(epi, pts)
+    in_fat = [p for p, f in zip(pts, fat_flags) if f]
+    in_dura = [p for p, f in zip(pts, inside_many(dura, pts)) if f]
     pct_fat = 100.0 * len(in_fat) / len(pts)
     pct_dura = 100.0 * len(in_dura) / len(pts)
     numbers.update(sampled_vertices=len(pts), pct_in_fat=pct_fat, pct_in_dura=pct_dura)
@@ -1396,8 +1526,29 @@ def _validate_epidural(params, meshes, corridor, max_samples):
                 ),
             )
         )
+    elif n_stray and all(not (usable[0] <= p[2] <= usable[1])
+                         for p, f in zip(pts, fat_flags) if not f) \
+            and usable[0] <= c0 and c1 <= usable[1]:
+        # Only insulator past the END of the modelled canal is outside the
+        # fat -- the anatomy stops there; it is not bone or a foramen. At the
+        # tilted top plane the ventral fat ends ~10 mm below the dorsal.
+        stray = [p for p, f in zip(pts, fat_flags) if not f]
+        checks.append(
+            (
+                "WARN",
+                "Tail runs out of the model",
+                "%d of %d sampled points on the lead surface, all on the "
+                "passive tail at z %.1f-%.1f mm, lie past the end of the "
+                "modelled %s epidural space (measured over z %.1f-%.1f mm). "
+                "Every contact is inside the fat. The anatomy simply stops "
+                "there; in the mesh that piece of insulator borders the "
+                "domain edge."
+                % (n_stray, len(pts), min(p[2] for p in stray), max(p[2] for p in stray),
+                   side, usable[0], usable[1]),
+            )
+        )
     elif n_stray:
-        stray = [p for p in pts if not inside(epi, p)]
+        stray = [p for p, f in zip(pts, fat_flags) if not f]
         z_lo, z_hi = min(p[2] for p in stray), max(p[2] for p in stray)
         span = (
             "at z %.1f mm" % z_lo
@@ -1442,9 +1593,9 @@ def _validate_epidural(params, meshes, corridor, max_samples):
 # where a real DRG lead's tip goes, or INTO THE PEDICLE, which is not a
 # placement. Named from ../ansys/tissue_map.yaml's `vertebra` and
 # `intervertebral_disc` patterns.
-BONE_STLS = ("T8-10 - V1-2.STL", "T8-10 - V1-3.STL", "T8-10 - V1-4.STL")
-DISC_STLS = ("T8-10 - T_disk_9_10x-1.STL", "T8-10 - T_disk_10_11x-1.STL",
-             "T8-10 - T_disk_11_12x-1.STL", "T8-10 - T_disk_12_Lx-1.STL")
+# Every vertebra and disc in the set, including the extended levels' copies.
+BONE_STLS = tuple(anatomy.names_matching(r"^V1-\d"))
+DISC_STLS = tuple(anatomy.names_matching(r"^T_disk_"))
 
 
 def _sample_tris(tris, max_samples):
@@ -2475,9 +2626,16 @@ def preview_set(doc, leads, results, colours=None):
             "or export STLs instead." % os.path.basename(doc.FileName)
         )
 
+    # Keep the leads where they were filed (e.g. inside "Anatomy"); the new
+    # group would otherwise land at the top of the tree.
+    old = doc.getObject(PREVIEW_GROUP)
+    parent = next((p for p in (old.InList if old is not None else [])
+                   if p.isDerivedFrom("App::DocumentObjectGroup")), None)
     clear_preview(doc)
     group = doc.addObject("App::DocumentObjectGroup", PREVIEW_GROUP)
     group.Label = PREVIEW_GROUP_LABEL
+    if parent is not None:
+        parent.addObject(group)
 
     made = []
     for params, result in zip(leads, results):

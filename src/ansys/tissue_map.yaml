@@ -18,11 +18,13 @@
 # directory reports 109,157,209 for EVERY material -- that is Workbench's default
 # appearance, not what is set in the project. Read the dp0/SYS/ENGD file instead.
 #
-# NOTE: white matter is ISOTROPIC in Engineering Data (0.1432 S/m = the paper's
-# transverse value). The paper's anisotropic white matter (0.1432 transverse /
-# 0.6 longitudinal S/m) can't be entered in the Mechanical Electric GUI; it needs
-# an APDL command snippet (MP,RSVX/RSVY/RSVZ) or PyMAPDL. See
-# mapdl_electric_solve_template.dat. Cord axis is global Z in this STL set.
+# NOTE: Khadka et al. 2020 give white matter two options: ISOTROPIC 0.1432 S/m,
+# or ANISOTROPIC 0.083 S/m transverse / 0.6 S/m longitudinal. 0.1432 is NOT the
+# transverse value (this file said so until 2026-10-15). Engineering Data holds
+# the isotropic option. The anisotropic pair is `anisotropic_S_per_m` below:
+# fem/ uses it by default, with the longitudinal axis along the cord centreline
+# (the cord is curved, so not global Z). In Mechanical it would need an APDL
+# snippet (MP,RSVX/RSVY/RSVZ) or PyMAPDL; see mapdl_electric_solve_template.dat.
 
 tissues:
   - name: electrode_contact
@@ -63,8 +65,8 @@ tissues:
     color_rgb: [250, 249, 246]
     patterns: ["neuro_whitemater"]
     rho_ohm_m: 6.9832
-    sigma_S_per_m: 0.1432
-    paper_anisotropic_S_per_m: [0.1432, 0.6]   # transverse, longitudinal (needs APDL)
+    sigma_S_per_m: 0.1432                     # the paper's ISOTROPIC option
+    anisotropic_S_per_m: [0.083, 0.6]         # transverse, longitudinal (Khadka 2020)
 
   - name: grey_matter
     ed_material: "Gray Matter"

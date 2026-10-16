@@ -4,10 +4,41 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-STL = os.path.join(ROOT, "STL_files")
 LEAD = os.path.join(ROOT, "fem", "leads", "fem_dorsal_T10")
 OUT = os.path.join(ROOT, "fem", "out")
 LEAD_RUNS = os.path.join(OUT, "lead_runs")
+
+# ---------------------------------------------------------------------------
+# WHICH ANATOMY (2026-10-15)
+# ---------------------------------------------------------------------------
+# The default is the fused, overlap-free T6-T12 set that src/extend/conform.py
+# builds from the extended model (src/extend/extend_rado.py): 89 closed bodies,
+# one per connected piece of each tissue, no two bodies sharing volume. It is
+# generated, not committed (fem/out/ is git-ignored); see src/extend/README.md
+# for how to rebuild it. SCS_GEOMETRY=rado selects RADO's own T10-T12 STLs in
+# STL_files/, which is what every run before this date meshed.
+#
+# Every file in the chosen set is hashed into the model signature
+# (artifacts.model_signature), so switching sets can never reuse a mesh or a
+# solution built on the other one.
+GEOMETRY_SETS = {
+    "rado_up4_conformal": os.path.join(OUT, "geometry", "rado_up4_conformal"),
+    "rado": os.path.join(ROOT, "STL_files"),
+}
+GEOMETRY = os.environ.get("SCS_GEOMETRY", "rado_up4_conformal")
+if GEOMETRY not in GEOMETRY_SETS:
+    raise ValueError("SCS_GEOMETRY=%r is not one of %s" % (GEOMETRY, ", ".join(GEOMETRY_SETS)))
+STL = GEOMETRY_SETS[GEOMETRY]
+if not os.path.isdir(STL):
+    raise FileNotFoundError(
+        "anatomy set %r is not built (%s missing). Build it with "
+        "src/extend/extend_rado.py then src/extend/conform.py, or set "
+        "SCS_GEOMETRY=rado for RADO's own STLs." % (GEOMETRY, STL))
+
+# The cord centreline the white-matter fibre direction follows: samples of the
+# extended cord's axis, RADO's own cord included (extend_rado.py writes it).
+# Used for EITHER geometry set; RADO's region is part of it.
+FIBRE_CENTRELINE = os.path.join(OUT, "geometry", "rado_up4", "centreline.json")
 
 TISSUE_MAP_YAML = os.path.join(ROOT, "src", "ansys", "tissue_map.yaml")
 
@@ -27,12 +58,16 @@ TISSUE_MAP_YAML = os.path.join(ROOT, "src", "ansys", "tissue_map.yaml")
 # Every entry here also appears in TISSUE_BODIES under the same key (as the
 # first, largest body of that class), so nothing is classified twice or
 # defined twice.
-TISSUE_STL = {
-    "epidural": os.path.join(STL, "T8-10 - neuro_EpiduralSpace-1.STL"),
-    "dura":     os.path.join(STL, "T8-10 - neuro_Meninges-1.STL"),
-    "csf":      os.path.join(STL, "T8-10 - neuro_CSF-1.STL"),
-    "white":    os.path.join(STL, "T8-10 - neuro_whitemater-1.STL"),
-    "grey":     os.path.join(STL, "T8-10 - neuro_GreyMater-1.STL"),
+# The five are found by RADO's file stem, so they resolve in either geometry
+# set: "T8-10 - neuro_CSF-1.STL" in STL_files/, and
+# "T8-10 - neuro_CSF-1__extended_up4__conformal.STL" in the fused set. Filled
+# in below, once TISSUE_BODIES exists.
+PRIMARY_STEMS = {
+    "epidural": "neuro_EpiduralSpace-1",
+    "dura":     "neuro_Meninges-1",
+    "csf":      "neuro_CSF-1",
+    "white":    "neuro_whitemater-1",
+    "grey":     "neuro_GreyMater-1",
 }
 CONTACT_STL = {i: os.path.join(LEAD, f"SCS Lead Electrode {i}.stl") for i in range(1, 9)}
 INSULATOR_STL = os.path.join(LEAD, "SCS Lead Insulator.stl")
@@ -175,9 +210,26 @@ def _tissue_sigma(path):
             if m:
                 cur = m.group(1)
                 continue
-            m = re.match(r"^\s*sigma_S_per_m:\s*([-+0-9.eE]+)\s*$", line)
+            m = re.match(r"^\s*sigma_S_per_m:\s*([-+0-9.eE]+)\s*(#.*)?$", line)
             if m and cur is not None:
                 out[cur] = float(m.group(1))
+    return out
+
+
+def _tissue_anisotropy(path):
+    """{tissue_map name: (transverse, longitudinal) S/m} for every class that
+    gives `anisotropic_S_per_m: [t, l]` in the yaml. Same line-oriented reading
+    as _tissue_sigma; the numbers live only in the yaml."""
+    out, cur = {}, None
+    with open(path) as fh:
+        for line in fh:
+            m = re.match(r"^\s*-\s+name:\s*(\S+)", line)
+            if m:
+                cur = m.group(1)
+                continue
+            m = re.match(r"^\s*anisotropic_S_per_m:\s*\[\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\]\s*(#.*)?$", line)
+            if m and cur is not None:
+                out[cur] = (float(m.group(1)), float(m.group(2)))
     return out
 
 
@@ -229,6 +281,21 @@ _BY_CLASS, UNMATCHED_STL = _classify_stl_files()
 # body in STL_files/ is dropped rather than left as an entry that can never be
 # hit (it would still cost a name slot in every `order` and every report).
 TISSUE_BODIES = {k: v for k, v in _BY_CLASS.items() if v}
+
+
+
+def _primary(key, stem):
+    """The one body of class `key` whose file is RADO's `stem`, with or
+    without the extension/fusion suffixes. Raises unless exactly one."""
+    hits = [p for p in TISSUE_BODIES.get(key, ())
+            if re.match(r"^T8-10 - %s(\.|__)" % re.escape(stem), os.path.basename(p), re.I)]
+    if len(hits) != 1:
+        raise ValueError("%d %s bodies named %r in %s (need exactly one)"
+                         % (len(hits), key, stem, STL))
+    return hits[0]
+
+
+TISSUE_STL = {key: _primary(key, stem) for key, stem in PRIMARY_STEMS.items()}
 
 # Priority-ordered anatomy names actually present, i.e. ANATOMY_CLASS filtered
 # to what STL_files/ really contains.
@@ -285,10 +352,34 @@ def _build_sigma():
     """
     _, sig = _load_tissue_map()
     out = {name: sig[cls] for name, cls in ORDER_TO_TISSUE_CLASS.items()}
+    # An anisotropic tissue's scalar entry is its TRANSVERSE value; the
+    # longitudinal excess is added along the fibre direction by fibres.py.
+    for name, (transverse, _longitudinal) in SIGMA_ANISO.items():
+        out[name] = transverse
     out["insulator"] = sig["lead_insulation"]
     out["background"] = sig["vertebra"]
     return out
 
+
+# ---------------------------------------------------------------------------
+# ANISOTROPIC WHITE MATTER (2026-10-15)
+# ---------------------------------------------------------------------------
+# Khadka et al. 2020: white matter is either 0.1432 S/m isotropic, or 0.083 S/m
+# transverse / 0.6 S/m longitudinal. The second is the default here: the
+# longitudinal axis follows the local tangent of the cord centreline
+# (FIBRE_CENTRELINE), because the extended cord turns by ~43 degrees between
+# T12 and T6. fem/scripts/fibres.py turns it into one 3x3 tensor per element.
+# SCS_ISOTROPIC_WM=1 restores the isotropic 0.1432 S/m that every run before
+# this date used. RADO has no separate Lissauer's tract body, so the paper's
+# Lissauer values (0.276 iso, or the same anisotropic pair) have nothing to
+# apply to.
+WHITE_MATTER_ANISOTROPIC = os.environ.get("SCS_ISOTROPIC_WM", "0") != "1"
+SIGMA_ANISO = {}
+if WHITE_MATTER_ANISOTROPIC:
+    _aniso = _tissue_anisotropy(TISSUE_MAP_YAML)
+    SIGMA_ANISO = {name: _aniso[cls] for name, cls in ORDER_TO_TISSUE_CLASS.items() if cls in _aniso}
+    if "white" not in SIGMA_ANISO:
+        raise ValueError("tissue_map.yaml gives white_matter no anisotropic_S_per_m")
 
 SIGMA = _build_sigma()
 # tissue_map gives metal electrode 4.0e6 S/m. A 1e8 conductivity ratio against

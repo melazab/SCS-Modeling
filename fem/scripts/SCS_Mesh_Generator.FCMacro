@@ -1,6 +1,12 @@
 """Generate and inspect a mesh for the live FreeCAD lead.
 
-Size controls are in mm and apply to the entire anatomical domain. The
+The anatomy is NOT read from the document. It is the STL set fem/scripts/
+config.py selects (config.GEOMETRY: by default the fused T6-T12 set,
+fem/out/geometry/rado_up4_conformal), and the panel's first line says which.
+Only the lead comes from the document.
+
+Size controls are in mm and apply to the entire anatomical domain, or to the
+crop window around the lead when "Crop beyond lead" is above zero. The
 background worker meshes, classifies, checks the dura barrier and publishes a
 per-tissue preview. SCS Potential Visualizer owns electrical solving.
 Completed artifacts are reused only with matching provenance. Re-running this
@@ -88,6 +94,16 @@ COST_SEVERITY_LEVEL = {"ok": "done", "warn": "gated", "danger": "failed"}
 
 LIVE_LEAD_POLL_MS = 1500   # cheap name-scan only -- see correction section above
 
+# The panel's starting crop, mm beyond the lead's ends. Measured 2026-10-15 on
+# the fused T6-T12 set with the whole-model mesh cut at each width and
+# re-solved (same elements, so only the cut differs), bipolar 3->5 at T10:
+# |E| in the dorsal columns and grey matter changed by at most 0.03 % of its
+# peak at 80 mm, 0.22 % at 50 mm, 0.55 % at 30 mm and 1.5 % at 15 mm. 50 mm
+# keeps that under a quarter of a percent and cuts the mesh by ~40 %.
+# fem/README.md has the table. build_mesh.DEFAULT_PARAMS stays at 0 (whole
+# model) for scripts.
+DEFAULT_CROP_MM = 50.0
+
 # (region key in build_mesh.DEFAULT_PARAMS FIELDS) -> (property label, default, tooltip)
 REGION_SPINS = [
     ("dura",  "Dura Near",  0.25,
@@ -139,6 +155,16 @@ THREAD_ENV_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
 # derived from tissue_map.yaml -- see the top of this file's docstring:
 # tissue identity is carried by the tree row you toggle, not by a hue.
 PREVIEW_RGB = (1.0, 0.0, 1.0)   # magenta, Mohamed's own example
+
+
+def anatomy_text():
+    """One line: which STL set gets meshed, and the white-matter model."""
+    sets = {"rado_up4_conformal": "fused T6-T12 set (rado_up4_conformal)",
+            "rado": "RADO's own T10-T12 STLs (STL_files)"}
+    n = sum(len(v) for v in C.TISSUE_BODIES.values())
+    wm = ("anisotropic white matter %.3g / %.3g S/m along the cord" % C.SIGMA_ANISO["white"]
+          if C.SIGMA_ANISO else "isotropic white matter %.4g S/m" % C.SIGMA["white"])
+    return "Anatomy: %s, %d bodies; %s" % (sets.get(C.GEOMETRY, C.GEOMETRY), n, wm)
 
 
 def get_target_document():
@@ -532,7 +558,8 @@ class CostEstimator(QtCore.QObject):
         self._next_id += 1
         self._want_id = self._next_id
         req = dict(id=self._next_id, H_MIN=params["H_MIN"], H_MAX=params["H_MAX"],
-                   FIELDS=[list(f) for f in params["FIELDS"]])
+                   FIELDS=[list(f) for f in params["FIELDS"]],
+                   CROP_MM=params.get("CROP_MM", 0.0))
         if self.ram_gb is not None:
             req.update(ram_gb=self.ram_gb, budget="HPC allocation")
         self.proc.write((json.dumps(req) + "\n").encode("utf-8"))
@@ -617,6 +644,17 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
+        # -- which anatomy gets meshed: config.py's set, not the document ---
+        anatomy = QtWidgets.QLabel(anatomy_text())
+        anatomy.setWordWrap(True)
+        anatomy.setStyleSheet("color: gray;")
+        anatomy.setToolTip(
+            "The tissues are meshed from this STL set on disk, never from the "
+            "bodies in the document; only the lead is taken from the document. "
+            "Set SCS_GEOMETRY=rado before starting FreeCAD for RADO's own "
+            "T10-T12 STLs, and SCS_ISOTROPIC_WM=1 for isotropic white matter.\n\n" + C.STL)
+        outer.addWidget(anatomy)
+
         # -- live lead status (replaces the old combo box + Refresh) -------
         self.lead_status = QtWidgets.QLabel("")
         self.lead_status.setAlignment(QtCore.Qt.AlignCenter)
@@ -651,6 +689,13 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             spin = self.spin(tip, 0.05, 5.0, 0.05, 3, self._region_defaults[region][0])
             self.region_spins[region] = spin
             form.addRow(caption, spin)
+        self.crop = self.spin(
+            "Mesh only this far below and above the lead (mm along z); 0 meshes the whole "
+            "model. The cut faces are insulating for a bipolar or any balanced montage. "
+            "Use it to refine the cord near one lead without meshing all of T6-T12.",
+            0.0, 300.0, 5.0, 1, DEFAULT_CROP_MM)
+        self.crop.setSpecialValueText("whole model")
+        form.addRow("Crop beyond lead", self.crop)
         outer.addWidget(size_box)
         import scs_document_cache
         saved = scs_document_cache.document_params(self.doc)
@@ -663,6 +708,8 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             for name, spin in self.region_spins.items():
                 if name in self._region_defaults:
                     spin.setValue(self._region_defaults[name][0])
+            # Settings saved before the crop existed meshed the whole model.
+            self.crop.setValue(float(saved['CROP_MM']) if 'CROP_MM' in saved else DEFAULT_CROP_MM)
 
         # -- what this parameter set will cost, one line -------------------
         self.cost_status = QtWidgets.QLabel("")
@@ -687,7 +734,7 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         for w in (self.h_min, self.h_max):
             w.valueChanged.connect(self.refresh_gates)
             w.valueChanged.connect(self.request_cost)
-        for w in self.region_spins.values():
+        for w in list(self.region_spins.values()) + [self.crop]:
             w.valueChanged.connect(self.refresh_gates)
             w.valueChanged.connect(self.request_cost)
 
@@ -810,7 +857,8 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
                             self._region_defaults[region][1], self._region_defaults[region][2])
                            for region in self.region_spins],
                     GRID=self._saved_mesh_params["GRID"],
-                    MARGIN=self._saved_mesh_params["MARGIN"])
+                    MARGIN=self._saved_mesh_params["MARGIN"],
+                    CROP_MM=self.crop.value())
 
     def resolve_run(self):
         """(lead_info, run_dir) for the CURRENT live lead + CURRENT
@@ -982,7 +1030,7 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
 
         for w in (self.h_min, self.h_max):
             w.setEnabled(not busy)
-        for w in self.region_spins.values():
+        for w in list(self.region_spins.values()) + [self.crop]:
             w.setEnabled(not busy)
 
     def env_overrides(self):

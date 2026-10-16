@@ -80,6 +80,8 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "fem", "scripts"))
 sys.path.insert(0, os.path.join(ROOT, "src", "ansys"))
 
+# RADO's own STLs are the source of the extension, whatever the FEM meshes.
+os.environ["SCS_GEOMETRY"] = "rado"
 import config as C  # noqa: E402  (read-only: hashed by the provenance check)
 from check_tissue_map import matches, parse_tissue_map  # noqa: E402
 from inside import InsideTester  # noqa: E402

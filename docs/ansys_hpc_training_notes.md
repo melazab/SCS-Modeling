@@ -155,7 +155,7 @@ the deck to `$PFSDIR` (parallel scratch) and copying `*.rst *.out` back.
 | Vasculature         | 1.5152   | 0.66    |
 | Dura Mater          | 27.027   | 0.037   |
 | CSF                 | 0.5882   | 1.7     |
-| White Matter        | 6.9832   | 0.1432 (isotropic; paper: 0.1432/0.6 aniso) |
+| White Matter        | 6.9832   | 0.1432 (isotropic; paper's aniso option: 0.083/0.6) |
 | Gray Matter         | 3.6232   | 0.276   |
 | Nerve Root / DRG / Sympathetic Chain | 6.9832 | 0.1432 |
 | Soft Tissue         | 250      | 0.004   |
@@ -431,7 +431,7 @@ model.Mesh.GenerateMesh()
    flow is essentially unchanged — but you should sanity-check the resulting
    contact voltages against your expectations before trusting any numbers.
 2. **Anisotropic white matter.** Engineering Data has white matter isotropic at
-   0.1432 S/m; the paper uses 0.1432 transverse / 0.6 longitudinal. The deck
+   0.1432 S/m; the paper's anisotropic option is 0.083 transverse / 0.6 longitudinal. The deck
    therefore solves the isotropic case. Adding anisotropy needs an APDL snippet
    (`MP,RSVZ`) and depends on the cord axis being global Z — worth confirming
    for the real geometry.

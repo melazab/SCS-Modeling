@@ -1,3 +1,9 @@
+NOTE 2026-10-15: the STLs in this directory were rebuilt by build_lead_config.py
+with contacts laid out along the curve (arc length), so each contact is 3.00 mm
+along the canal; the report below is the ORIGINAL z-parametrised build
+(contacts 3.05 mm along the canal) and its numbers are kept for history.
+src/freecad/test_regression.py pins the current files.
+
 SCS lead: ventral, 8 contacts x 3.00 mm, 1.00 mm gaps, 1.30 mm dia
 swept along the measured ventral centreline; x = 56.60, z 88.93..131.93 (centre 110.43)
 channel thickness there: min 1.67 mm, median 1.72 mm
