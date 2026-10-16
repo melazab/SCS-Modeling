@@ -25,6 +25,8 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "fem", "scripts"))
 sys.path.insert(0, HERE)
 
+# The poster runs above were solved on RADO's own T10-T12 STLs.
+os.environ["SCS_GEOMETRY"] = "rado"
 import config as C                      # noqa: E402
 from stlio import read_stl              # noqa: E402
 from cross_section import section       # noqa: E402

@@ -47,6 +47,8 @@ def signature_inputs():
     root = Path(C.ROOT)
     paths = [Path(C.TISSUE_MAP_YAML), root / 'fem' / 'requirements.txt']
     paths += [Path(p) for group in C.TISSUE_BODIES.values() for p in group]
+    if C.SIGMA_ANISO:
+        paths.append(Path(C.FIBRE_CENTRELINE))
     paths += sorted((root / 'fem' / 'scripts').glob('*.py'))
     paths += sorted((root / 'fem' / 'hpc').glob('*'))
     return sorted({str(p.resolve().relative_to(root)) for p in paths if p.is_file()})

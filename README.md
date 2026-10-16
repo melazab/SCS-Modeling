@@ -100,9 +100,10 @@ error is the most informative thing in the table.
 
 Stated plainly, because the limits decide what the model may be used for.
 
-- **White matter is isotropic** at 0.1432 S/m, the transverse value. Khadka uses
-  0.1432 transverse / 0.6 longitudinal. This matters most for exactly the
-  cross-column recruitment question above, and is the first thing to fix.
+- **White matter**: runs before 2026-10-15 used isotropic 0.1432 S/m, which is
+  Khadka's ISOTROPIC option (not, as this line used to say, their transverse
+  value). From the extended-model runs on, it is Khadka's anisotropic option,
+  0.083 S/m across the fibres and 0.6 S/m along the cord centreline.
 - **Interfaces are resolved to element size, not followed exactly.** The source
   STLs are not tessellated compatibly at shared boundaries — dura and epidural
   share 4 vertices out of ~1780 — so no conformal mesh can be built by

@@ -41,7 +41,17 @@ DEFAULT_PARAMS = dict(
     ],
     GRID=0.25,    # size-field sample spacing (cached as <out_dir>/sizefield.npz)
     MARGIN=1.0,   # box margin around all anatomy and the lead
+    CROP_MM=0.0,  # > 0: mesh only this far beyond the lead's ends in z (see below)
 )
+
+# CROP WINDOW (2026-10-15). The extended model runs T6-T12, ~230 mm of canal,
+# and refining the cord over all of it to study one lead is mostly wasted.
+# CROP_MM > 0 cuts the box at CROP_MM below and above the lead (mesh_geometry.
+# Extent.box). The cut faces are part of the outer boundary, which every
+# basis field uses as its uniform current return; in a bipolar or any
+# zero-net-current montage that return cancels, so the cut faces act as
+# INSULATING planes. A monopolar field would return part of its current
+# through them. Measured effect on the field near the lead: fem/README.md.
 
 
 def densify(verts, tris, target):
@@ -135,11 +145,12 @@ def build(params=None, out_dir=None, contact_stl=None, insulator_stl=None, progr
     insulator_stl = C.INSULATOR_STL if insulator_stl is None else insulator_stl
     h_min, h_max, fields, grid, margin = (
         p["H_MIN"], p["H_MAX"], p["FIELDS"], p["GRID"], p["MARGIN"])
+    crop = float(p.get("CROP_MM", 0.0) or 0.0)
 
     os.makedirs(out, exist_ok=True)
     t0 = time.time()
 
-    from mesh_geometry import geometry, grid_points
+    from mesh_geometry import geometry, grid_points, Extent
     signature = artifacts.mesh_signature(p, contact_stl, insulator_stl)
     mesh_path = os.path.join(out, 'mesh.npz')
     if artifacts.valid(mesh_path, signature):
@@ -160,7 +171,9 @@ def build(params=None, out_dir=None, contact_stl=None, insulator_stl=None, progr
         raise RuntimeError('Mesh refused before build: ' + description)
     clouds, bounds = geometry(contact_stl, insulator_stl)
     print('size-field clouds:', {k: len(v) for k, v in clouds.items()}, flush=True)
-    lo, hi = bounds.min(0) - margin, bounds.max(0) + margin
+    lo, hi = Extent(clouds, bounds).box(crop, margin)
+    if crop > 0:
+        print('crop window: %.0f mm beyond the lead; box z %.1f..%.1f mm' % (crop, lo[2], hi[2]), flush=True)
     n = np.maximum(np.ceil((hi - lo) / grid).astype(int) + 1, 2)
     axes = [lo[i] + grid * np.arange(n[i]) for i in range(3)]
     print("size grid", n, "=", int(np.prod(n)), "pts", flush=True)

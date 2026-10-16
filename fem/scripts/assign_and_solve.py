@@ -239,10 +239,10 @@ def sigma_of(lab, include_background=None, order=None):
     return s
 
 
-def assemble(nodes, tets, sigma, batch=None):
+def assemble(nodes, tets, sigma, batch=None, fibre=None):
     """Bounded-memory reference assembly; production solves use Elmer."""
     from element_batches import assemble as batched_assemble
-    return batched_assemble(nodes, tets, sigma, batch=batch)
+    return batched_assemble(nodes, tets, sigma, batch=batch, fibre=fibre)
 
 
 def boundary_nodes(tets, nbr=None):
@@ -403,7 +403,10 @@ def solve_basis_fields(nodes, tets, contact_stl=None, insulator_stl=None,
     dura_leak_report(nodes_k, tets_k, lab_k, order=order)
 
     sigma = sigma_of(lab_k, include_background=include_background, order=order)
-    A, vol, tets_k = assemble(nodes_k, tets_k, sigma)
+    import fibres
+    fibre_bin, fibre_a, fibre_info = fibres.fibre_field(nodes_k, tets_k, lab_k, order)
+    fibre = None if fibre_bin is None else (fibre_bin, fibre_a)
+    A, vol, tets_k = assemble(nodes_k, tets_k, sigma, fibre=fibre)
     from scipy.sparse.csgraph import connected_components
     n_components = connected_components(A, directed=False, return_labels=False)
     if n_components != 1:
@@ -510,7 +513,8 @@ def solve_basis_fields(nodes, tets, contact_stl=None, insulator_stl=None,
         iterations=np.asarray(iteration_counts), amg_seed=0,
         requested_residual=1e-11, contact_ids=np.asarray(contact_ids),
         order=np.array(order), pinned_node=far,
-        background_included=include_background)
+        background_included=include_background,
+        **({} if fibre is None else dict(fibre_bin=fibre_bin, fibre_a=fibre_a)))
 
 
 def main():

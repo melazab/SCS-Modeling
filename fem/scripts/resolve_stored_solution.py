@@ -42,9 +42,10 @@ def main():
     t0 = time.time()
     with Resources(args.cpus, args.memory_gb) as resources:
         nodes, tets = ref['nodes'], ref['tets']
+        fibre = (ref['fibre_bin'], ref['fibre_a']) if 'fibre_bin' in ref.files else None
         result = solve_prepared(nodes, tets, ref['label'], ref['sigma'], order, contacts,
                                 args.work_dir, resources,
-                                lambda pct: print('PROGRESS %d' % pct, flush=True))
+                                lambda pct: print('PROGRESS %d' % pct, flush=True), fibre=fibre)
     if int(result['pinned_node']) != int(ref['pinned_node']):
         raise SystemExit('pinned node differs (%d vs %d); fields are not comparable'
                          % (result['pinned_node'], ref['pinned_node']))

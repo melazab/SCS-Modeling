@@ -184,7 +184,13 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-DEFAULT_STL = os.path.join(REPO, "STL_files")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import anatomy  # noqa: E402
+
+# The anatomy the ganglia are read from (anatomy.py): the extended model's
+# bodies by default, which include RADO's own five lead STLs unchanged.
+DEFAULT_STL = anatomy.STL_DIR
 DEFAULT_FORAMEN = os.path.join(HERE, "foraminal_corridors.json")
 
 MIDLINE_X = 56.60
@@ -385,6 +391,8 @@ def ganglion_frame(tag, foramen=None, stl_dir=DEFAULT_STL, cores=None):
 
     if cores is None:
         cores = {}
+    if info.get("copy_matrix") is not None:
+        return _copied_frame(tag, info, foramen, stl_dir, cores)
     core = cores.get(info["drg_core_stl"])
     if core is None:
         core = read_stl(os.path.join(stl_dir, info["drg_core_stl"]))
@@ -457,6 +465,44 @@ def ganglion_frame(tag, foramen=None, stl_dir=DEFAULT_STL, cores=None):
         "ganglion_u_centre": u,
         "usable_u": info["usable_u"],
     }
+
+
+def _copied_frame(tag, info, foramen, stl_dir, cores):
+    """The frame of an extended-model ganglion: S^k of its source's frame.
+
+    The copy IS S^k of the source core (extend_rado.py), so carrying the
+    source's frame with it puts a lead on the copy exactly where it sits on
+    the source, moved up k levels. Rebuilding the frame from the copy's own
+    mesh would not: the roll is taken from the global dorsal axis, which S
+    does not rotate, so the lead would turn by up to the 23 deg the canal
+    leans at T6. The copy's own core is read to CHECK the claim -- its
+    centroid must land where S^k sends the source's."""
+    src = ganglion_frame(info["copy_of"], foramen, stl_dir, cores)
+    m = np.asarray(info["copy_matrix"], float)
+    r, t = m[:3, :3], m[:3, 3]
+    # The manifest stores S to 9 decimals, so S^k is orthonormal only to
+    # ~1e-9. Snap it to the nearest rotation (polar factor) so the copied
+    # frame is as exactly rigid as a built one; the shift is ~1e-9 mm.
+    u, _sv, vt = np.linalg.svd(r)
+    r = u @ vt
+    core = cores.get(info["drg_core_stl"])
+    if core is None:
+        core = read_stl(os.path.join(stl_dir, info["drg_core_stl"]))
+        cores[info["drg_core_stl"]] = core
+    origin = r @ src["origin"] + t
+    miss = float(np.linalg.norm(area_centroid(core) - origin))
+    if miss > 1e-3:
+        raise AssertionError("%s is not S^%d of %s: centroids differ by %.4f mm"
+                             % (tag, info["copy_k"], info["copy_of"], miss))
+    basis = r @ src["basis"]
+    out = dict(src)
+    w, _v = principal_axes(core)
+    out.update(tag=tag, origin=origin, basis=basis, det=float(np.linalg.det(basis)),
+               core_stl=info["drg_core_stl"], core_facets=len(core),
+               core_signed_volume=signed_volume(core), eigenvalues=[float(x) for x in w],
+               ganglion_u_centre=float(info["ganglion_u_centre"]), usable_u=info["usable_u"],
+               copy_of=info["copy_of"], copy_k=int(info["copy_k"]), copy_centroid_miss_mm=miss)
+    return out
 
 
 def frame_matrix(frame):

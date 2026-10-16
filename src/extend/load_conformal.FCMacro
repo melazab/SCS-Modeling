@@ -1,0 +1,78 @@
+# Load a conform.py output set into a NEW FreeCAD document for inspection.
+#
+# Run from the FreeCAD GUI (Macro > Macros... or exec in the Python console).
+# The geometry directory comes from the environment variable SCS_CONFORMAL_DIR,
+# default fem/out/geometry/rado_up4_conformal. Groups, labels and colours are
+# taken from the open template document (NBF_RADO_SCS) when it is open: each
+# body gets the label of its largest member, plus "(fused, N parts)".
+# Nothing is saved; save from the GUI as NBF_RADO-SCS_extended.FCStd (repo root)
+# if you want to keep it. An open copy with unsaved changes is never replaced.
+import json
+import os
+import re
+
+import FreeCAD as App
+import Mesh
+
+ROOT = "/home/mohamed/Projects/SCS-Modeling"
+SRC = os.environ.get("SCS_CONFORMAL_DIR", os.path.join(ROOT, "fem/out/geometry/rado_up4_conformal"))
+DOC = "NBF_RADO_SCS_extended"          # FreeCAD names cannot hold "-"
+LABEL = "NBF_RADO-SCS_extended"
+GROUPS = {"vertebra": "01 Vertebrae", "disc": "02 Discs", "blood": "03 Vasculature", "epidural": "04 Epidural space",
+          "dura": "05 Dura and meninges", "csf": "06 CSF", "white": "07 White matter", "grey": "08 Grey matter",
+          "root": "09 Nerve roots", "drg": "10 DRG", "sympathetic": "11 Sympathetic chain"}
+
+
+def sanitize(stem):
+    return re.sub(r"[^A-Za-z0-9_]", "_", stem)
+
+
+def main():
+    if not App.GuiUp:
+        raise SystemExit("run this from the FreeCAD GUI")
+    report = json.load(open(os.path.join(SRC, "conform_report.json")))
+    tmpl = App.listDocuments().get("NBF_RADO_SCS")
+    if DOC in App.listDocuments():
+        import FreeCADGui as Gui
+        if Gui.getDocument(DOC).Modified:
+            raise SystemExit("%s has unsaved changes; save or close it first" % LABEL)
+        App.closeDocument(DOC)
+    doc = App.newDocument(DOC, LABEL)
+    groups = {}
+    for pipe, label in GROUPS.items():
+        groups[pipe] = doc.addObject("App::DocumentObjectGroup", "G_" + pipe)
+        groups[pipe].Label = label
+    for o in report["outputs"]:
+        # no fixDegenerations: it deletes facets (256 on the epidural body), so
+        # the preview would no longer be the file
+        m = Mesh.Mesh(os.path.join(SRC, o["file"]))
+        obj = doc.addObject("Mesh::Feature", sanitize(os.path.splitext(o["file"])[0])[:60])
+        obj.Mesh = m
+        members = o["members"]
+        src = None
+        if tmpl is not None:
+            for mem in members:
+                stem = os.path.splitext(mem)[0]
+                # continuous bodies are named "<RADO stem>__extended_up4"
+                for name in (stem, re.sub(r"__extended_up\d+$", "", stem)):
+                    src = tmpl.getObject(sanitize(name))
+                    if src is not None:
+                        break
+                if src is not None:
+                    break
+        base = src.Label if src is not None else os.path.splitext(members[0])[0][8:]
+        obj.Label = base if len(members) == 1 else "%s (fused, %d parts)" % (base, len(members))
+        obj.Label2 = "%s, %.1f mm3, %d triangles; %s" % (o["file"], o["volume_mm3"], o["triangles"],
+                                                         ", ".join(members)[:300])
+        groups[o["tissue"]].addObject(obj)
+        if src is not None:
+            vo, rv = obj.ViewObject, src.ViewObject
+            vo.ShapeAppearance = rv.ShapeAppearance
+            vo.Transparency = rv.Transparency
+            vo.DisplayMode = rv.DisplayMode
+            vo.Lighting = rv.Lighting
+    doc.recompute()
+    App.Console.PrintMessage("loaded %d bodies from %s into %s\n" % (len(report["outputs"]), SRC, DOC))
+
+
+main()

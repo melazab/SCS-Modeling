@@ -81,15 +81,20 @@ class CostModel(object):
     def __init__(self, contact_stl=None, insulator_stl=None,
                  grid=ESTIMATE_GRID_MM, margin=1.0):
         from scipy.spatial import cKDTree
-        clouds, epidural_pts = _clouds(contact_stl, insulator_stl)
-        lo = epidural_pts.min(0) - margin
-        hi = epidural_pts.max(0) + margin
+        from mesh_geometry import Extent
+        clouds, bounds = _clouds(contact_stl, insulator_stl)
+        # The crop window is per parameter set, so keep the sample points and
+        # mask them per estimate; the full box is sampled once.
+        self.extent = Extent(clouds, bounds)
+        self.margin = margin
+        lo, hi = self.extent.box(0, margin)
         n = np.maximum(np.ceil((hi - lo) / grid).astype(int) + 1, 2)
         axes = [lo[i] + grid * np.arange(n[i]) for i in range(3)]
         gx, gy, gz = np.meshgrid(*axes, indexing="ij")
         P = np.stack([gx.ravel(), gy.ravel(), gz.ravel()], 1)
 
         self.grid = grid
+        self.points = P
         self.n_samples = len(P)
         self.dists = {}
         for name, cloud in clouds.items():
@@ -103,9 +108,14 @@ class CostModel(object):
 
     def raw_tets(self, params):
         """The uncalibrated perfect-tet integral for one parameter set."""
-        h = np.full(self.n_samples, float(params["H_MAX"]))
+        crop = float(params.get("CROP_MM", 0.0) or 0.0)
+        keep = slice(None)
+        if crop > 0:
+            lo, hi = self.extent.box(crop, self.margin)
+            keep = np.all((self.points >= lo) & (self.points <= hi), axis=1)
+        h = np.full(self.n_samples, float(params["H_MAX"]))[keep]
         for name, hnear, plateau, growth in params["FIELDS"]:
-            d = self.dists[name]
+            d = self.dists[name][keep]
             np.minimum(h, hnear + growth * np.maximum(0.0, d - plateau), out=h)
         np.clip(h, params["H_MIN"], params["H_MAX"], out=h)
         cell_v = self.grid ** 3

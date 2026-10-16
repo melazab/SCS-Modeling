@@ -105,6 +105,7 @@ usual __main__ guard never fires. Same story as measure_corridor.py.
 """
 import json
 import os
+import re
 import shlex
 import sys
 
@@ -113,7 +114,11 @@ import Mesh
 
 MIDLINE_X = 56.60
 HERE = os.path.dirname(os.path.abspath(__file__))
-STL_DIR = os.path.join(HERE, "..", "..", "STL_files")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import anatomy  # noqa: E402
+
+STL_DIR = anatomy.STL_DIR
 DEFAULT_JSON = os.path.join(HERE, "foraminal_corridors.json")
 DEFAULT_REPORT = os.path.join(HERE, "foramen_report.txt")
 
@@ -135,8 +140,9 @@ DRG_CORE_GLOBS = (
 # NOT hardcoded -- it is found by asking which block's bounding box contains the
 # ganglion core, which is the same kind of geometry-derived answer as the level
 # numbering. See assign_blocks().
-BLOCK_STEM = "additional_menginges-%d"
-BLOCK_INDICES = tuple(range(2, 10))
+# RADO's eight blocks are additional_menginges-2..9; the extended model adds
+# level copies additional_menginges-N__up<k>.
+BLOCK_REGEX = r"^additional_menginges-\d+(__up\d+)?$"
 
 # Bodies a lead must not pass through, other than the target ganglion itself:
 # every nerve-root core near the corridor. Matched by filename prefix because
@@ -350,8 +356,52 @@ def find_ganglia():
         for level, core in enumerate(cores, start=1):
             core["side"] = side
             core["x_sign"] = 1 if side == "left" else -1
-            found["%s%d" % (side[0].upper(), level)] = core
+            tag = "%s%d" % (side[0].upper(), level)
+            found[tag] = core
+            found.update(level_copies(tag, core))
     return found
+
+
+def step_matrix():
+    """The extended model's level step S (4x4), from the set's manifest, or
+    None for RADO's own set, which has no copies."""
+    path = os.path.join(STL_DIR, "manifest.json")
+    if not os.path.exists(path):
+        return None
+    return json.load(open(path))["step"]["S"]
+
+
+def level_copies(tag, core):
+    """The extended model's copies of one ganglion core, as {tag: info}.
+
+    extend_rado.py builds level k as S^k applied to RADO's top level unit, so
+    a copy "<core>__up<k>" is S^k of its source, exactly (residual ~2e-5 mm).
+    Named "<source tag>_T<level>" -- "L1_T9" is the template's "DRG L1 --
+    ganglion core [T9 level]". The copy records S^k, and rado_drg_lead builds
+    its frame as S^k of the source's frame, so a lead placed on it is RADO's
+    lead on the source, moved up k levels."""
+    S = step_matrix()
+    if S is None:
+        return {}
+    stem = os.path.splitext(core["stl"])[0][len(anatomy.PREFIX):]
+    out = {}
+    for fn in anatomy.names_matching(r"^%s__up\d+$" % re.escape(stem)):
+        _src, k = anatomy.level_copy(os.path.splitext(fn)[0])
+        mesh = Mesh.Mesh(os.path.join(STL_DIR, fn))
+        bb = mesh.BoundBox
+        Sk = [[1.0 if i == j else 0.0 for j in range(4)] for i in range(4)]
+        for _ in range(k):
+            Sk = [[sum(S[i][m] * Sk[m][j] for m in range(4)) for j in range(4)] for i in range(4)]
+        out["%s_%s" % (tag, anatomy.level_of_copy(k))] = {
+            "stl": fn,
+            "source_index": core["source_index"],
+            "centroid": list(area_centroid(mesh)),
+            "u_range": sorted([abs(bb.XMin - MIDLINE_X), abs(bb.XMax - MIDLINE_X)]),
+            "z_range": [bb.ZMin, bb.ZMax],
+            "side": core["side"], "x_sign": core["x_sign"],
+            "copy_of": tag, "copy_k": k, "copy_matrix": Sk,
+        }
+    return out
 
 
 def assign_blocks(ganglia):
@@ -363,10 +413,9 @@ def assign_blocks(ganglia):
     wrong foramen.
     """
     blocks = []
-    for i in BLOCK_INDICES:
-        path = stl(BLOCK_STEM % i)
-        bb = Mesh.Mesh(path).BoundBox
-        blocks.append({"stl": os.path.basename(path), "index": i, "bb": bb})
+    for fn in anatomy.names_matching(BLOCK_REGEX):
+        bb = Mesh.Mesh(os.path.join(STL_DIR, fn)).BoundBox
+        blocks.append({"stl": fn, "bb": bb})
     warnings = []
     for tag, core in sorted(ganglia.items()):
         cx, cy, cz = core["centroid"]
@@ -455,6 +504,7 @@ def main():
         fit = fit_corridor(use, degree)
 
         entry = {"side": core["side"], "x_sign": core["x_sign"],
+                 "level": (anatomy.level_of_copy(core["copy_k"]) if "copy_k" in core else None),
                  "block_stl": core["block_stl"], "drg_core_stl": core["stl"],
                  "ganglion_centroid": core["centroid"],
                  "ganglion_u": core["u_range"],
@@ -465,6 +515,9 @@ def main():
                  "min_z_extent_mm": min(r[4] for r in use),
                  "stations": [[round(v, 6) for v in r] for r in use]}
         entry.update(fit)
+        for key in ("copy_of", "copy_k", "copy_matrix"):
+            if key in core:
+                entry[key] = core[key]
 
         xs = [MIDLINE_X + core["x_sign"] * u for u, _y, _z, _ye, _ze in use]
         entry["neural_stls"] = neural_neighbours(

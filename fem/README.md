@@ -36,6 +36,76 @@ classification verification, mesh convergence and background/domain sensitivity
 are deferred until after the poster, explicitly recorded in [TODO.md](TODO.md).
 Historical validation below must not be generalized to these full models.
 
+## The extended T6–T12 model — October 15, 2026
+
+This change stales every earlier mesh and solution: the model signature
+hashes every tissue STL, `tissue_map.yaml` and the solver files.
+
+**Geometry.** `config.py` meshes the fused, overlap-free T6–T12 set
+`fem/out/geometry/rado_up4_conformal/` (89 bodies, `src/extend/conform.py`) by
+default. `SCS_GEOMETRY=rado` selects RADO's own T10–T12 `STL_files/`. The set
+is generated, not committed; Pioneer jobs sync it like any other hashed input.
+The Mesh Generator's first line says which set is meshed. Neither macro reads
+anatomy from the open document.
+
+**White matter is anisotropic**: 0.083 S/m across the fibres, 0.6 S/m along
+them (Khadka's anisotropic option). The fibre direction is the local tangent of
+the extended cord centreline (`fem/out/geometry/rado_up4/centreline.json`),
+which turns 43° between T12 and T6.
+- **Binning.** `fibres.py` bins elements by direction at 0.25°. Each bin is one
+  Elmer body with a full 3×3 `Electric Conductivity`, and the independent
+  residual check applies the same tensors.
+- **Checks.** (`tests/test_elmer_backend.py`)
+  - The element matrix equals vol·G Σ Gᵀ.
+  - A uniform current through an anisotropic block is reproduced exactly, and
+    the isotropic value visibly fails that check.
+  - Elmer's per-bin bodies match a direct solve.
+  - Elmer itself reproduces the analytic block to 7e-14 V.
+- `SCS_ISOTROPIC_WM=1` restores the isotropic 0.1432 S/m.
+
+**Elmer body numbering.** Elmer requires Body 1..N with no gaps. Bodies are
+now numbered over the tissues actually present, so a class with no elements
+(all white matter in fibre bins, or a tissue a crop leaves out) no longer
+breaks the solve.
+
+**Pieces not connected to the lead are dropped** before solving, up to 0.5 % of
+the active volume (`elmer_backend.drop_islands`). Above that the solve refuses.
+On the fused set they are specks at the tips of the peripheral vessels, where
+a vessel is thinner than the elements: 3–14 mm³ of blood per coarse run. The
+solve report lists them by tissue.
+
+**Crop window** (`CROP_MM`, the Mesh Generator's "Crop beyond lead"). The box
+is cut this far below and above the lead and hugs the anatomy inside that
+window. The cut faces are part of the uniform-return boundary, so for a
+bipolar or any balanced montage they act as insulating planes.
+
+Measured on a coarse whole-model mesh (T10 lead, bipolar 3→5). Each crop
+deleted the tets outside the window and re-solved, so every remaining element
+was identical and only the cut differs:
+
+| crop beyond lead ends | largest change in \|E\|, dorsal columns and grey matter, within ±40 mm of the lead centre | drive voltage |
+|---|---|---|
+| 80 mm | 0.03 % of the peak | < 0.01 % |
+| 50 mm | 0.17–0.22 % | 0.01 % |
+| 30 mm | 0.44–0.55 % | 0.02 % |
+| 15 mm | 1.2–1.5 % | 0.05 % |
+
+Comparing separately built meshes instead mixes in mesh noise: their drive
+voltages differed by 1–8 %, from the coarse contacts alone. The panel starts
+at 50 mm. `DEFAULT_PARAMS` keeps 0 (the whole model) for scripts.
+
+**Coarse rehearsal** (H_Min 0.35, Dura 0.5, White 0.8 mm):
+
+| lead | mesh | dura leak | islands dropped | worst contact residual |
+|---|---|---|---|---|
+| T10, whole model | 1.98 M tets | 0.000 % | 6.1 mm³ | 7.5e-9 |
+| T10, crop 50 mm | 1.20 M tets | 0.000 % | 3.3 mm³ | 7.4e-9 |
+| T7 (Lead Designer), crop 50 mm | 1.03 M tets | 0.030 % | 4.2 mm³ | 6.4e-9 |
+
+The T7 leak is at 0.5 mm dura elements; the default is 0.25 mm. The cost
+estimator over-predicted these by about 8 %. At the poster's settings it
+predicts 33.5 M tets for the whole model and 16.5 M at a 50 mm crop.
+
 ## Current workflow and reliability fixes
 
 ### Saved FreeCAD documents
@@ -196,9 +266,10 @@ fem/.venv/bin/python -m unittest discover -s fem/tests -v
 fem/.venv/bin/python fem/scripts/verify_solver.py
 ```
 
-Still outstanding: anisotropic white matter, the ambiguous root “Middle” tissue
-assignment, anatomical resolution/convergence checks and NEURON coupling.
-No conductivity was changed in this reliability work.
+Still outstanding: the ambiguous root “Middle” tissue assignment, anatomical
+resolution/convergence checks and NEURON coupling. No conductivity was changed
+in this reliability work. (Anisotropic white matter came later, with the
+extended model: see below.)
 
 ## Historical canal-only workflow and validation
 
@@ -766,10 +837,13 @@ in chunk 5, before thresholds are computed on top of it.
 1. **Interfaces are resolved to element size, not followed exactly** — the
    consequence of classifying tets instead of meshing bodies conformally. The
    dura leakage figure in RESULTS bounds how much this costs where it matters.
-2. **White matter is isotropic** at 0.1432 S/m, following `tissue_map.yaml`.
-   Khadka's paper uses 0.1432 transverse / 0.6 longitudinal. For dorsal-column
-   fibre recruitment this matters and should be added before any comparison with
-   the paper's thresholds is taken seriously.
+2. **~~White matter is isotropic.~~ FIXED 2026-10-15.** White matter is
+   0.083 S/m across the fibres and 0.6 S/m along them, Khadka's anisotropic
+   option (`tissue_map.yaml` `anisotropic_S_per_m`; 0.1432 S/m is the paper's
+   ISOTROPIC option, not its transverse value, which this list used to say). The
+   fibre direction is the local cord-centreline tangent (`fibres.py`), binned
+   at 0.25 deg. Every run before this date is isotropic 0.1432 S/m;
+   `SCS_ISOTROPIC_WM=1` reproduces that. RADO has no separate Lissauer's tract.
 3. **~~Stripped model.~~ FIXED 2026-09-15 — but read the two caveats.** All 240
    anatomical STLs are now classified, into the eleven tissue classes
    `src/ansys/tissue_map.yaml` defines, each with that file's own conductivity

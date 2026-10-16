@@ -77,8 +77,11 @@ Messages are at `ExtAPI.Application.Messages`; nothing useful reaches stdout.
 
 ## Anisotropic white matter
 
-Engineering Data holds white matter as **isotropic** 0.1432 S/m (the paper's
-transverse value). The paper's anisotropy — 0.1432 transverse / 0.6 longitudinal
-— cannot be entered through the Mechanical Electric GUI. It needs an APDL command
+Engineering Data holds white matter as **isotropic** 0.1432 S/m, which is the
+paper's isotropic option. The paper's anisotropic option is 0.083 S/m transverse
+/ 0.6 S/m longitudinal (this note used to say 0.1432 / 0.6, which is wrong). It
+cannot be entered through the Mechanical Electric GUI; it needs an APDL command
 snippet (`MP,RSVX/RSVY/RSVZ`) or PyMAPDL; see `mapdl_electric_solve_template.dat`.
-The cord axis is global Z in this STL set. Currently left isotropic by choice.
+The cord axis is close to global Z only in RADO's own T10-T12; the extended
+model's cord turns ~43 deg, so a per-element orientation would be needed. The
+fem/ route implements it (fem/scripts/fibres.py). Left isotropic here.

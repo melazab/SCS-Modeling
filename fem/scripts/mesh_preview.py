@@ -138,7 +138,8 @@ def main():
         raw = json.load(fh)
     params = dict(H_MIN=raw["H_MIN"], H_MAX=raw["H_MAX"],
                   FIELDS=[tuple(x) for x in raw["FIELDS"]],
-                  GRID=raw["GRID"], MARGIN=raw["MARGIN"])
+                  GRID=raw["GRID"], MARGIN=raw["MARGIN"],
+                  CROP_MM=float(raw.get("CROP_MM", 0.0) or 0.0))
     lead_dir = raw.get("LEAD_DIR") or None
     contact_stl, insulator_stl = C.lead_stls(lead_dir)
     if lead_dir is not None and not C.is_single_lead_dir(lead_dir):
@@ -202,6 +203,8 @@ def main():
         preview_vtp=preview_path,
         elapsed_s=round(time.time() - t0, 1),
         params=params,
+        geometry=C.GEOMETRY,
+        box_mm=[[float(v) for v in lo], [float(v) for v in hi]],
         lead_dir=lead_dir,
         mesh_npz=os.path.join(scratch_dir, "mesh.npz"),
         # The tissue_id integers embedded in preview.vtp's cell array are
