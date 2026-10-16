@@ -23,8 +23,9 @@ None of these scripts needs FreeCAD or SCT on `PATH`. Only `pam50_level_match.py
 uses SCT at all, and it just reads PAM50's NIfTI files from
 `~/sct_7.3/data/PAM50/template/` (the path is set in the script).
 All four read RADO's original `STL_files/` through `fem/scripts/config.py` and
-`inside.py`, which are imported, never modified. They do not see the T6–T9
-extension.
+`inside.py`, which are imported, never modified. The three that load geometry set
+`SCS_GEOMETRY=rado` before importing config, whose default is the fused T6–T12
+set, so they do not see the T6–T9 extension.
 
 Run in this order (each takes seconds):
 

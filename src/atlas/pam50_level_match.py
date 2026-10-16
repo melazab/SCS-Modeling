@@ -39,6 +39,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "fem", "scripts"))
 
+# These scripts work on RADO's original T9-T11 bodies, which the atlas is
+# registered to. Pin config to them; its default is the fused T6-T12 set.
+os.environ["SCS_GEOMETRY"] = "rado"
 import config as C  # noqa: E402
 from inside import InsideTester  # noqa: E402
 from stlio import read_stl  # noqa: E402
