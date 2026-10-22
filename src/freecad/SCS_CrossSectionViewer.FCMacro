@@ -98,7 +98,7 @@ CENTRELINE = os.path.join(REPO, "fem", "out", "geometry", "rado_up4", "centrelin
 OBJECT_NAME = "SCS_CrossSectionViewerDock"
 LEGACY_CAPS = "XsecCaps"     # the document group older versions filled
 CAP_LIFT_MM = 0.01           # faces and outlines sit this far on the kept side
-STEP_MM = 0.5
+STEP_MM = 0.1
 ZOOM_MM = 40.0               # field of view when the camera is first aligned
 FILL_DELAY_MS = 250          # faces fill this long after the slider stops
 THIN_MM = 0.005              # outline thinning before building faces
@@ -548,7 +548,7 @@ class XsecPanel(QtWidgets.QWidget):
         self.face_timer = QtCore.QTimer(self); self.face_timer.setSingleShot(True)
         self.face_timer.setInterval(FILL_DELAY_MS)
         self.face_timer.timeout.connect(self.fill_faces)
-        self.slider.valueChanged.connect(lambda k: self.set_s(k*STEP_MM, from_slider=True))
+        self.slider.valueChanged.connect(lambda k: self.set_s(round(k*STEP_MM, 3), from_slider=True))
         self.spin.valueChanged.connect(lambda s: self.set_s(s))
         self.set_s(self.levels.get("T10", smax/2))
         self.align.setEnabled(False)
@@ -586,7 +586,7 @@ class XsecPanel(QtWidgets.QWidget):
             self.slider.blockSignals(False)
         near = min(self.levels, key=lambda k: abs(self.levels[k] - self.s))
         d = self.s - self.levels[near]
-        if abs(d) <= 0.25:
+        if abs(d) < STEP_MM/2:
             self.level.setCurrentIndex(self.level.findText(near))
         else:
             self.level.setItemText(0, "%s %+.1f mm" % (near, d))
