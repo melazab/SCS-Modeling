@@ -18,6 +18,8 @@ THE PANEL
                                vertebra drawn from that vertebra's own map
   Side     Both | Left | Right patient side; the other side stays as plain
                                white and grey matter
+  Show fibres / Fibres shown   the fibres placed for the threshold runs, as lines
+                               in their tract's colour (src/atlas/place_fibers.py)
   Tract tree                   tick a tract, a funiculus or everything; the
                                area is the mean cross-section, both sides
 
@@ -59,6 +61,10 @@ scs_ui = importlib.reload(scs_ui)
 
 ATLAS = os.path.join(REPO, "fem", "out", "atlas")
 BODIES = os.path.join(ATLAS, "tract_bodies")
+FIBRES = os.path.join(ATLAS, "fibers", "pilot")
+FIBRE_GROUP = "Fibres"
+FIBRE_COLOUR = {"dc": "fasciculus gracilis",                     # a tract's colour per fibre set
+                "st": "spinal lemniscus (spinothalamic and spinoreticular tracts)"}
 OBJECT_NAME = "SCS_TractVisualizerDock"
 GROUP = "Tract_bodies"
 THICK_MM = 0.3
@@ -141,6 +147,15 @@ class TractPanel(QtWidgets.QWidget):
             "the cord back.")
         self.toggle.toggled.connect(self.on_toggle)
         lay.addWidget(self.toggle)
+        self.fib_toggle = scs_ui.StateToggle(
+            "Show fibres", "Fibres shown",
+            "The fibres placed for the threshold runs (src/atlas/place_fibers.py): dorsal columns "
+            "and spinothalamic, as lines in their tract's colour, following Side. They show as "
+            "dots in the Cross-section viewer's thin slice.")
+        self.fib_toggle.toggled.connect(self.on_fibres)
+        self.fib_index = os.path.join(FIBRES, "fibers.json")
+        self.fib_toggle.setEnabled(os.path.exists(self.fib_index))
+        lay.addWidget(self.fib_toggle)
 
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignRight)
@@ -241,6 +256,10 @@ class TractPanel(QtWidgets.QWidget):
         if self.toggle.isChecked() and not shown:
             self.restore_cord()
         self.toggle.set_state(shown)
+        try:
+            self.fib_toggle.set_state(self.doc.getObject(FIBRE_GROUP) is not None)
+        except Exception:
+            pass
         if shown:
             self.hide_cord()
 
@@ -389,6 +408,40 @@ class TractPanel(QtWidgets.QWidget):
                 vo.Visibility = on
             if on and [round(x, 3) for x in vo.ShapeColor[:3]] != [round(x, 3) for x in rgb]:
                 vo.ShapeColor = rgb
+        fg = self.doc.getObject(FIBRE_GROUP)
+        for o in (fg.Group if fg is not None else []):
+            on = o.TractSide in sides
+            if o.ViewObject.Visibility != on:
+                o.ViewObject.Visibility = on
+
+    def on_fibres(self, on):
+        if not on:
+            g = self.doc.getObject(FIBRE_GROUP)
+            if g is not None:
+                for o in list(g.Group):
+                    self.doc.removeObject(o.Name)
+                self.doc.removeObject(g.Name)
+            return
+        with open(self.fib_index) as f:
+            index = json.load(f)
+        g = self.doc.addObject("App::DocumentObjectGroup", FIBRE_GROUP)
+        g.Label = "Fibres"
+        for fb in index["fibers"]:
+            with open(os.path.join(FIBRES, fb["name"] + ".json")) as f:
+                pts = json.load(f)["points"]
+            o = self.doc.addObject("Part::Feature", "Fibre")
+            o.Label = fb["name"]
+            o.Shape = Part.makePolygon([FreeCAD.Vector(*p) for p in pts])
+            for k, val in (("FibreTract", fb["tract"]), ("TractSide", fb["side"])):
+                o.addProperty("App::PropertyString", k, "Fibre")
+                setattr(o, k, val)
+            g.addObject(o)
+            vo = o.ViewObject
+            if vo is not None:
+                vo.LineColor = hex_rgb(self.info[FIBRE_COLOUR[fb["tract"]]][0])
+                vo.LineWidth = 2
+        self.doc.recompute()
+        self.apply_visibility()
 
     def shutdown(self):
         self.sync.stop()
