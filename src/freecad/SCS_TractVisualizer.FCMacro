@@ -66,6 +66,7 @@ THICK_MM = 0.3
 FUNICULI = (("Dorsal columns", range(0, 4)), ("Lateral funiculus", range(4, 14)),
             ("Ventral funiculus", range(14, 30)), ("Grey matter", range(30, 36)))
 CORD_LABELS = ("Spinal cord — white matter", "Spinal cord — grey matter")
+PLAIN = {"WM": "white", "GM": "grey"}
 
 
 def hex_rgb(h):
@@ -182,7 +183,7 @@ class TractPanel(QtWidgets.QWidget):
                 pm = QtGui.QPixmap(12, 12); pm.fill(QtGui.QColor(t["colour"]))
                 it.setIcon(0, QtGui.QIcon(pm))
                 it.setTextAlignment(1, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-                it.setCheckState(0, QtCore.Qt.Unchecked if title == "Grey matter" else QtCore.Qt.Checked)
+                it.setCheckState(0, QtCore.Qt.Checked)
                 it.setToolTip(0, "%s (PAM50 labels %d and %d)" % (t["name"].replace("WM left ", "").replace("GM left ", ""), i, i + 1))
                 if not a:
                     it.setDisabled(True)
@@ -315,6 +316,11 @@ class TractPanel(QtWidgets.QWidget):
             o.Mesh = Mesh.Mesh(os.path.join(BODIES, b["stl"]))
             o.Label = "%s %s" % (b["side"], b["short"])
             self.tag(o, b, "body")
+        for h in self.index.get("halves", []):           # the uncoloured side, in one piece
+            o = self.doc.addObject("Mesh::Feature", "TractHalf")
+            o.Mesh = Mesh.Mesh(os.path.join(BODIES, h["stl"]))
+            o.Label = "%s %s matter" % (h["side"], PLAIN[h["tissue"]])
+            self.tag(o, {"short": "plain " + h["tissue"], "side": h["side"], "colour": "#808080"}, "half")
 
     def add_slices(self):
         with open(os.path.join(REPO, self.maps["T10"]["centreline"])) as f:
@@ -326,6 +332,7 @@ class TractPanel(QtWidgets.QWidget):
             if L not in self.maps:
                 continue
             c, u, v, t = frame_at(cl, s)
+            by_half = {}
             for tr in self.maps[L]["tracts"]:
                 shape = slice_shape(tr["polygons_uv_mm"], c, u, v, t)
                 if shape is None:
@@ -334,6 +341,13 @@ class TractPanel(QtWidgets.QWidget):
                 o.Label = "%s slice %s %s" % (L, tr["side"], tr["short"])
                 o.Shape = shape
                 self.tag(o, tr, "slice")
+                by_half.setdefault((tr["side"], tr["tissue"]), []).append(shape)
+            for (side, tissue), shapes in by_half.items():   # the uncoloured side, in one piece
+                half = shapes[0].multiFuse(shapes[1:]).removeSplitter() if len(shapes) > 1 else shapes[0]
+                o = self.doc.addObject("Part::Feature", "TractHalfSlice")
+                o.Label = "%s slice %s %s matter" % (L, side, PLAIN[tissue])
+                o.Shape = half
+                self.tag(o, {"short": "plain " + tissue, "side": side, "colour": "#808080"}, "halfslice")
 
     def plain_colours(self):
         """The cord's own white- and grey-matter colours, from the document."""
@@ -349,20 +363,26 @@ class TractPanel(QtWidgets.QWidget):
 
     def apply_visibility(self):
         """Ticked tracts of the chosen side in their colours; with one side
-        chosen, the other side's bodies in plain white and grey matter, so the
-        cord stays whole (they tile it exactly)."""
-        kind = ("body", "slice")[self.mode.index()]
+        chosen, the other side as plain white and grey matter, one piece each
+        (the halves: no tract seams), so the cord stays whole."""
+        kind, half_kind = (("body", "half"), ("slice", "halfslice"))[self.mode.index()]
         sides = (("left", "right"), ("left",), ("right",))[self.side.index()]
         plain = self.plain_colours() if len(sides) == 1 else None
-        for o in self.objects():
+        objs = self.objects()
+        halves = any(o.TractKind == half_kind for o in objs)
+        for o in objs:
             colour, tissue = self.info.get(o.TractName, ("#808080", "WM"))
-            if o.TractKind != kind:
+            if o.TractKind == half_kind:
+                on, rgb = plain is not None and o.TractSide not in sides, plain and plain[o.TractName[-2:]]
+            elif o.TractKind != kind:
                 on, rgb = False, None
             elif o.TractSide in sides:
                 it = self.items.get(o.TractName)
                 on = it is not None and it.checkState(0) == QtCore.Qt.Checked
                 rgb = hex_rgb(colour)
-            else:
+            elif halves:
+                on, rgb = False, None
+            else:                                       # bodies built before the halves
                 on, rgb = True, plain[tissue]
             vo = o.ViewObject
             if vo.Visibility != on:

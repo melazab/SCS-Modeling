@@ -85,7 +85,9 @@ first-build defect each one fixed:
 - no corner-only contacts (islands relabelled), the cause of the first build's
   non-manifold edges;
 - each vertebra's map sits at that vertebra's centroid (`src/freecad/scs_levels.py`),
-  not at its label.
+  not at its label;
+- `half_<side>_<WM|GM>.stl`: each side's white and grey matter in one piece, for
+  the Tract visualizer's uncoloured side (no tract seams).
 
 The lateral reticulospinal tracts (PAM50 labels 10, 11) win no voxel of RADO's cord
 at any level and have no body; every other tract, both sides, has one.

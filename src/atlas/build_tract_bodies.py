@@ -38,8 +38,13 @@ posterior). This builds one closed surface per tract and side:
      STLs' own end caps (manifold3d trim_by_plane): flat ends, flush with the
      cord's.
 
+  7. Halves: each side's white matter and grey matter as one body each (the
+     union of that side's tracts), for the Tract visualizer's uncoloured side,
+     which should read as plain white and grey matter without tract seams.
+
 They are visual and fiber-placement aids only; the FEM never reads them.
-Writes <out>/<id>_<side>_<short>.stl (binary, mm) and <out>/bodies.json.
+Writes <out>/<id>_<side>_<short>.stl and half_<side>_<WM|GM>.stl (binary,
+mm) and <out>/bodies.json.
 """
 import argparse
 import glob
@@ -204,13 +209,11 @@ def main():
     m1 = np.take_along_axis(sm, top1[None], 0)[0]
     m2 = np.take_along_axis(sm, top2[None], 0)[0]
 
-    index = []
-    for n_, i in enumerate(present):
-        tr = tracts[i]
-        f = sm[n_] - np.where(top1 == n_, m2, m1)
+    def mesh(f, name):
+        """Marching cubes of f = 0 into model coordinates, trimmed by the end
+        planes and written as name. Returns (triangles, trimmed, body) or None."""
         if f.max() <= 0:
-            print("%-55s skipped: vanishes after smoothing" % tr["name"])
-            continue
+            return None
         verts, faces, _, _ = marching_cubes(f, 0.0)
         verts -= 1                                   # undo the pad
         iu_, iv_, js = verts.T
@@ -219,7 +222,6 @@ def main():
         w = np.clip(js - j0, 0, 1)[:, None]
         lerp = lambda A: (1 - w)*A[j0] + w*A[j0 + 1]
         xyz = lerp(c) + uu[:, None]*lerp(U) + vv[:, None]*lerp(V)
-        name = "%02d_%s_%s.stl" % (i, tr["side"], tr["short"].split(" (")[0].replace(" ", "_"))
         tri = np.array(faces[:, ::-1], np.uint32, order="C")            # outward
         # writable C-contiguous copies: manifold3d's binding rejects read-only views
         body = m3d.Manifold(m3d.Mesh(vert_properties=np.array(xyz, np.float32, order="C"), tri_verts=tri))
@@ -228,13 +230,23 @@ def main():
             for p0, nn in planes:
                 body = body.trim_by_plane(tuple(nn), float(nn @ p0))
             if body.is_empty():
-                print("%-55s skipped: nothing inside the cord's ends" % tr["name"])
-                continue
-            mesh = body.to_mesh()
-            xyz, tri = np.asarray(mesh.vert_properties)[:, :3], np.asarray(mesh.tri_verts)
+                return None
+            mm = body.to_mesh()
+            xyz, tri = np.asarray(mm.vert_properties)[:, :3], np.asarray(mm.tri_verts)
         else:
             print("%-55s NOT trimmed: %s" % (name, body.status()))
         write_stl(os.path.join(out, name), xyz, tri)
+        return tri, trimmed, body
+
+    index = []
+    for n_, i in enumerate(present):
+        tr = tracts[i]
+        name = "%02d_%s_%s.stl" % (i, tr["side"], tr["short"].split(" (")[0].replace(" ", "_"))
+        got = mesh(sm[n_] - np.where(top1 == n_, m2, m1), name)
+        if got is None:
+            print("%-55s skipped: vanishes after smoothing" % tr["name"])
+            continue
+        tri, trimmed, body = got
         in_cord = (lab == i) & cord
         nvox = int(in_cord.sum())
         index.append({**{k: tr[k] for k in ("id", "name", "short", "side", "tissue", "colour")},
@@ -243,8 +255,27 @@ def main():
                       "volume_vox_mm3": round(nvox*GRID_MM**2*DS_MM, 2),
                       "mean_area_mm2": round(nvox*GRID_MM**2/max(1, in_cord.any(axis=(0, 1)).sum()), 3)})
         print("%-55s %7d tris  %.2f mm2" % (name, len(tri), index[-1]["mean_area_mm2"]))
+    # 7. plain halves: one side's white matter, and its grey matter, each in
+    # one piece (the union of that side's tracts), for the Tract visualizer's
+    # uncoloured side, which should read as white and grey matter, not tracts
+    halves = []
+    for side in ("left", "right"):
+        for tissue in ("WM", "GM"):
+            grp = [n_ for n_, i in enumerate(present)
+                   if tracts[i]["side"] == side and tracts[i]["tissue"] == tissue]
+            if not grp:
+                continue
+            member = np.zeros(len(labels), bool)
+            member[grp] = True
+            name = "half_%s_%s.stl" % (side, tissue)
+            got = mesh(sm[grp].sum(0) - sm[~member].max(0), name)
+            if got is not None:
+                halves.append({"side": side, "tissue": tissue, "stl": name, "triangles": int(len(got[0])),
+                               "volume_mesh_mm3": round(float(got[2].volume()), 2) if got[1] else None})
+                print("%-55s %7d tris" % (name, len(got[0])))
+    keep = {b["stl"] for b in index} | {h["stl"] for h in halves}
     for old in glob.glob(os.path.join(out, "*.stl")):
-        if os.path.basename(old) not in {b["stl"] for b in index}:
+        if os.path.basename(old) not in keep:
             os.remove(old)
     cs = np.flatnonzero(cord.any(axis=(0, 1)))
     with open(os.path.join(out, "bodies.json"), "w") as f:
@@ -257,7 +288,7 @@ def main():
                    "bodies_volume_mesh_mm3": round(sum(b["volume_mesh_mm3"] or 0 for b in index), 1),
                    "geometry": [os.path.relpath(p, ROOT) for p in paths],
                    "frame": "FIBRE_CENTRELINE frame, as register_tracts.py",
-                   "bodies": index, "method": __doc__}, f, indent=1)
+                   "bodies": index, "halves": halves, "method": __doc__}, f, indent=1)
     print("done in %.0f s" % (time.time() - t0))
 
 
