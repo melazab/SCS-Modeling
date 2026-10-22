@@ -49,6 +49,12 @@ REPO = os.environ.get("SCS_MODELING_REPO",
 sys.path.insert(0, os.path.join(REPO, "src", "freecad"))
 import scs_levels  # noqa: E402
 import scs_ui  # noqa: E402
+# Re-running a macro does not re-import its helpers: FreeCAD keeps the first
+# copy for the whole session, so an updated scs_levels / scs_ui would be
+# ignored until restart (it hid the end-plane fit, 2026-10-22).
+import importlib  # noqa: E402
+scs_levels = importlib.reload(scs_levels)
+scs_ui = importlib.reload(scs_ui)
 
 ATLAS = os.path.join(REPO, "fem", "out", "atlas")
 BODIES = os.path.join(ATLAS, "tract_bodies")
@@ -185,9 +191,7 @@ class TractPanel(QtWidgets.QWidget):
         self.tree.itemChanged.connect(lambda *_a: self.apply_visibility())
         lay.addWidget(self.tree, 1)
 
-        dice = [m["grey_dice_after"] for m in self.maps.values()]
-        h = scs_ui.hint("PAM50 atlas registered to RADO's cord at each vertebra, T6–T12 "
-                        "(grey-matter Dice %.2f–%.2f). Hover for caveats." % (min(dice), max(dice)))
+        h = scs_ui.hint("PAM50 atlas, T6–T12")
         h.setToolTip(
             "Registration fits only the white/grey outline (RADO has no image contrast), so "
             "the layout inside the white matter is the atlas' prior.\n"

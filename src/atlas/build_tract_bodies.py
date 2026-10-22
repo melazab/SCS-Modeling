@@ -90,26 +90,9 @@ def write_stl(path, verts, faces):
 
 def end_planes(paths, S, P, T):
     """The cord's two end caps as planes (point, normal pointing INTO the
-    cord), fitted to the STL triangles that face out of each end."""
-    tris = []
-    for p in paths:
-        v, t = read_stl(p)
-        tris.append(v[t])
-    tri = np.concatenate(tris)
-    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
-    area = np.linalg.norm(n, axis=1)/2
-    n /= np.maximum(2*area, 1e-12)[:, None]
-    cen = tri.mean(1)
-    out = []
-    for endp, out_dir in ((P[0], -T[0]), (P[-1], T[-1])):
-        sel = (n @ out_dir > 0.9) & (np.linalg.norm(cen - endp, axis=1) < 25)
-        assert sel.sum() > 10, "no end cap found"
-        N = (n[sel]*area[sel, None]).sum(0)
-        N /= np.linalg.norm(N)
-        p0 = (cen[sel]*area[sel, None]).sum(0)/area[sel].sum()
-        assert np.abs((cen[sel] - p0) @ N).max() < 0.05, "end cap is not planar"
-        out.append((p0, -N))
-    return out
+    cord), fitted to the STL triangles that face out of each end
+    (scs_levels.end_planes, shared with the Cross-section viewer)."""
+    return scs_levels.end_planes([read_stl(p) for p in paths], P, T)
 
 
 def nearest_fill(lab, unknown, valid):

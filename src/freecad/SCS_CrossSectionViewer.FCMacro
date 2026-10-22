@@ -87,6 +87,12 @@ REPO = os.environ.get("SCS_MODELING_REPO",
 sys.path.insert(0, os.path.join(REPO, "src", "freecad"))
 import scs_levels  # noqa: E402
 import scs_ui  # noqa: E402
+# Re-running a macro does not re-import its helpers: FreeCAD keeps the first
+# copy for the whole session, so an updated scs_levels / scs_ui would be
+# ignored until restart (it hid the end-plane fit, 2026-10-22).
+import importlib  # noqa: E402
+scs_levels = importlib.reload(scs_levels)
+scs_ui = importlib.reload(scs_ui)
 
 CENTRELINE = os.path.join(REPO, "fem", "out", "geometry", "rado_up4", "centreline.json")
 OBJECT_NAME = "SCS_CrossSectionViewerDock"
@@ -573,7 +579,7 @@ class XsecPanel(QtWidgets.QWidget):
             self.set_s(s)
 
     def set_s(self, s, from_slider=False):
-        self.s = float(s)
+        self.s = min(max(float(s), self.cl.S[0]), self.cl.S[-1])
         self.spin.blockSignals(True); self.spin.setValue(self.s); self.spin.blockSignals(False)
         if not from_slider:
             self.slider.blockSignals(True); self.slider.setValue(int(round(self.s/STEP_MM)))
@@ -625,9 +631,18 @@ class XsecPanel(QtWidgets.QWidget):
                 if (o.isDerivedFrom("Mesh::Feature") or o.isDerivedFrom("Part::Feature"))
                 and o.ViewObject is not None]
 
+    def past_end(self):
+        """At the end of the slider the camera looks from, the plane is off the
+        model: nothing is cut and the model shows as it was (Mohamed,
+        2026-10-22: "all the way to 238 mm it should just show the original
+        view")."""
+        S = self.cl.S
+        return (self.side.index() == 1 and self.s >= S[-1] - 1e-6) or \
+               (self.side.index() == 0 and self.s <= S[0] + 1e-6)
+
     def update_clip(self):
         self.unclip()
-        if not self.cut.isChecked():
+        if not self.cut.isChecked() or self.past_end():
             return
         c, n, _, _ = self.plane()
         planes = [(n, c)]
@@ -714,6 +729,15 @@ class XsecPanel(QtWidgets.QWidget):
             return
         self.pending, self.busy = False, True
         t0 = time.time()
+        if self.past_end():
+            if self.overlay:
+                self.overlay.set_lines([])
+                self.overlay.clear_faces()
+            self.sections, self.rows = None, []
+            self.table.setRowCount(0)
+            self.status.setText("")
+            self.busy = False
+            return
         try:
             c, n, u, v = self.plane()
             C, N, U, W = (np.array(x) for x in (c, n, u, v))
@@ -809,10 +833,7 @@ class XsecPanel(QtWidgets.QWidget):
             bad += bool(no)
         self.table.setUpdatesEnabled(True)
         self.table.setVisible(True)
-        self.status.setText("%d bodies cut at %s. %s" % (
-            len(rows), self.level.currentText(),
-            "%d with outlines that do not close (red, listed first)." % bad if bad
-            else "Every outline closes."))
+        self.status.setText("%d bodies%s" % (len(rows), ", %d open" % bad if bad else ""))
         self.status.setToolTip("Cut and outlined in %.0f ms" % (1000*secs))
 
     def select_row(self, r, _c):

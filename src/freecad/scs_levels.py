@@ -74,3 +74,30 @@ def document_levels(doc, s_mm, points_mm):
             continue
         out[m.group(1)] = round(arc_length(cen, s_mm, points_mm), 2)
     return out
+
+
+def end_planes(meshes, points_mm, tangents):
+    """The cord's two end caps as planes [(point, normal INTO the cord)],
+    caudal first, fitted to the triangles of meshes [(V, F)] (the cord's white
+    and grey matter) that face out of each end within 25 mm of it. The model's
+    canal tissues all end on these planes, RADO's own end planes: oblique to
+    the cord (caudal z = 59.43, 20 deg; cranial 18.6 deg)."""
+    tri = np.concatenate([np.asarray(V, float)[np.asarray(F, int)] for V, F in meshes])
+    n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    area = np.linalg.norm(n, axis=1)/2
+    n /= np.maximum(2*area, 1e-12)[:, None]
+    cen = tri.mean(1)
+    P, T = np.asarray(points_mm, float), np.asarray(tangents, float)
+    out = []
+    for endp, out_dir in ((P[0], -T[0]), (P[-1], T[-1])):
+        sel = (n @ out_dir > 0.9) & (np.linalg.norm(cen - endp, axis=1) < 25)
+        if sel.sum() <= 10:
+            raise ValueError("no end cap found")
+        N = (n[sel]*area[sel, None]).sum(0)
+        N /= np.linalg.norm(N)
+        p0 = (cen[sel]*area[sel, None]).sum(0)/area[sel].sum()
+        if np.abs((cen[sel] - p0) @ N).max() > 0.05:
+            raise ValueError("end cap is not planar")
+        out.append((p0, -N))
+    return out
+
