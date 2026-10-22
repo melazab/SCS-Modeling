@@ -16,11 +16,12 @@ THE PANEL
                                back when the tracts go.
   Display  Bodies | Slices     continuous bodies, or one thin slice per
                                vertebra drawn from that vertebra's own map
-  Side     Both | Left | Right patient side
+  Side     Both | Left | Right patient side; the other side stays as plain
+                               white and grey matter
   Tract tree                   tick a tract, a funiculus or everything; the
                                area is the mean cross-section, both sides
 
-The tracts live in "Tract bodies (not anatomy)". The FEM reads STLs, never the
+The tracts live in "Tract bodies". The FEM reads STLs, never the
 document, so nothing here reaches a mesh or a solve; do not save it into the
 reference .FCStd files.
 
@@ -126,11 +127,14 @@ class TractPanel(QtWidgets.QWidget):
             with open(os.path.join(ATLAS, "tracts_%s" % L, "tracts.json")) as f:
                 self.maps[L] = json.load(f)
         self.hidden_cord = []
+        self.info = {b["short"]: (b["colour"], b["tissue"]) for b in self.index["bodies"]}
+        for t in self.maps["T10"]["tracts"]:
+            self.info.setdefault(t["short"], (t["colour"], t["tissue"]))
 
         lay = QtWidgets.QVBoxLayout(self)
         self.toggle = scs_ui.StateToggle(
             "Show tracts", "Tracts shown",
-            "Put the PAM50 tracts into the document, in \"Tract bodies (not anatomy)\". "
+            "Put the PAM50 tracts into the document, in \"Tract bodies\". "
             "While they are shown the cord's white and grey matter are hidden, because "
             "the tracts fill them exactly; press again to take the tracts out and bring "
             "the cord back.")
@@ -216,7 +220,7 @@ class TractPanel(QtWidgets.QWidget):
             return None
         if g is None and create:
             g = self.doc.addObject("App::DocumentObjectGroup", GROUP)
-            g.Label = "Tract bodies (not anatomy)"
+            g.Label = "Tract bodies"
         return g
 
     def objects(self, kind=None):
@@ -236,11 +240,14 @@ class TractPanel(QtWidgets.QWidget):
         if self.toggle.isChecked() and not shown:
             self.restore_cord()
         self.toggle.set_state(shown)
+        if shown:
+            self.hide_cord()
 
     def on_toggle(self, on):
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             if on:
+                self.hidden_cord = []
                 self.refresh()
                 self.hide_cord()
             else:
@@ -254,17 +261,23 @@ class TractPanel(QtWidgets.QWidget):
             QtWidgets.QApplication.restoreOverrideCursor()
 
     def hide_cord(self):
-        """Hide the cord's white and grey matter, remembering which on the group
-        itself, so a re-run of the macro can still bring them back."""
-        self.hidden_cord = []
+        """Keep the cord's white and grey matter hidden while the tracts are
+        shown: the tracts fill it exactly, and its cut faces would fight theirs
+        in the Cross-section viewer. Re-checked every second, since the tree can
+        show it again (its group's eye). Which were hidden is kept on the group,
+        so turning the tracts off, even after a re-run, brings them back."""
+        g = self.group()
+        if g is None:
+            return
         for o in self.doc.Objects:
             if o.Label in CORD_LABELS and o.ViewObject is not None and o.ViewObject.Visibility:
                 o.ViewObject.Visibility = False
-                self.hidden_cord.append(o.Name)
-        g = self.group(create=True)
+                if o.Name not in self.hidden_cord:
+                    self.hidden_cord.append(o.Name)
         if "HiddenCord" not in g.PropertiesList:
             g.addProperty("App::PropertyStringList", "HiddenCord", "Tract")
-        g.HiddenCord = self.hidden_cord
+        if list(g.HiddenCord) != self.hidden_cord:
+            g.HiddenCord = self.hidden_cord
 
     def restore_cord(self):
         for n in self.hidden_cord:
@@ -322,15 +335,40 @@ class TractPanel(QtWidgets.QWidget):
                 o.Shape = shape
                 self.tag(o, tr, "slice")
 
+    def plain_colours(self):
+        """The cord's own white- and grey-matter colours, from the document."""
+        out = {"WM": (250/255, 249/255, 246/255), "GM": (128/255, 128/255, 128/255)}
+        for o in self.doc.Objects:
+            if o.Label in CORD_LABELS and o.ViewObject is not None:
+                try:
+                    rgb = tuple(o.ViewObject.ShapeAppearance[0].DiffuseColor[:3])
+                except Exception:
+                    rgb = tuple(o.ViewObject.ShapeColor[:3])
+                out["WM" if "white" in o.Label else "GM"] = rgb
+        return out
+
     def apply_visibility(self):
+        """Ticked tracts of the chosen side in their colours; with one side
+        chosen, the other side's bodies in plain white and grey matter, so the
+        cord stays whole (they tile it exactly)."""
         kind = ("body", "slice")[self.mode.index()]
         sides = (("left", "right"), ("left",), ("right",))[self.side.index()]
+        plain = self.plain_colours() if len(sides) == 1 else None
         for o in self.objects():
-            it = self.items.get(o.TractName)
-            on = (o.TractKind == kind and o.TractSide in sides and it is not None
-                  and it.checkState(0) == QtCore.Qt.Checked)
-            if o.ViewObject.Visibility != on:
-                o.ViewObject.Visibility = on
+            colour, tissue = self.info.get(o.TractName, ("#808080", "WM"))
+            if o.TractKind != kind:
+                on, rgb = False, None
+            elif o.TractSide in sides:
+                it = self.items.get(o.TractName)
+                on = it is not None and it.checkState(0) == QtCore.Qt.Checked
+                rgb = hex_rgb(colour)
+            else:
+                on, rgb = True, plain[tissue]
+            vo = o.ViewObject
+            if vo.Visibility != on:
+                vo.Visibility = on
+            if on and [round(x, 3) for x in vo.ShapeColor[:3]] != [round(x, 3) for x in rgb]:
+                vo.ShapeColor = rgb
 
     def shutdown(self):
         self.sync.stop()

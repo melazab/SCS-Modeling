@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Toolbar icon for fem/scripts/SCS_Potential_Visualizer.FCMacro: a lead contact
+  with equipotential rings around it, coloured hot to cool outward, and the
+  colour bar they are read against.
+
+  Drawn for the SCS macros rather than borrowing FreeCAD's Mesh_VertexCurvature,
+  which only exists once the Mesh workbench has loaded ("Cannot find icon" on
+  every start, and a "?" button until then). The lead is the Lead Designer's
+  (insulator 40,40,40, contact 192,192,192); the rings and bar use one
+  red-to-blue scale. No clipPath: Qt's SVG renderer, which draws the toolbar,
+  ignores it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="scale" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d7191c"/>
+      <stop offset="0.25" stop-color="#fdae61"/>
+      <stop offset="0.5" stop-color="#ffffbf"/>
+      <stop offset="0.75" stop-color="#abd9e9"/>
+      <stop offset="1" stop-color="#2c7bb6"/>
+    </linearGradient>
+  </defs>
+  <!-- equipotentials, outermost (coolest) first -->
+  <ellipse cx="10" cy="16" rx="9" ry="13" fill="none" stroke="#2c7bb6" stroke-width="1.6"/>
+  <ellipse cx="10" cy="16" rx="6.3" ry="9.5" fill="none" stroke="#fdae61" stroke-width="1.6"/>
+  <ellipse cx="10" cy="16" rx="3.8" ry="6" fill="none" stroke="#d7191c" stroke-width="1.6"/>
+  <!-- the lead and its contact -->
+  <rect x="8.4" y="10" width="3.2" height="12" rx="1.6" fill="#282828" stroke="#6f6f6f" stroke-width="0.6"/>
+  <rect x="8.4" y="14.2" width="3.2" height="3.6" fill="#c0c0c0"/>
+  <!-- colour bar -->
+  <rect x="23" y="3" width="6" height="26" rx="1" fill="url(#scale)" stroke="#3c3c3c" stroke-width="1"/>
+</svg>

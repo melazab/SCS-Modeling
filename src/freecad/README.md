@@ -577,6 +577,7 @@ effect the next time that workbench loads.
 | `icons/tissue_visibility.svg` | three tissue-coloured slabs with the bottom one ghosted out |
 | `icons/SCS_TractVisualizer.svg` | the cord's oval cut into dorsal columns (blue), lateral (red) and anterolateral (green) territories, grey-matter bar |
 | `icons/SCS_CrossSectionViewer.svg` | a bent cord rising from a translucent blue cutting plane, the filled section on the plane |
+| `icons/SCS_PotentialVisualizer.svg` | a lead contact with equipotential rings, hot to cool outward, beside a red-to-blue colour bar; replaces FreeCAD's `Mesh_VertexCurvature`, which only exists once the Mesh workbench loads ("Cannot find icon" on every start) |
 | `icons/*_16.png`, `_32.png`, `_64.png` | the same thing rasterised, for a picker that will not take SVG |
 
 The lead icon uses the model's own colours — contacts `192,192,192`, insulator

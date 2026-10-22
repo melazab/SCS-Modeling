@@ -92,7 +92,7 @@ at any level and have no body; every other tract, both sides, has one.
 
 `src/freecad/SCS_TractVisualizer.FCMacro` shows them in FreeCAD: one toggle
 puts the bodies (or one slice per vertebra, from that vertebra's own map) in a
-"Tract bodies (not anatomy)" group, with a tract tree grouped by funiculus.
+"Tract bodies" group, with a tract tree grouped by funiculus.
 `SCS_CrossSectionViewer.FCMacro` cuts them, and the anatomy, square to the
 cord at any level.
 

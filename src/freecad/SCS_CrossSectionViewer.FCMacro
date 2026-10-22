@@ -460,6 +460,7 @@ class XsecPanel(QtWidgets.QWidget):
         self.sections = None          # (s, side, [(obj, loops, opens, area)]) of the last cut
         self.busy = self.pending = False
         self.face_job = None
+        self.last_sig = None
         self.levels = self.level_positions()
         self.remove_legacy_caps()
         lay = QtWidgets.QVBoxLayout(self)
@@ -557,12 +558,22 @@ class XsecPanel(QtWidgets.QWidget):
         self.sync.start()
 
     def tick(self):
-        """Once a second: clip bodies added since, or close if the document was."""
+        """Once a second: close if the document was; clip bodies added since;
+        refill if bodies were shown, hidden or recoloured (e.g. the Tract
+        visualizer switching sides), which the faces would otherwise miss."""
         if not scs_ui.doc_alive(self.doc_name):
             self.shutdown()
             scs_ui.close_dock(self)
-        elif self.cut.isChecked():
+            return
+        if self.cut.isChecked():
             self.clip_new()
+        if self.fill_toggle.isChecked() and self.visible_signature() != self.last_sig:
+            self.moved()
+
+    def visible_signature(self):
+        return tuple((o.Name, colour_of(o)) for o in self.doc.Objects
+                     if (o.isDerivedFrom("Mesh::Feature") or o.isDerivedFrom("Part::Feature"))
+                     and o.ViewObject is not None and o.ViewObject.Visibility)
 
     # -- geometry ------------------------------------------------------------
     def level_positions(self):
@@ -751,6 +762,7 @@ class XsecPanel(QtWidgets.QWidget):
             C, N, U, W = (np.array(x) for x in (c, n, u, v))
             lift = N*CAP_LIFT_MM
             rows, lines = [], []
+            self.last_sig = self.visible_signature()
             for o in self.doc.Objects:
                 vo = o.ViewObject
                 if vo is None or not vo.Visibility:
