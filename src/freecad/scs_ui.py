@@ -121,3 +121,18 @@ def swatch(hex_colour, size=12):
     lab.setPixmap(pm)
     lab.setFixedSize(size, size)
     return lab
+
+
+def doc_alive(name):
+    """Is the document still open? Closing one leaves the panel's Python handle
+    behind, and touching it raises ReferenceError (a panel's 1 s sync timer did,
+    every second, after Mohamed closed the model)."""
+    import FreeCAD
+    return name in FreeCAD.listDocuments()
+
+
+def close_dock(widget):
+    """Close the dock a panel sits in."""
+    d = widget.parentWidget()
+    if isinstance(d, QtWidgets.QDockWidget):
+        d.close()

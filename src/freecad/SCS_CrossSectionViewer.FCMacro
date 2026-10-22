@@ -451,7 +451,7 @@ class Overlay:
 class XsecPanel(QtWidgets.QWidget):
     def __init__(self, doc):
         super().__init__()
-        self.doc = doc
+        self.doc, self.doc_name = doc, doc.Name
         self.view = FreeCADGui.getDocument(doc.Name).ActiveView
         self.cl = Centreline(CENTRELINE)
         self.clips, self.rows, self.clipped = [], [], {}
@@ -553,8 +553,16 @@ class XsecPanel(QtWidgets.QWidget):
         self.set_s(self.levels.get("T10", smax/2))
         self.align.setEnabled(False)
         self.sync = QtCore.QTimer(self); self.sync.setInterval(1000)
-        self.sync.timeout.connect(lambda: self.cut.isChecked() and self.clip_new())
+        self.sync.timeout.connect(self.tick)
         self.sync.start()
+
+    def tick(self):
+        """Once a second: clip bodies added since, or close if the document was."""
+        if not scs_ui.doc_alive(self.doc_name):
+            self.shutdown()
+            scs_ui.close_dock(self)
+        elif self.cut.isChecked():
+            self.clip_new()
 
     # -- geometry ------------------------------------------------------------
     def level_positions(self):

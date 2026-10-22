@@ -115,7 +115,7 @@ def capital(s):
 class TractPanel(QtWidgets.QWidget):
     def __init__(self, doc):
         super().__init__()
-        self.doc = doc
+        self.doc, self.doc_name = doc, doc.Name
         idx = os.path.join(BODIES, "bodies.json")
         if not os.path.exists(idx):
             raise FileNotFoundError("%s missing; run src/atlas/build_tract_bodies.py" % idx)
@@ -227,6 +227,11 @@ class TractPanel(QtWidgets.QWidget):
     def sync_to_document(self):
         """The group can disappear without the panel (deleted in the tree,
         document closed); the toggle must say what the document says."""
+        if not scs_ui.doc_alive(self.doc_name):       # the document was closed
+            self.sync.stop()
+            self.hidden_cord = []
+            scs_ui.close_dock(self)
+            return
         shown = self.group() is not None
         if self.toggle.isChecked() and not shown:
             self.restore_cord()
