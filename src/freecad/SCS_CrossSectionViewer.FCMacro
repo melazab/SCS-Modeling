@@ -1,0 +1,895 @@
+# -*- coding: utf-8 -*-
+"""Cross-section viewer: cut the model perpendicular to the cord, anywhere.
+
+FreeCAD's own clipping (View -> Clipping plane) cuts along X, Y, Z or one
+typed-in direction. The cord bends ~37 degrees between T6 and T12, so a fixed
+direction cuts every level but one obliquely. This panel puts the cut
+perpendicular to the cord centreline at any position along it, so every level
+is a true axial section, and fills the cut faces, which FreeCAD's clip leaves
+hollow. It is an inspection tool for the STLs: each body the cut crosses is
+listed with its section area; Closed counts the outlines that close into loops
+(the outer edge, plus one per hole, e.g. the white matter's edge around the
+grey matter), Open the cut lines that end without meeting themselves, which
+means the mesh has a gap or a non-manifold edge at this plane. Open ones are
+drawn in red and listed first, and the area of such a body is unreliable.
+
+THE PANEL
+---------
+  Cut along cord / Cutting   one toggle; turning it on also aligns the camera
+                             on the cut. Align view re-aims after you orbit.
+  Level                      jump to a vertebra: its volume centroid projected
+                             on the cord (scs_levels.py; the labels point at
+                             transverse-process tips, a few mm higher); shows
+                             the offset when between vertebrae
+  Position                   slider + box, mm along the extended centreline
+                             from its caudal end. Drag to scrub; arrow keys,
+                             PgUp / PgDn step once the slider has focus.
+  View from  Below | Above   Below keeps the cranial side and looks up at it
+                             (radiological: anterior up, patient left on the
+                             right); Above keeps the caudal side.
+  Show  Beyond | Thin slice  everything past the cut, or only a slice of the
+                             given thickness (a pure 2D section at ~0.1 mm).
+                             A thin slice of hollow shells is empty, so it
+                             turns Fill cut faces on (and off brings Beyond back)
+  Fill cut faces / Faces filled   one toggle: outlines and the table follow the
+                             slider live; the faces fill in FILL_DELAY_MS after
+                             it stops.
+
+SPEED (Mohamed, 2026-10-22: "make the cross section viewer feel more snappy")
+-----
+A refill used to take ~3 s at T7 (15 bodies): 2.0 s building OCC faces from
+~10 000 outline points, 0.5 s in Mesh.crossSections, 0.2 s adding document
+objects, plus a 0.35 s debounce. Now:
+  * each mesh is read once into numpy (FreeCAD writes it as binary PLY in
+    ~0.05 s, where Mesh.Topology took 5 s for the 0.9 M-triangle dura) and cut
+    in numpy, chaining the outline by the mesh's own edges: ~0.2 s for 17
+    meshes, and exact -- no joining tolerance, so near-duplicate vertices
+    (thousands < 1 um apart in the conform.py output) can no longer fake an
+    open outline, which a 1e-3 mm tolerance did;
+  * outlines and areas (shoelace, holes by nesting) update while dragging;
+  * faces are built only when the slider rests, from outlines thinned to
+    THIN_MM (Douglas-Peucker), 7x faster at no visible cost;
+  * everything is drawn straight into the 3D view (Coin), not added to the
+    document: no tree churn, no recompute, nothing to save by mistake.
+
+Visibility decides what is cut: hide a tissue (tissue_visibility.FCMacro) and
+it drops out. Nothing here touches the document, the STLs or the FEM.
+
+Frame: fem/out/geometry/rado_up4/centreline.json (config.FIBRE_CENTRELINE),
+the extended T6-T12 cord; it contains RADO's own, so RADO-only documents work.
+
+INSTALL: symlink into FreeCAD's macro directory (src/freecad/README.md
+"The macros"), then Macro -> Macros... -> Execute.
+"""
+import builtins
+import json
+import os
+import sys
+import tempfile
+import time
+
+import FreeCAD
+import FreeCADGui
+import numpy as np
+import Part
+from pivy import coin
+
+try:
+    from PySide import QtCore, QtGui, QtWidgets
+except ImportError:                                     # pragma: no cover
+    try:
+        from PySide6 import QtCore, QtGui, QtWidgets
+    except ImportError:
+        from PySide2 import QtCore, QtGui, QtWidgets
+
+REPO = os.environ.get("SCS_MODELING_REPO",
+                      os.path.expanduser("~/Projects/SCS-Modeling"))
+sys.path.insert(0, os.path.join(REPO, "src", "freecad"))
+import scs_levels  # noqa: E402
+import scs_ui  # noqa: E402
+
+CENTRELINE = os.path.join(REPO, "fem", "out", "geometry", "rado_up4", "centreline.json")
+OBJECT_NAME = "SCS_CrossSectionViewerDock"
+LEGACY_CAPS = "XsecCaps"     # the document group older versions filled
+CAP_LIFT_MM = 0.01           # faces and outlines sit this far on the kept side
+STEP_MM = 0.5
+ZOOM_MM = 40.0               # field of view when the camera is first aligned
+FILL_DELAY_MS = 250          # faces fill this long after the slider stops
+THIN_MM = 0.005              # outline thinning before building faces
+SEAM_MM = 1e-3               # loose outline ends this close are one point (join_seams)
+
+
+class Centreline:
+    def __init__(self, path):
+        with open(path) as f:
+            cl = json.load(f)
+        self.S, self.P, self.T = cl["s_mm"], cl["points_mm"], cl["tangents"]
+
+    def frame(self, s):
+        """Point, tangent (superior), U (patient left), V (posterior) at s."""
+        S, P, T = self.S, self.P, self.T
+        s = min(max(s, S[0]), S[-1])
+        i = max(0, min(len(S) - 2, int((s - S[0])/(S[1] - S[0]))))
+        a = (s - S[i])/(S[i + 1] - S[i])
+        lerp = lambda A: FreeCAD.Vector(*[(1 - a)*A[i][d] + a*A[i + 1][d] for d in range(3)])
+        c, t = lerp(P), lerp(T)
+        t.normalize()
+        u = FreeCAD.Vector(1, 0, 0) - t*t.x
+        u.normalize()
+        return c, t, u, t.cross(u)
+
+
+def colour_of(obj):
+    vo = obj.ViewObject
+    try:
+        return tuple(vo.ShapeAppearance[0].DiffuseColor[:3])
+    except Exception:
+        try:
+            return tuple(vo.ShapeColor[:3])
+        except Exception:
+            return (0.6, 0.6, 0.6)
+
+
+def crosses(bb, c, n):
+    """Does the plane (c, n) pass through the bounding box?"""
+    d = [(FreeCAD.Vector(x, y, z) - c).dot(n)
+         for x in (bb.XMin, bb.XMax) for y in (bb.YMin, bb.YMax) for z in (bb.ZMin, bb.ZMax)]
+    return min(d) <= 0 <= max(d)
+
+
+# -- mesh cutting -------------------------------------------------------------
+class MeshCache:
+    """numpy copies of document meshes, refreshed when a mesh changes, with
+    each triangle indexed by where it lies along the cord.
+
+    A vertex's arc length sigma is that of its nearest centreline sample; the
+    planes this panel cuts with are the centreline's normal planes, so a vertex
+    is on the cranial side of the plane at s exactly when sigma > s, up to the
+    0.5 mm sampling (and for points within the bend radius, ~370 mm, which
+    covers the whole model). A triangle can only cross the plane at s if s lies
+    in its [sigma_min, sigma_max] widened by MARGIN_MM, so a cut tests only
+    those -- a few thousand instead of ~10^6 (the dura) -- and the exact
+    crossing test then runs on them."""
+
+    MARGIN_MM = 1.0
+    SHORT_MM = 5.0          # triangles spanning more of the cord are tested always
+
+    def __init__(self, centreline):
+        self.data = {}
+        self.tmp = os.path.join(tempfile.gettempdir(), "scs_xsec_%d.ply" % os.getpid())
+        from scipy.spatial import cKDTree
+        P = np.asarray(centreline.P, float)
+        self.S = np.asarray(centreline.S, float)
+        self.tree = cKDTree(P[:, 1:])          # the centreline lies in x = x0
+
+    def faces_near(self, obj, s):
+        V, F, info = self.get(obj)
+        smin_sorted, order, smax, long_ = info
+        m = self.MARGIN_MM
+        lo = np.searchsorted(smin_sorted, s - m - self.SHORT_MM)
+        hi = np.searchsorted(smin_sorted, s + m, "right")
+        idx = order[lo:hi]
+        idx = idx[smax[idx] >= s - m]
+        if len(long_):
+            smin = self.data[obj.Name][4]
+            idx = np.concatenate([idx, long_[(smin[long_] <= s + m) & (smax[long_] >= s - m)]])
+        return V, F[idx]
+
+    def get(self, obj):
+        m = obj.Mesh
+        bb = m.BoundBox
+        key = (m.CountPoints, m.CountFacets, round(bb.XMin, 4), round(bb.ZMax, 4))
+        hit = self.data.get(obj.Name)
+        if hit is not None and hit[0] == key:
+            return hit[1], hit[2], hit[3]
+        m.write(self.tmp)                      # binary PLY: float32 xyz, uchar-count int faces
+        with open(self.tmp, "rb") as f:
+            raw = f.read()
+        head = raw[:raw.index(b"end_header\n") + 11].decode("ascii", "replace")
+        nv = int(head.split("element vertex ")[1].split()[0])
+        nf = int(head.split("element face ")[1].split()[0])
+        off = len(head.encode("ascii", "replace"))
+        V = np.frombuffer(raw, "<f4", nv*3, off).reshape(nv, 3).astype(np.float64)
+        F = np.frombuffer(raw, np.dtype([("n", "u1"), ("i", "<i4", 3)]), nf, off + nv*12)["i"].astype(np.int64)
+        os.remove(self.tmp)
+        # the PLY should already be in document coordinates; place it if not
+        if abs(V[:, 0].min() - bb.XMin) > 1e-3 or abs(V[:, 2].max() - bb.ZMax) > 1e-3:
+            M = obj.Placement.toMatrix()
+            R = np.array([[M.A11, M.A12, M.A13], [M.A21, M.A22, M.A23], [M.A31, M.A32, M.A33]])
+            V = V @ R.T + np.array([M.A14, M.A24, M.A34])
+        _, k = self.tree.query(V[:, 1:])
+        sig = self.S[k]
+        fs = sig[F]
+        smin, smax = fs.min(1), fs.max(1)
+        short = smax - smin <= self.SHORT_MM
+        order = np.flatnonzero(short)[np.argsort(smin[short], kind="stable")]
+        info = (smin[order], order, smax, np.flatnonzero(~short))
+        self.data[obj.Name] = (key, V, F, info, smin)
+        return V, F, info
+
+
+def cut_mesh(V, F, c, n):
+    """Section of a triangle mesh by the plane (c, n): (closed loops, open
+    lines), each an (k, 3) array.
+
+    A vertex on the plane counts as above it, so no triangle is ambiguous.
+    Each crossing triangle gives one segment between its two crossed edges, and
+    outlines are chained through the mesh's own edges: exact, no joining
+    tolerance, and indifferent to flipped triangles (a directed version broke
+    at the fused bodies' locally flipped slivers). Where an edge is shared by
+    four triangles (two outlines touching, e.g. the grey matter reaching the
+    white matter's surface), the outline carries straight on rather than
+    turning into the other one."""
+    vid = np.unique(F)
+    d = np.zeros(len(V))
+    d[vid] = (V[vid] - c) @ n
+    up = d >= 0.0
+    a = up[F]
+    hit = a.any(1) & ~a.all(1)
+    if not hit.any():
+        return [], []
+    Fm, am = F[hit], a[hit]
+    edges = np.stack([Fm[:, [0, 1]], Fm[:, [1, 2]], Fm[:, [2, 0]]], 1)
+    crossing = np.stack([am[:, 0] != am[:, 1], am[:, 1] != am[:, 2], am[:, 2] != am[:, 0]], 1)
+    e = np.sort(edges[crossing].reshape(-1, 2, 2), axis=2)
+    nv = len(V)
+    keys, seg = np.unique((e[..., 0]*nv + e[..., 1]).ravel(), return_inverse=True)
+    seg = seg.reshape(-1, 2).tolist()
+    ia, ib = keys // nv, keys % nv
+    w = d[ia]/(d[ia] - d[ib])
+    P = V[ia] + (V[ib] - V[ia])*w[:, None]
+    inc = [[] for _ in range(len(keys))]
+    for k, (p, q) in enumerate(seg):
+        inc[p].append(k)
+        inc[q].append(k)
+    deg = [len(x) for x in inc]
+    used = [False]*len(seg)
+    loops, opens = [], []
+    # odd-degree points end open lines; start there, then on plain points
+    starts = ([k for k in range(len(keys)) if deg[k] % 2] + [k for k in range(len(keys)) if deg[k] == 2]
+              + [k for k in range(len(keys)) if deg[k] > 2])
+    for st in starts:
+        while any(not used[e] for e in inc[st]):
+            path, cur, heading = [st], st, None
+            while True:
+                cand = [e for e in inc[cur] if not used[e]]
+                if not cand:
+                    break
+                other = lambda e: seg[e][1] if seg[e][0] == cur else seg[e][0]
+                e = cand[0]
+                if len(cand) > 1 and heading is not None:
+                    e = max(cand, key=lambda e: np.dot(heading, P[other(e)] - P[cur])
+                            / (np.linalg.norm(P[other(e)] - P[cur]) + 1e-15))
+                used[e] = True
+                nxt = other(e)
+                heading = P[nxt] - P[cur]
+                cur = nxt
+                path.append(cur)
+                if cur == st:
+                    break
+            if cur == st and len(path) > 3:
+                loops.append(P[path])
+            elif len(path) > 1:
+                opens.append(P[path])
+    return join_seams(loops, opens)
+
+
+def join_seams(loops, opens, tol=SEAM_MM):
+    """Chaining by mesh edges stops at a seam: two vertices at one position
+    that the mesh does not connect, or an edge two surfaces share. The cut is
+    still closed there (zero gap), so loose ends that coincide within tol are
+    joined. Only loose ends are candidates, unlike a joining tolerance on every
+    point, which took wrong branches at near-duplicate vertices."""
+    close = lambda p, q: np.linalg.norm(p - q) < tol
+    # a vertex exactly on the plane makes its triangle's two cut points one
+    # point: a zero-length spur, not a gap
+    todo = [p for p in opens if np.linalg.norm(np.diff(p, axis=0), axis=1).sum() >= tol]
+    still_open = []
+    while todo:
+        p = todo.pop()
+        if len(p) > 3 and close(p[0], p[-1]):
+            loops.append(np.vstack([p[:-1], p[:1]]))
+            continue
+        for i, q in enumerate(todo):
+            if close(p[-1], q[0]):
+                m = np.vstack([p, q[1:]])
+            elif close(p[-1], q[-1]):
+                m = np.vstack([p, q[::-1][1:]])
+            elif close(p[0], q[-1]):
+                m = np.vstack([q, p[1:]])
+            elif close(p[0], q[0]):
+                m = np.vstack([q[::-1], p[1:]])
+            else:
+                continue
+            todo.pop(i)
+            todo.append(m)
+            break
+        else:
+            still_open.append(p)
+    return loops, still_open
+
+
+def cut_solid(obj, c, n):
+    """Section of a Part solid (e.g. the tract slices, a lead), as loops/lines."""
+    loops, opens = [], []
+    if obj.Shape.isNull() or not obj.Shape.Solids:
+        return loops, opens
+    for w in obj.Shape.slice(n, c.dot(n)):
+        P = np.array([[p.x, p.y, p.z] for p in w.discretize(Deflection=0.01)])
+        (loops if w.isClosed() else opens).append(P)
+    return loops, opens
+
+
+def area_2d(loops, c, u, v):
+    """Area of the region the loops bound: shoelace per loop, loops inside an
+    odd number of others subtracted (holes). Each loop is tested at a point
+    half way round, not its first point, which may be where it touches its
+    neighbour."""
+    from matplotlib.path import Path
+    rings = [np.column_stack([(L - c) @ u, (L - c) @ v]) for L in loops]
+    total = 0.0
+    for i, r in enumerate(rings):
+        a = abs(0.5*(np.dot(r[:-1, 0], r[1:, 1]) - np.dot(r[1:, 0], r[:-1, 1])))
+        probe = r[len(r)//2]
+        depth = sum(Path(o).contains_point(probe) for j, o in enumerate(rings) if j != i)
+        total += -a if depth % 2 else a
+    return total
+
+
+def thin(P, tol):
+    """Douglas-Peucker on a closed loop (first point == last)."""
+    def rdp(Q):
+        keep = np.zeros(len(Q), bool)
+        keep[0] = keep[-1] = True
+        stack = [(0, len(Q) - 1)]
+        while stack:
+            i, j = stack.pop()
+            if j <= i + 1:
+                continue
+            ab = Q[j] - Q[i]
+            L = np.linalg.norm(ab)
+            r = Q[i + 1:j] - Q[i]
+            dist = np.linalg.norm(np.cross(r, ab), axis=1)/L if L > 1e-12 else np.linalg.norm(r, axis=1)
+            k = int(dist.argmax())
+            if dist[k] > tol:
+                keep[i + 1 + k] = True
+                stack += [(i, i + 1 + k), (i + 1 + k, j)]
+        return Q[keep]
+    h = len(P)//2
+    return np.vstack([rdp(P[:h + 1])[:-1], rdp(P[h:])])
+
+
+def face_triangles(loops):
+    """(points, triangles) of the region the loops bound, via OCC."""
+    wires = [Part.makePolygon([FreeCAD.Vector(*p) for p in thin(L, THIN_MM)]) for L in loops if len(L) >= 4]
+    try:
+        face = Part.makeFace(wires, "Part::FaceMakerBullseye")
+    except Exception:
+        faces = []
+        for w in wires:
+            try:
+                faces.append(Part.Face(w))
+            except Exception:
+                pass
+        if not faces:
+            return None
+        face = Part.makeCompound(faces)
+    pts, tris = face.tessellate(0.01)
+    return [(p.x, p.y, p.z) for p in pts], tris
+
+
+# -- the overlay ----------------------------------------------------------------
+class Overlay:
+    """Faces and outlines drawn straight into the 3D view, not the document."""
+
+    def __init__(self, view):
+        self.view = view
+        self.root = coin.SoSeparator()
+        pick = coin.SoPickStyle()
+        pick.style = coin.SoPickStyle.UNPICKABLE
+        self.root.addChild(pick)
+        self.lines = coin.SoSeparator()
+        self.faces = coin.SoSeparator()
+        self.root.addChild(self.faces)
+        self.root.addChild(self.lines)
+        view.getSceneGraph().addChild(self.root)
+
+    @staticmethod
+    def _lines(polys, rgb, width):
+        sep = coin.SoSeparator()
+        lm = coin.SoLightModel(); lm.model = coin.SoLightModel.BASE_COLOR
+        col = coin.SoBaseColor(); col.rgb = rgb
+        ds = coin.SoDrawStyle(); ds.lineWidth = width
+        co = coin.SoCoordinate3()
+        pts = np.vstack(polys)
+        co.point.setValues(0, len(pts), pts.tolist())
+        ls = coin.SoLineSet()
+        ls.numVertices.setValues(0, len(polys), [len(p) for p in polys])
+        for x in (lm, col, ds, co, ls):
+            sep.addChild(x)
+        return sep
+
+    def set_lines(self, items):
+        """items: [(polylines, rgb, width)]"""
+        self.lines.removeAllChildren()
+        for polys, rgb, width in items:
+            if polys:
+                self.lines.addChild(self._lines(polys, rgb, width))
+
+    def clear_faces(self):
+        self.faces.removeAllChildren()
+
+    def add_face(self, pts, tris, rgb):
+        sep = coin.SoSeparator()
+        lm = coin.SoLightModel(); lm.model = coin.SoLightModel.BASE_COLOR
+        col = coin.SoBaseColor(); col.rgb = rgb
+        hints = coin.SoShapeHints(); hints.vertexOrdering = coin.SoShapeHints.UNKNOWN_ORDERING
+        co = coin.SoCoordinate3()
+        co.point.setValues(0, len(pts), pts)
+        fs = coin.SoIndexedFaceSet()
+        idx = []
+        for a, b, c in tris:                  # both windings: a face's triangles
+            idx += [a, b, c, -1, a, c, b, -1]  # wind with its outer loop, either way
+        fs.coordIndex.setValues(0, len(idx), idx)
+        for x in (lm, col, hints, co, fs):
+            sep.addChild(x)
+        self.faces.addChild(sep)
+
+    def remove(self):
+        try:
+            self.view.getSceneGraph().removeChild(self.root)
+        except Exception:
+            pass
+
+
+class XsecPanel(QtWidgets.QWidget):
+    def __init__(self, doc):
+        super().__init__()
+        self.doc = doc
+        self.view = FreeCADGui.getDocument(doc.Name).ActiveView
+        self.cl = Centreline(CENTRELINE)
+        self.clips, self.rows, self.clipped = [], [], {}
+        self.cache = MeshCache(self.cl)
+        self.overlay = None
+        self.sections = None          # (s, side, [(obj, loops, opens, area)]) of the last cut
+        self.busy = self.pending = False
+        self.face_job = None
+        self.levels = self.level_positions()
+        self.remove_legacy_caps()
+        lay = QtWidgets.QVBoxLayout(self)
+
+        row = QtWidgets.QHBoxLayout()
+        self.cut = scs_ui.StateToggle(
+            "Cut along cord", "Cutting",
+            "Clip the view with a plane perpendicular to the cord at Position, "
+            "and aim the camera at the cut. Press again to remove the cut.")
+        self.cut.toggled.connect(self.on_cut)
+        self.align = QtWidgets.QPushButton("Align view")
+        self.align.setToolTip("Orthographic camera square on the cut: anterior up, "
+                              "and for View from Below, patient left on screen right")
+        self.align.clicked.connect(self.look)
+        row.addWidget(self.cut, 2); row.addWidget(self.align, 1)
+        lay.addLayout(row)
+
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignRight)
+        self.level = QtWidgets.QComboBox()
+        self.level.addItem("", None)                # live readout when between labels
+        for n, s in sorted(self.levels.items(), key=lambda kv: -kv[1]):
+            self.level.addItem(n, s)
+        self.level.activated.connect(self.on_level)
+        form.addRow("Level", self.level)
+
+        smax = self.cl.S[-1]
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider.setRange(0, int(round(smax/STEP_MM)))
+        self.slider.setPageStep(int(5/STEP_MM))
+        self.spin = QtWidgets.QDoubleSpinBox()
+        self.spin.setRange(self.cl.S[0], smax); self.spin.setDecimals(1)
+        self.spin.setSingleStep(STEP_MM); self.spin.setSuffix(" mm")
+        self.spin.setToolTip("Distance along the cord from its caudal end")
+        prow = QtWidgets.QHBoxLayout(); prow.addWidget(self.slider, 1); prow.addWidget(self.spin)
+        form.addRow("Position", prow)
+
+        self.side = scs_ui.Segmented(["Below", "Above"], [
+            "Keep the cranial side and look up at the cut: radiological convention, "
+            "anterior up, patient left on screen right",
+            "Keep the caudal side and look down at the cut"])
+        self.side.changed.connect(lambda _i: self.moved(realign=True))
+        form.addRow("View from", self.side)
+
+        self.showmode = scs_ui.Segmented(["Beyond", "Thin slice"], [
+            "Everything past the cut", "Only a slice of the given thickness: a 2D section"])
+        self.thick = QtWidgets.QDoubleSpinBox()
+        self.thick.setRange(0.05, 50); self.thick.setValue(0.1); self.thick.setDecimals(2)
+        self.thick.setSingleStep(0.5); self.thick.setSuffix(" mm"); self.thick.setVisible(False)
+        self.showmode.changed.connect(self.on_show)
+        self.thick.valueChanged.connect(lambda _v: self.moved())
+        srow = QtWidgets.QHBoxLayout(); srow.addWidget(self.showmode, 1); srow.addWidget(self.thick)
+        form.addRow("Show", srow)
+        lay.addLayout(form)
+
+        self.fill_toggle = scs_ui.StateToggle(
+            "Fill cut faces", "Faces filled",
+            "Outline every visible body the cut crosses, list it below with its section "
+            "area, and fill it in its own colour once the slider rests. Outlines that do "
+            "not close are drawn in red and listed first.")
+        self.fill_toggle.toggled.connect(self.on_fill)
+        lay.addWidget(self.fill_toggle)
+
+        self.table = QtWidgets.QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Body", "mm²", "Closed", "Open"])
+        for j, tip in enumerate(("Bodies the cut crosses; click to select in the tree",
+                                 "Section area: the region the closed outlines bound, holes subtracted",
+                                 "Outlines that close into a loop: the outer edge, plus one per hole",
+                                 "Cut lines that end without closing: a gap or non-manifold edge in "
+                                 "the mesh at this plane; the area is then unreliable")):
+            self.table.horizontalHeaderItem(j).setToolTip(tip)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        for j in (1, 2, 3):
+            hh.setSectionResizeMode(j, QtWidgets.QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.cellClicked.connect(self.select_row)
+        self.table.setVisible(False)
+        lay.addWidget(self.table, 1)
+        self.status = scs_ui.hint()
+        lay.addWidget(self.status)
+        lay.addStretch(0)
+
+        self.face_timer = QtCore.QTimer(self); self.face_timer.setSingleShot(True)
+        self.face_timer.setInterval(FILL_DELAY_MS)
+        self.face_timer.timeout.connect(self.fill_faces)
+        self.slider.valueChanged.connect(lambda k: self.set_s(k*STEP_MM, from_slider=True))
+        self.spin.valueChanged.connect(lambda s: self.set_s(s))
+        self.set_s(self.levels.get("T10", smax/2))
+        self.align.setEnabled(False)
+        self.sync = QtCore.QTimer(self); self.sync.setInterval(1000)
+        self.sync.timeout.connect(lambda: self.cut.isChecked() and self.clip_new())
+        self.sync.start()
+
+    # -- geometry ------------------------------------------------------------
+    def level_positions(self):
+        """Vertebra centroids projected on the cord (scs_levels.py), the same
+        positions the tract bodies and slices use; not the labels, which point
+        at transverse-process tips."""
+        out = scs_levels.document_levels(self.doc, self.cl.S, self.cl.P)
+        if not out:
+            with open(os.path.join(REPO, "fem", "out", "atlas", "tract_bodies", "bodies.json")) as f:
+                out = json.load(f)["levels_s_mm"]
+        return out
+
+    def plane(self):
+        """Point and normal of the cut; the normal points into the kept side."""
+        c, t, u, v = self.cl.frame(self.s)
+        return c, (t if self.side.index() == 0 else -t), u, v
+
+    # -- controls ------------------------------------------------------------
+    def on_level(self, i):
+        s = self.level.itemData(i)
+        if s is not None:
+            self.set_s(s)
+
+    def set_s(self, s, from_slider=False):
+        self.s = float(s)
+        self.spin.blockSignals(True); self.spin.setValue(self.s); self.spin.blockSignals(False)
+        if not from_slider:
+            self.slider.blockSignals(True); self.slider.setValue(int(round(self.s/STEP_MM)))
+            self.slider.blockSignals(False)
+        near = min(self.levels, key=lambda k: abs(self.levels[k] - self.s))
+        d = self.s - self.levels[near]
+        if abs(d) <= 0.25:
+            self.level.setCurrentIndex(self.level.findText(near))
+        else:
+            self.level.setItemText(0, "%s %+.1f mm" % (near, d))
+            self.level.setCurrentIndex(0)
+        c, t, _, _ = self.cl.frame(self.s)
+        self.spin.setToolTip("Distance along the cord from its caudal end\n"
+                             "plane point (%.1f, %.1f, %.1f) mm, normal (%.3f, %.3f, %.3f)"
+                             % (c.x, c.y, c.z, t.x, t.y, t.z))
+        self.moved()
+
+    def on_show(self, i):
+        """A thin slab of hollow shells is empty space (Mohamed saw it at T8),
+        so a thin slice always fills its cut faces."""
+        self.thick.setVisible(i == 1)
+        if i == 1 and not self.fill_toggle.isChecked():
+            self.fill_toggle.setChecked(True)
+        self.moved()
+
+    def moved(self, realign=False):
+        self.update_clip()
+        if realign and self.cut.isChecked():
+            self.look()
+        if self.fill_toggle.isChecked():
+            self.face_job = None                  # cancel faces still being built
+            if self.overlay:
+                self.overlay.clear_faces()        # stale faces must not linger while scrubbing
+            self.request_outlines()
+
+    def on_cut(self, on):
+        self.align.setEnabled(on)
+        self.update_clip()
+        if on:
+            self.look()
+        elif self.fill_toggle.isChecked():
+            self.fill_toggle.setChecked(False)
+
+    def clippable(self):
+        """What the cut applies to: meshes and solids, not annotations, so
+        vertebra labels stay readable in a thin slice (a clip at the scene root
+        cut them away; Mohamed, 2026-10-21). The overlay is outside them all."""
+        return [o for o in self.doc.Objects
+                if (o.isDerivedFrom("Mesh::Feature") or o.isDerivedFrom("Part::Feature"))
+                and o.ViewObject is not None]
+
+    def update_clip(self):
+        self.unclip()
+        if not self.cut.isChecked():
+            return
+        c, n, _, _ = self.plane()
+        planes = [(n, c)]
+        if self.showmode.index() == 1:
+            planes.append((-n, c + n*self.thick.value()))
+        for nn, cc in planes:
+            node = coin.SoClipPlane()
+            node.plane.setValue(coin.SbPlane(coin.SbVec3f(*nn), coin.SbVec3f(*cc)))
+            self.clips.append(node)
+        self.clip_new()
+
+    def clip_new(self):
+        """Put the clip planes at the top of each body's own scene node. Coin
+        lets one node have many parents, and a clip inside a separator stays
+        inside it, so only these bodies are cut. Called again on a timer for
+        bodies added while cutting (e.g. the tracts being shown)."""
+        for o in self.clippable():
+            if o.Name in self.clipped:
+                continue
+            root = o.ViewObject.RootNode
+            for node in reversed(self.clips):
+                root.insertChild(node, 0)
+            self.clipped[o.Name] = root
+
+    def unclip(self):
+        for root in self.clipped.values():
+            for node in self.clips:
+                try:
+                    if root.findChild(node) >= 0:
+                        root.removeChild(node)
+                except Exception:
+                    pass
+        self.clipped, self.clips = {}, []
+
+    def look(self):
+        c, n, u, v = self.plane()
+        back = -n                       # camera on the removed side, looking into the kept one
+        up = -v                         # anterior up
+        right = up.cross(back)
+        q = FreeCAD.Rotation(right, up, back, "ZYX").Q
+        cam_was = self.view.getCameraType()
+        self.view.setCameraType("Orthographic")
+        cam = self.view.getCameraNode()
+        h = cam.height.getValue() if cam_was == "Orthographic" else ZOOM_MM
+        if h > 2*ZOOM_MM:               # zoomed out (Fit all, an overview): back to the cord
+            h = ZOOM_MM
+        cam.orientation.setValue(coin.SbRotation(q[0], q[1], q[2], q[3]))
+        dist = 300.0
+        p = c + back*dist
+        cam.position.setValue(p.x, p.y, p.z)
+        cam.focalDistance.setValue(dist)
+        cam.height.setValue(h)
+
+    # -- outlines (live) and faces (when the slider rests) --------------------
+    def on_fill(self, on):
+        if on:
+            if not self.cut.isChecked():
+                self.cut.setChecked(True)
+            if self.overlay is None:
+                self.overlay = Overlay(self.view)
+            self.request_outlines()
+        else:
+            if self.showmode.index() == 1:            # a thin slice needs its faces
+                self.showmode.set_index(0)
+                self.thick.setVisible(False)
+                self.update_clip()
+            self.face_timer.stop()
+            if self.overlay:
+                self.overlay.remove()
+                self.overlay = None
+            self.sections = None
+            self.table.setVisible(False)
+            self.status.setText("")
+
+    def request_outlines(self):
+        """Coalesce slider events: compute for the latest position only, as soon
+        as the previous computation is done."""
+        self.pending = True
+        if not self.busy:
+            QtCore.QTimer.singleShot(0, self.update_outlines)
+
+    def update_outlines(self):
+        if not self.pending or not self.fill_toggle.isChecked():
+            return
+        self.pending, self.busy = False, True
+        t0 = time.time()
+        try:
+            c, n, u, v = self.plane()
+            C, N, U, W = (np.array(x) for x in (c, n, u, v))
+            lift = N*CAP_LIFT_MM
+            rows, lines = [], []
+            for o in self.doc.Objects:
+                vo = o.ViewObject
+                if vo is None or not vo.Visibility:
+                    continue
+                if o.isDerivedFrom("Mesh::Feature"):
+                    if not crosses(o.Mesh.BoundBox, c, n):
+                        continue
+                    loops, opens = cut_mesh(*self.cache.faces_near(o, self.s), C, N)
+                elif o.isDerivedFrom("Part::Feature") and not o.Shape.isNull():
+                    if not crosses(o.Shape.BoundBox, c, n):
+                        continue
+                    try:
+                        loops, opens = cut_solid(o, c, n)
+                    except Exception:
+                        continue
+                else:
+                    continue
+                if not loops and not opens:
+                    continue
+                rgb = colour_of(o)
+                if loops:
+                    lines.append(([L + lift for L in loops], tuple(0.55*x for x in rgb), 1.5))
+                if opens:
+                    lines.append(([L + 2*lift for L in opens], (1.0, 0.0, 0.0), 4))
+                rows.append((o, area_2d(loops, C, U, W) if loops else 0.0, len(loops), len(opens), loops, rgb))
+            self.sections = (self.s, self.side.index(), rows)
+            if self.overlay is None:
+                self.overlay = Overlay(self.view)
+            self.overlay.set_lines(lines)
+            self.fill_table(rows, time.time() - t0)
+            self.face_timer.start()
+        finally:
+            self.busy = False
+        if self.pending:
+            QtCore.QTimer.singleShot(0, self.update_outlines)
+
+    def fill_faces(self):
+        """Faces once the slider rests: one body per event-loop turn, so moving
+        the slider again cancels the rest at once instead of waiting ~0.5 s."""
+        if self.busy or self.pending or self.sections is None or self.overlay is None:
+            self.face_timer.start()
+            return
+        s, side, rows = self.sections
+        if s != self.s or side != self.side.index():
+            return
+        c, n, _, _ = self.plane()
+        self.overlay.clear_faces()
+        todo = sorted((r for r in rows if r[4]), key=lambda r: -r[1])   # biggest first
+        self.face_job = (s, side, iter(todo), np.array(n)*CAP_LIFT_MM)
+        QtCore.QTimer.singleShot(0, self.face_step)
+
+    def face_step(self):
+        job = self.face_job
+        if job is None:
+            return
+        s, side, rows, lift = job
+        if s != self.s or side != self.side.index() or self.pending or self.overlay is None:
+            self.face_job = None
+            return
+        try:
+            o, area, nc, no, loops, rgb = next(rows)
+        except StopIteration:
+            self.face_job = None
+            return
+        try:
+            ft = face_triangles([L + lift for L in loops])
+        except Exception:
+            ft = None
+        if ft:
+            self.overlay.add_face(ft[0], ft[1], rgb)
+        QtCore.QTimer.singleShot(0, self.face_step)
+
+    def fill_table(self, rows, secs):
+        rows.sort(key=lambda r: (-r[3], r[0].Label))
+        self.rows = rows
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(rows))
+        bad = 0
+        red = QtGui.QBrush(QtGui.QColor(scs_ui.WARN_FG))
+        for k, (o, area, nc, no, _l, _c) in enumerate(rows):
+            for j, text in enumerate((o.Label, "%.2f" % area, str(nc), str(no))):
+                it = QtWidgets.QTableWidgetItem(text)
+                if no:
+                    it.setForeground(red)
+                if j:
+                    it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                self.table.setItem(k, j, it)
+            bad += bool(no)
+        self.table.setUpdatesEnabled(True)
+        self.table.setVisible(True)
+        self.status.setText("%d bodies cut at %s. %s" % (
+            len(rows), self.level.currentText(),
+            "%d with outlines that do not close (red, listed first)." % bad if bad
+            else "Every outline closes."))
+        self.status.setToolTip("Cut and outlined in %.0f ms" % (1000*secs))
+
+    def select_row(self, r, _c):
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.rows[r][0])
+
+    def remove_legacy_caps(self):
+        """Older versions filled faces as document objects in this group."""
+        try:
+            g = self.doc.getObject(LEGACY_CAPS)
+        except Exception:
+            return
+        if g is not None:
+            for o in list(g.Group):
+                self.doc.removeObject(o.Name)
+            self.doc.removeObject(g.Name)
+
+    def shutdown(self, *_a):
+        self.face_job = None
+        self.face_timer.stop()
+        self.sync.stop()
+        self.unclip()
+        self.cut.set_state(False)
+        self.fill_toggle.set_state(False)
+        self.align.setEnabled(False)
+        self.table.setVisible(False)
+        if self.overlay:
+            self.overlay.remove()
+            self.overlay = None
+
+
+class CloseFilter(QtCore.QObject):
+    """Closing the dock (its X) takes the cut and the faces with it.
+    visibilityChanged would also fire when another tab covers the dock."""
+
+    def __init__(self, reg):
+        super().__init__()
+        self.reg = reg
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Close and self.reg.get("panel") is not None:
+            self.reg["panel"].shutdown()
+        return False
+
+
+def show_panel():
+    doc = FreeCAD.ActiveDocument
+    mw = FreeCADGui.getMainWindow()
+    if doc is None:
+        QtWidgets.QMessageBox.warning(mw, "Cross-section viewer", "No active document.")
+        return None
+    reg = builtins.__dict__.setdefault("_SCS_XSEC_PANEL", {})
+    if reg.get("panel") is not None:
+        try:
+            reg["panel"].shutdown()
+        except Exception:
+            pass
+    try:
+        panel = XsecPanel(doc)
+    except Exception as exc:
+        QtWidgets.QMessageBox.critical(mw, "Cross-section viewer", "%s: %s\n\nCentreline: %s\n"
+                                       "Set SCS_MODELING_REPO if the checkout lives elsewhere."
+                                       % (type(exc).__name__, exc, CENTRELINE))
+        return None
+    reg["panel"] = panel
+    dock = mw.findChild(QtWidgets.QDockWidget, OBJECT_NAME)
+    if dock is None:
+        dock = QtWidgets.QDockWidget("Cross-section viewer", mw)
+        dock.setObjectName(OBJECT_NAME)
+        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+        reg["filter"] = CloseFilter(reg)
+        dock.installEventFilter(reg["filter"])
+    dock.setWidget(panel)
+    dock.setWindowTitle("Cross-section viewer — %s" % doc.Label)
+    dock.show()
+    dock.raise_()
+    return dock
+
+
+show_panel()

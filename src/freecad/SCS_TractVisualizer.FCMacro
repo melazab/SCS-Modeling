@@ -1,0 +1,358 @@
+# -*- coding: utf-8 -*-
+"""Tract visualizer: PAM50 white-matter tracts in the extended RADO cord.
+
+RADO has one white-matter body, so "dorsal column" or "spinothalamic tract"
+has no geometry in the model. src/atlas/register_tracts.py registers the
+PAM50 atlas (SCT; Levy 2015) onto RADO's cord section for each vertebra
+T6-T12; src/atlas/build_tract_bodies.py turns those maps into one 3D body per
+tract and side that together fill the model's cord exactly.
+
+THE PANEL
+---------
+  Show tracts / Tracts shown   one toggle: puts the tracts in the document
+                               (green) or takes them out. While shown, the
+                               cord's own white and grey matter are hidden,
+                               since the tracts fill them exactly; they come
+                               back when the tracts go.
+  Display  Bodies | Slices     continuous bodies, or one thin slice per
+                               vertebra drawn from that vertebra's own map
+  Side     Both | Left | Right patient side
+  Tract tree                   tick a tract, a funiculus or everything; the
+                               area is the mean cross-section, both sides
+
+The tracts live in "Tract bodies (not anatomy)". The FEM reads STLs, never the
+document, so nothing here reaches a mesh or a solve; do not save it into the
+reference .FCStd files.
+
+INSTALL: symlink into FreeCAD's versioned macro directory (src/freecad/README.md
+"The macros"), then Macro -> Macros... -> Execute.
+"""
+import json
+import os
+import sys
+
+import FreeCAD
+import FreeCADGui
+import Mesh
+import Part
+
+try:
+    from PySide import QtCore, QtGui, QtWidgets
+except ImportError:                                     # pragma: no cover
+    try:
+        from PySide6 import QtCore, QtGui, QtWidgets
+    except ImportError:
+        from PySide2 import QtCore, QtGui, QtWidgets
+
+REPO = os.environ.get("SCS_MODELING_REPO",
+                      os.path.expanduser("~/Projects/SCS-Modeling"))
+sys.path.insert(0, os.path.join(REPO, "src", "freecad"))
+import scs_levels  # noqa: E402
+import scs_ui  # noqa: E402
+
+ATLAS = os.path.join(REPO, "fem", "out", "atlas")
+BODIES = os.path.join(ATLAS, "tract_bodies")
+OBJECT_NAME = "SCS_TractVisualizerDock"
+GROUP = "Tract_bodies"
+THICK_MM = 0.3
+# PAM50 info_label.txt "Combined labels" (ids are per side pairs 2k, 2k+1).
+FUNICULI = (("Dorsal columns", range(0, 4)), ("Lateral funiculus", range(4, 14)),
+            ("Ventral funiculus", range(14, 30)), ("Grey matter", range(30, 36)))
+CORD_LABELS = ("Spinal cord — white matter", "Spinal cord — grey matter")
+
+
+def hex_rgb(h):
+    return tuple(int(h[i:i + 2], 16)/255.0 for i in (1, 3, 5))
+
+
+def frame_at(cl, s):
+    S, P, T = cl["s_mm"], cl["points_mm"], cl["tangents"]
+    s = min(max(s, S[0]), S[-1])
+    i = max(0, min(len(S) - 2, int((s - S[0])/(S[1] - S[0]))))
+    a = (s - S[i])/(S[i + 1] - S[i])
+    lerp = lambda A: FreeCAD.Vector(*[(1 - a)*A[i][d] + a*A[i + 1][d] for d in range(3)])
+    c, t = lerp(P), lerp(T)
+    t.normalize()
+    u = FreeCAD.Vector(1, 0, 0) - t*t.x
+    u.normalize()
+    return c, u, t.cross(u), t
+
+
+def slice_shape(rings, c, u, v, t):
+    """Rings -> faces, extruded THICK_MM along the cord; a ring inside a larger
+    one is a hole."""
+    faces = []
+    for r in rings:
+        pts = [c + u*x + v*y - t*(THICK_MM/2) for x, y in r]
+        if (pts[0] - pts[-1]).Length > 1e-6:
+            pts.append(pts[0])
+        try:
+            faces.append(Part.Face(Part.makePolygon(pts)))
+        except Exception:
+            pass
+    shape = None
+    for f in sorted(faces, key=lambda f: -f.Area):
+        solid = f.extrude(t*THICK_MM)
+        if shape is None:
+            shape = solid
+        elif shape.common(solid).Volume > 0.5*solid.Volume:
+            shape = shape.cut(solid)
+        else:
+            shape = shape.fuse(solid)
+    return shape
+
+
+def capital(s):
+    return s[:1].upper() + s[1:]
+
+
+class TractPanel(QtWidgets.QWidget):
+    def __init__(self, doc):
+        super().__init__()
+        self.doc = doc
+        idx = os.path.join(BODIES, "bodies.json")
+        if not os.path.exists(idx):
+            raise FileNotFoundError("%s missing; run src/atlas/build_tract_bodies.py" % idx)
+        with open(idx) as f:
+            self.index = json.load(f)
+        self.maps = {}
+        for L in self.index["levels_s_mm"]:
+            with open(os.path.join(ATLAS, "tracts_%s" % L, "tracts.json")) as f:
+                self.maps[L] = json.load(f)
+        self.hidden_cord = []
+
+        lay = QtWidgets.QVBoxLayout(self)
+        self.toggle = scs_ui.StateToggle(
+            "Show tracts", "Tracts shown",
+            "Put the PAM50 tracts into the document, in \"Tract bodies (not anatomy)\". "
+            "While they are shown the cord's white and grey matter are hidden, because "
+            "the tracts fill them exactly; press again to take the tracts out and bring "
+            "the cord back.")
+        self.toggle.toggled.connect(self.on_toggle)
+        lay.addWidget(self.toggle)
+
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignRight)
+        self.mode = scs_ui.Segmented(["Bodies", "Slices"], [
+            "One continuous body per tract and side, blended between vertebrae",
+            "One thin slice per vertebra (T6–T12), each from that vertebra's own map"])
+        self.mode.changed.connect(lambda _i: self.refresh())
+        form.addRow("Display", self.mode)
+        self.side = scs_ui.Segmented(["Both", "Left", "Right"], [
+            "Both sides", "Patient left only", "Patient right only"])
+        self.side.changed.connect(lambda _i: self.apply_visibility())
+        form.addRow("Side", self.side)
+        lay.addLayout(form)
+
+        self.tree = QtWidgets.QTreeWidget()
+        self.tree.setColumnCount(2)
+        self.tree.setHeaderLabels(["Tract", "mm²"])
+        self.tree.header().setStretchLastSection(False)
+        self.tree.header().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        self.tree.header().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setUniformRowHeights(True)
+        self.items = {}
+        area = {}
+        for b in self.index["bodies"]:
+            area[b["short"]] = area.get(b["short"], 0) + b["mean_area_mm2"]
+        names = {t["id"]: t for t in self.maps["T10"]["tracts"]}
+        for title, ids in FUNICULI:
+            top = QtWidgets.QTreeWidgetItem([title, ""])
+            top.setFlags(top.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsAutoTristate)
+            f = top.font(0); f.setBold(True); top.setFont(0, f)
+            self.tree.addTopLevelItem(top)
+            total = 0.0
+            for i in list(ids)[::2]:
+                t = names[i]
+                a = area.get(t["short"], 0.0)
+                total += a
+                it = QtWidgets.QTreeWidgetItem([capital(t["short"].split(" (")[0]), "%.2f" % a if a else "—"])
+                it.setFlags(it.flags() | QtCore.Qt.ItemIsUserCheckable)
+                pm = QtGui.QPixmap(12, 12); pm.fill(QtGui.QColor(t["colour"]))
+                it.setIcon(0, QtGui.QIcon(pm))
+                it.setTextAlignment(1, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                it.setCheckState(0, QtCore.Qt.Unchecked if title == "Grey matter" else QtCore.Qt.Checked)
+                it.setToolTip(0, "%s (PAM50 labels %d and %d)" % (t["name"].replace("WM left ", "").replace("GM left ", ""), i, i + 1))
+                if not a:
+                    it.setDisabled(True)
+                    it.setToolTip(0, "Too thin in RADO's cord to survive meshing")
+                top.addChild(it)
+                self.items[t["short"]] = it
+            top.setText(1, "%.1f" % total)
+            top.setTextAlignment(1, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            top.setExpanded(title != "Ventral funiculus")
+        self.tree.itemChanged.connect(lambda *_a: self.apply_visibility())
+        lay.addWidget(self.tree, 1)
+
+        dice = [m["grey_dice_after"] for m in self.maps.values()]
+        h = scs_ui.hint("PAM50 atlas registered to RADO's cord at each vertebra, T6–T12 "
+                        "(grey-matter Dice %.2f–%.2f). Hover for caveats." % (min(dice), max(dice)))
+        h.setToolTip(
+            "Registration fits only the white/grey outline (RADO has no image contrast), so "
+            "the layout inside the white matter is the atlas' prior.\n"
+            "Cuneatus below ~T6 and the 'spinal lemniscus' (spinothalamic + spinoreticular "
+            "together) are atlas conventions, not anatomy.\n"
+            "Per level: " + ", ".join("%s %.2f" % (L, self.maps[L]["grey_dice_after"])
+                                      for L in sorted(self.maps, key=lambda n: int(n[1:]))) +
+            "\nSource: src/atlas/register_tracts.py, build_tract_bodies.py")
+        lay.addWidget(h)
+
+        g = self.group()
+        self.hidden_cord = list(getattr(g, "HiddenCord", []) or []) if g else []
+        self.toggle.set_state(g is not None)
+        self.sync = QtCore.QTimer(self); self.sync.setInterval(1000)
+        self.sync.timeout.connect(self.sync_to_document); self.sync.start()
+
+    # -- document ------------------------------------------------------------
+    def group(self, create=False):
+        try:
+            g = self.doc.getObject(GROUP)
+        except Exception:                      # document closed
+            return None
+        if g is None and create:
+            g = self.doc.addObject("App::DocumentObjectGroup", GROUP)
+            g.Label = "Tract bodies (not anatomy)"
+        return g
+
+    def objects(self, kind=None):
+        g = self.group()
+        objs = list(g.Group) if g else []
+        return [o for o in objs if kind is None or getattr(o, "TractKind", "") == kind]
+
+    def sync_to_document(self):
+        """The group can disappear without the panel (deleted in the tree,
+        document closed); the toggle must say what the document says."""
+        shown = self.group() is not None
+        if self.toggle.isChecked() and not shown:
+            self.restore_cord()
+        self.toggle.set_state(shown)
+
+    def on_toggle(self, on):
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            if on:
+                self.refresh()
+                self.hide_cord()
+            else:
+                for o in self.objects():
+                    self.doc.removeObject(o.Name)
+                if self.group():
+                    self.doc.removeObject(GROUP)
+                self.restore_cord()
+                self.doc.recompute()
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+    def hide_cord(self):
+        """Hide the cord's white and grey matter, remembering which on the group
+        itself, so a re-run of the macro can still bring them back."""
+        self.hidden_cord = []
+        for o in self.doc.Objects:
+            if o.Label in CORD_LABELS and o.ViewObject is not None and o.ViewObject.Visibility:
+                o.ViewObject.Visibility = False
+                self.hidden_cord.append(o.Name)
+        g = self.group(create=True)
+        if "HiddenCord" not in g.PropertiesList:
+            g.addProperty("App::PropertyStringList", "HiddenCord", "Tract")
+        g.HiddenCord = self.hidden_cord
+
+    def restore_cord(self):
+        for n in self.hidden_cord:
+            o = self.doc.getObject(n)
+            if o is not None:
+                o.ViewObject.Visibility = True
+        self.hidden_cord = []
+
+    # -- building ------------------------------------------------------------
+    def refresh(self):
+        if not self.toggle.isChecked():
+            return
+        kind = ("body", "slice")[self.mode.index()]
+        if not self.objects(kind):
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+            try:
+                (self.add_bodies if kind == "body" else self.add_slices)()
+                self.doc.recompute()
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+        self.apply_visibility()
+
+    def tag(self, o, t, kind):
+        for k, val in (("TractName", t["short"]), ("TractSide", t["side"]), ("TractKind", kind)):
+            o.addProperty("App::PropertyString", k, "Tract")
+            setattr(o, k, val)
+        self.group(create=True).addObject(o)
+        if o.ViewObject is not None:
+            o.ViewObject.ShapeColor = hex_rgb(t["colour"])
+            o.ViewObject.Visibility = False
+
+    def add_bodies(self):
+        for b in self.index["bodies"]:
+            o = self.doc.addObject("Mesh::Feature", "TractBody")
+            o.Mesh = Mesh.Mesh(os.path.join(BODIES, b["stl"]))
+            o.Label = "%s %s" % (b["side"], b["short"])
+            self.tag(o, b, "body")
+
+    def add_slices(self):
+        with open(os.path.join(REPO, self.maps["T10"]["centreline"])) as f:
+            cl = json.load(f)
+        # the document's own vertebra positions, the same definition the
+        # bodies were built with (scs_levels.py)
+        levels = scs_levels.document_levels(self.doc, cl["s_mm"], cl["points_mm"]) or self.index["levels_s_mm"]
+        for L, s in levels.items():
+            if L not in self.maps:
+                continue
+            c, u, v, t = frame_at(cl, s)
+            for tr in self.maps[L]["tracts"]:
+                shape = slice_shape(tr["polygons_uv_mm"], c, u, v, t)
+                if shape is None:
+                    continue
+                o = self.doc.addObject("Part::Feature", "TractSlice")
+                o.Label = "%s slice %s %s" % (L, tr["side"], tr["short"])
+                o.Shape = shape
+                self.tag(o, tr, "slice")
+
+    def apply_visibility(self):
+        kind = ("body", "slice")[self.mode.index()]
+        sides = (("left", "right"), ("left",), ("right",))[self.side.index()]
+        for o in self.objects():
+            it = self.items.get(o.TractName)
+            on = (o.TractKind == kind and o.TractSide in sides and it is not None
+                  and it.checkState(0) == QtCore.Qt.Checked)
+            if o.ViewObject.Visibility != on:
+                o.ViewObject.Visibility = on
+
+    def shutdown(self):
+        self.sync.stop()
+
+
+def show_panel():
+    doc = FreeCAD.ActiveDocument
+    mw = FreeCADGui.getMainWindow()
+    if doc is None:
+        QtWidgets.QMessageBox.warning(mw, "Tract visualizer", "No active document.")
+        return None
+    try:
+        panel = TractPanel(doc)
+    except Exception as exc:
+        QtWidgets.QMessageBox.critical(mw, "Tract visualizer", "%s: %s\n\nRepo: %s\n"
+                                       "Set SCS_MODELING_REPO if the checkout lives elsewhere."
+                                       % (type(exc).__name__, exc, REPO))
+        return None
+    dock = mw.findChild(QtWidgets.QDockWidget, OBJECT_NAME)
+    if dock is None:
+        dock = QtWidgets.QDockWidget("Tract visualizer", mw)
+        dock.setObjectName(OBJECT_NAME)
+        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    old = dock.widget()
+    if old is not None and hasattr(old, "shutdown"):
+        old.shutdown()
+    dock.setWidget(panel)
+    dock.setWindowTitle("Tract visualizer — %s" % doc.Label)
+    dock.show()
+    dock.raise_()
+    return dock
+
+
+show_panel()

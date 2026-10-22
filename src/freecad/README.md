@@ -500,12 +500,35 @@ which is the one script here that does save, refuses for the same reason.
 
 ## The macros
 
-Two GUI panels. `lead_designer` is the clinical front end -- dial a lead in, add
+Four GUI panels here (the `SCS_` mesh, job and potential macros live in
+`fem/scripts/`). `lead_designer` is the clinical front end -- dial a lead in, add
 up to `max_leads_per_type` leads of each type, check that each fits *and* that no
 two of them collide, show them all in the open model, export the STLs.
 `tissue_visibility` gives per-tissue show / hide / isolate, which is what makes
 the model legible: hiding bone, discs and vessels turns a dense mess into a
 clear view of the lead in the epidural space.
+
+`SCS_TractVisualizer` shows the PAM50 white-matter tracts registered onto the
+cord (built by `src/atlas/register_tracts.py` and `build_tract_bodies.py`; see
+`src/atlas/README.md`): one toggle puts them in the document, Bodies | Slices
+picks continuous bodies or one slice per vertebra, Both | Left | Right picks the
+side, and a tree grouped by funiculus (dorsal columns, lateral, ventral, grey
+matter) ticks tracts on and off. While shown it hides the cord's own white and
+grey matter, which the tracts fill exactly, and restores them after.
+`SCS_CrossSectionViewer` cuts the model perpendicular to the cord at any level,
+following the cord's curve rather than X/Y/Z, aligns an orthographic camera on
+the cut (anterior up; from below, patient left on screen right), and fills the
+cut faces of every visible body, listing each with its area and flagging any
+outline that does not close: an inspection tool for the STLs.
+
+Shared widgets and the rules behind them are in `scs_ui.py`: one state, one
+toggle (green when on, painted from the palette when off); exclusive choices as
+segmented buttons; one grey hint line, explanations in tooltips. New panels
+should import it rather than restyle. Where a vertebra sits along the cord
+comes from `scs_levels.py` for every panel and for the tract-body build: the
+vertebra's volume centroid projected on the centreline (T6 212.0 ... T12
+26.0 mm), not the vertebra labels, which point at transverse-process tips a few
+millimetres higher.
 
 **One toggle, not two buttons.** `lead_designer` had *Preview* and *Remove
 preview* side by side, which meant the panel never said which state you were in.
@@ -522,7 +545,11 @@ with the wrong text colour on the dark ones.
 appears in the list, with no error to tell you why. The path moves with the
 FreeCAD version, so ask rather than hardcode:
 
-    MDIR=$(python3 -c 'import FreeCAD, os; print(os.path.join(FreeCAD.getUserAppDataDir(), "Macro"))')
+    # In FreeCAD's Python console -- the PREFERENCE, which can point at an
+    # older version's folder: on this machine FreeCAD 27.1 reads v26-3/Macro.
+    FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Macro").GetString("MacroPath")
+
+    MDIR=/home/mohamed/.local/share/FreeCAD/v26-3/Macro   # what that printed
     mkdir -p "$MDIR"
     for macro in "$PWD"/src/freecad/*.FCMacro; do
         ln -sfn "$macro" "$MDIR/$(basename "$macro")"
@@ -548,6 +575,8 @@ effect the next time that workbench loads.
 |---|---|
 | `icons/lead_designer.svg` | an SCS lead: three silver contacts on a black shaft, running off the bottom edge |
 | `icons/tissue_visibility.svg` | three tissue-coloured slabs with the bottom one ghosted out |
+| `icons/SCS_TractVisualizer.svg` | the cord's oval cut into dorsal columns (blue), lateral (red) and anterolateral (green) territories, grey-matter bar |
+| `icons/SCS_CrossSectionViewer.svg` | a bent cord rising from a translucent blue cutting plane, the filled section on the plane |
 | `icons/*_16.png`, `_32.png`, `_64.png` | the same thing rasterised, for a picker that will not take SVG |
 
 The lead icon uses the model's own colours — contacts `192,192,192`, insulator
@@ -575,4 +604,7 @@ not vanish on a dark toolbar theme.
    already
 
 The icon shows next to the macro in **Macro → Macros…** as well as on the
-toolbar. Same steps for `tissue_visibility`.
+toolbar. Same steps for `tissue_visibility`, `SCS_TractVisualizer` and
+`SCS_CrossSectionViewer`. The PNGs of the last two were rendered with Qt's own
+SVG renderer (what the toolbar uses); ImageMagick's built-in one drops strokes
+and transforms, and Qt's ignores `clipPath`, so the SVGs avoid it.

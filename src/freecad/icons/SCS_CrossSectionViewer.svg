@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Toolbar icon for src/freecad/SCS_CrossSectionViewer.FCMacro: a curved cord
+  leaving a cutting plane that is square to the cord where it crosses.
+
+  What the macro adds over FreeCAD's X/Y/Z clipping is that the cut follows
+  the cord's curve, so the icon is a bent cord (white matter, 250,249,246 from
+  src/ansys/tissue_map.yaml, dark outline so it survives a light toolbar)
+  rising from a translucent blue plane, with the filled section on the plane
+  in the grey-matter grey (128,128,128): the near side is clipped away, as the
+  macro leaves it. Drawn bold, because at 16 px a thin tube is a smudge.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- the cutting plane, seen obliquely -->
+  <rect x="-1" y="16" width="24" height="10" rx="1" transform="rotate(30 11 21)"
+        fill="#64b5f6" fill-opacity="0.55" stroke="#1565c0" stroke-width="1"/>
+  <!-- the cord beyond the cut, curving away -->
+  <path d="M 4.9,17.5 C 6,10 12,4 23.5,1 L 31.5,8 C 22,11 18,16 17.1,24.5 Z"
+        fill="#faf9f6" stroke="#3c3c3c" stroke-width="1.2" stroke-linejoin="round"/>
+  <!-- the section, filled -->
+  <ellipse cx="11" cy="21" rx="7" ry="3.4" transform="rotate(30 11 21)"
+           fill="#808080" stroke="#3c3c3c" stroke-width="1.2"/>
+</svg>
