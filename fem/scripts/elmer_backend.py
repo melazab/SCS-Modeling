@@ -292,6 +292,21 @@ def read_potential(results, nodes, tree=None, workers=1):
     return values
 
 
+def accepted(rel, reaction):
+    from assign_and_solve import ACCEPTED_RESIDUAL
+    return bool(np.isfinite(rel) and rel <= ACCEPTED_RESIDUAL and abs(reaction) <= 1e-6)
+
+
+def finished(case, text):
+    """An earlier Elmer run of exactly this case.sif ran to the end."""
+    try:
+        return ((case / 'case.sif').read_text() == text
+                and 'ALL DONE' in (case / 'solver.log').read_text(errors='replace')
+                and any((case / 'results').glob('*.vtu')))
+    except OSError:
+        return False
+
+
 def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, resources,
                    progress=lambda p: None, nbr=None, fibre=None):
     """Solve a classified mesh; independently verify every unit-current field.
@@ -341,34 +356,54 @@ def solve_prepared(nodes, tets, labels, sigma, order, contact_ids, directory, re
         rhs = source - ret
         case = directory / ('contact%d' % contact)
         case.mkdir(exist_ok=True)
-        # Each solve gets fresh results; a failed rerun cannot import old VTUs.
         results = case / 'results'
-        if results.exists():
-            shutil.rmtree(results)
-        results.mkdir()
-        link = case / 'mesh'
-        if not link.exists():
-            link.symlink_to(directory.resolve() / 'mesh', target_is_directory=True)
-        (case / 'case.sif').write_text(sif(order, labels, sigma, contact, source_vol, area, pin, fibre, tags))
-        resources.mark('Elmer contact %d' % contact)
-        command = [ELMER_BIN / 'ElmerSolver_mpi', 'case.sif']
-        if resources.cpus > 1:
-            command = [mpi, '-np', str(resources.cpus)] + command
-        run(command, case, case / 'solver.log')
+        text = sif(order, labels, sigma, contact, source_vol, area, pin, fibre, tags)
+        if tree is None:
+            tree = cKDTree(nodes * 1e-3)
+
+        def check():
+            v = read_potential(results, nodes, tree, resources.cpus)
+            v -= v[pin]
+            residual = action(nodes, tets, sigma, v, fibre=fibre) - rhs
+            rel = float(np.linalg.norm(residual[free]) / max(np.linalg.norm(rhs[free]), 1e-300))
+            return v, rel, float(residual[pin])
+
+        checked = None
+        if finished(case, text):
+            # A job killed at its walltime loses only the contact it was on: an
+            # earlier job's finished solve of this exact case is read back and
+            # has to pass the same independent check as a fresh solve.
+            resources.mark('verify contact %d (solved by an earlier job)' % contact)
+            try:
+                checked = check()
+            except RuntimeError as error:
+                print('Contact %d: earlier result unreadable (%s)' % (contact, error), flush=True)
+            if checked and not accepted(*checked[1:]):
+                print('Contact %d: earlier result fails the check (%.3e)' % (contact, checked[1]), flush=True)
+                checked = None
+        if checked is None:
+            # Each solve gets fresh results; a failed rerun cannot import old VTUs.
+            if results.exists():
+                shutil.rmtree(results)
+            results.mkdir()
+            link = case / 'mesh'
+            if not link.exists():
+                link.symlink_to(directory.resolve() / 'mesh', target_is_directory=True)
+            (case / 'case.sif').write_text(text)
+            resources.mark('Elmer contact %d' % contact)
+            command = [ELMER_BIN / 'ElmerSolver_mpi', 'case.sif']
+            if resources.cpus > 1:
+                command = [mpi, '-np', str(resources.cpus)] + command
+            run(command, case, case / 'solver.log')
+            resources.mark('verify contact %d' % contact)
+            checked = check()
+        v, rel, reaction = checked
         version = version or next((line.split('Version:', 1)[1].strip() for line
                                    in (case / 'solver.log').read_text(errors='replace').splitlines()
                                    if 'MAIN: Version:' in line), 'unknown')
-        resources.mark('verify contact %d' % contact)
-        if tree is None:
-            tree = cKDTree(nodes * 1e-3)
-        v = read_potential(results, nodes, tree, resources.cpus)
-        v -= v[pin]
-        residual = action(nodes, tets, sigma, v, fibre=fibre) - rhs
-        rel = float(np.linalg.norm(residual[free]) / max(np.linalg.norm(rhs[free]), 1e-300))
-        reaction = float(residual[pin])
         print('Contact %d: independently checked relative residual %.3e, pin reaction %.3e A' %
               (contact, rel, reaction), flush=True)
-        if not np.isfinite(rel) or rel > ACCEPTED_RESIDUAL or abs(reaction) > 1e-6:
+        if not accepted(rel, reaction):
             raise RuntimeError('Elmer contact %d failed independent residual/current checks; no solution published' % contact)
         phi[pos] = v
         residuals.append(rel); reactions.append(reaction)

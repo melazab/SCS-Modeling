@@ -25,19 +25,31 @@ class Resources:
         self.records = []
         self.stop = threading.Event()
         self.process = psutil.Process()
+        self.exe = self.process.exe()
+
+    def _forked(self, process):
+        try:
+            return process.exe() == self.exe
+        except psutil.Error:
+            return False
 
     def usage(self):
         # Sum over the process tree, including MPI launchers and their workers.
-        # PSS, not RSS: forked workers (parallel classification) map the
-        # parent's pages copy-on-write, and summing RSS counted that shared
-        # memory once per worker -- 2.5 GB read by 8 workers summed to 22.7 GB
-        # and tripped the budget. PSS splits each shared page among its users.
-        processes = [self.process] + self.process.children(recursive=True)
+        # Forked workers (parallel classification) map the parent's pages
+        # copy-on-write, and summing RSS counted that shared memory once per
+        # worker -- 2.5 GB read by 8 workers summed to 22.7 GB and tripped the
+        # budget -- so while any are alive this tree counts PSS, which splits
+        # each shared page among its users. PSS walks every page table, though:
+        # four times a second over 24 Elmer ranks of 8 GB it took a third of a
+        # CPU beside the MPI solve. With no forked worker alive, RSS is close
+        # enough (shared libraries only) and costs one small read per process.
+        children = self.process.children(recursive=True)
+        pss = any(self._forked(child) for child in children)
         total = 0
-        for process in processes:
+        for process in [self.process] + children:
             try:
                 try:
-                    total += process.memory_full_info().pss
+                    total += process.memory_full_info().pss if pss else process.memory_info().rss
                 except (AttributeError, psutil.AccessDenied):
                     total += process.memory_info().rss
             except psutil.NoSuchProcess:
