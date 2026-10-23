@@ -46,6 +46,23 @@ def toggle_style(widget, radius=3, padding="4px 10px"):
     """ % (face, text, edge, radius, padding, lit, off, ON_BG, ON_FG, ON_BORDER, ON_HOVER))
 
 
+# The action a panel exists for (Generate mesh, Solve, Plot field): filled, so
+# it reads as a button at a glance (Mohamed: "I didn't know it was meant to be
+# clicked"). Blue, apart from the toggles' green; red while it would abort.
+ACT_BG, ACT_HOVER, ACT_BORDER = "#1565c0", "#1976d2", "#0d47a1"
+STOP_BG, STOP_HOVER, STOP_BORDER = "#c62828", "#d32f2f", "#8e0000"
+
+
+def action_style(widget, stop=False):
+    _face, _text, _edge, _lit, off = _palette(widget)
+    bg, hover, border = (STOP_BG, STOP_HOVER, STOP_BORDER) if stop else (ACT_BG, ACT_HOVER, ACT_BORDER)
+    return ("QPushButton { background: %s; color: #ffffff; border: 1px solid %s; border-radius: 4px;"
+            " padding: 5px 12px; font-weight: bold; }"
+            " QPushButton:hover { background: %s; }"
+            " QPushButton:disabled { background: transparent; color: %s; border: 1px solid %s; }"
+            % (bg, border, hover, off, off))
+
+
 class StateToggle(QtWidgets.QPushButton):
     """A checkable button naming its state: off_text while off, on_text (bold,
     green) while on. set_state() changes it without firing toggled, for

@@ -22,8 +22,8 @@ class MemoryDisplayTests(unittest.TestCase):
         est=dict(n_tets=17.5e6,mesh_seconds=780,ram_gb_lo=8,ram_gb_hi=19)
         severity,text=mesh_cost.describe(est,ram_gb=20)
         self.assertEqual(severity,'danger')
-        self.assertIn('16.0 GB mesh budget',text)
-        self.assertIn('20.0 GB available',text)
+        self.assertIn('over 16 GB budget',text)
+        self.assertIn('20 GB available',text)
         self.assertEqual(mesh_cost.describe(est,ram_gb=25)[0],'warn')
 
 if __name__=='__main__':unittest.main()

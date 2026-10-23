@@ -155,32 +155,35 @@ def describe(est, ram_gb=None, budget="available"):
     """
     ram_gb = available_ram_gb() if ram_gb is None else ram_gb
     n = est["n_tets"]
-    mins = est["mesh_seconds"] / 60.0
-    if n >= 1e6:
+    if n >= 100e6:
+        count = "%.0f M tets" % (n / 1e6)
+    elif n >= 1e6:
         count = "%.1f M tets" % (n / 1e6)
     else:
         count = "%.0f k tets" % (n / 1e3)
-    if mins < 90:
-        dur = "~%.0f min meshing" % max(1, round(mins))
-    else:
-        dur = "~%.1f h meshing" % (mins / 60.0)
     lo_gb, hi_gb = est["ram_gb_lo"], est["ram_gb_hi"]
     if hi_gb < 1.0:
-        ram = "~%.0f-%.0f MB mesh/preview RAM" % (lo_gb * 1000, hi_gb * 1000)
+        ram = "%.0f\u2013%.0f MB RAM" % (lo_gb * 1000, hi_gb * 1000)
     elif hi_gb < 10.0:
-        ram = "~%.1f-%.1f GB mesh/preview RAM" % (lo_gb, hi_gb)
+        ram = "%.1f\u2013%.1f GB RAM" % (lo_gb, hi_gb)
     else:
-        ram = "~%.0f-%.0f GB mesh/preview RAM" % (lo_gb, hi_gb)
-
+        ram = "%.0f\u2013%.0f GB RAM" % (lo_gb, hi_gb)
+    parts = [count, ram]
+    # The time is gmsh only, at a workstation calibration (TETS_PER_SEC); on
+    # 24 smp cores a 415 M-tet build meshed in 188 s against "~4.9 h", and the
+    # stages after gmsh are not in it at all. Shown for local runs only until
+    # a per-stage calibration replaces it.
+    if budget == "available":
+        mins = est["mesh_seconds"] / 60.0
+        parts.append("gmsh ~%.0f min" % max(1, round(mins)) if mins < 90 else "gmsh ~%.1f h" % (mins / 60.0))
     sev = "ok"
     if ram_gb is not None:
         if est["ram_gb_hi"] > 0.8 * ram_gb:
             sev = "danger"
         elif est["ram_gb_hi"] > 0.5 * ram_gb:
             sev = "warn"
-    text = "%s, %s, %s" % (count, ram, dur)
-    if sev == "danger":
-        text += "  --  exceeds %.1f GB mesh budget (80%% of %.1f GB %s)" % (0.8 * ram_gb, ram_gb, budget)
-    elif sev == "warn":
-        text += "  --  high memory use; %.1f GB mesh budget (80%% of %.1f GB %s)" % (0.8 * ram_gb, ram_gb, budget)
+    text = " \u00b7 ".join(parts)
+    if sev in ("danger", "warn"):
+        text += " \u00b7 %s %.0f GB budget (80%% of %.0f GB %s)" % (
+            "over" if sev == "danger" else "near", 0.8 * ram_gb, ram_gb, budget)
     return sev, text

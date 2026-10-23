@@ -12,6 +12,7 @@ per-tissue preview. SCS Potential Visualizer owns electrical solving.
 Completed artifacts are reused only with matching provenance. Re-running this
 macro reloads Python helpers; it never saves the FreeCAD document.
 """
+import hashlib
 import json
 import os
 import signal
@@ -47,12 +48,13 @@ import live_lead
 import artifacts
 import scs_job_service
 import scs_jobs as J
+import scs_stages
+import scs_monitor          # one sampler per session; never reloaded (it owns a poll timer)
+sys.path.insert(0, os.path.join(REPO_ROOT, "src", "freecad"))
+import scs_ui
 
-# 2026-09-15: this file used to import check_tissue_map.parse_tissue_map to
-# colour the preview per tissue. The preview is a single flat colour now
-# (see the top of this docstring), so that import is gone from here.
-# config.py still reads tissue_map.yaml -- through that same parser -- for
-# the tissue set, the priority order and every conductivity.
+# The preview's tissue colours come from tissue_map.yaml through config.py,
+# which reads it with check_tissue_map's own parser (see tissue_rgb()).
 
 # Reloaded on every run, same reason src/freecad/lead_designer.FCMacro's own
 # load_builder() reloads build_lead_config: FreeCAD keeps these modules in
@@ -61,7 +63,7 @@ import scs_jobs as J
 # config.py/build_mesh.py/live_lead.py and re-running this macro would
 # otherwise keep running the OLD code with no error.
 import importlib
-for _m in (C, artifacts, build_mesh, live_lead, async_runner):
+for _m in (C, artifacts, build_mesh, live_lead, async_runner, scs_stages, scs_ui):
     try:
         importlib.reload(_m)
     except Exception:
@@ -79,6 +81,9 @@ PREVIEW_PREFIX = "SCS_MeshPreview_"        # + <order name> + "_mesh"
 LEGACY_PIPE_NAME = "SCS_MeshPreview"       # the single fused preview mesh, superseded
 LEGACY_PARAMS_NAME = "SCS_MeshParams"      # pre-dock version's doc object; cleaned up on open
 OBJECT_NAME = "SCS_MeshGeneratorDock"      # QDockWidget identity, so re-running finds it
+# This macro's own text: a reopened dock keeps its panel only while it is current.
+with open(os.path.join(REPO_ROOT, "fem", "scripts", "SCS_Mesh_Generator.FCMacro"), "rb") as _f:
+    SOURCE = hashlib.sha256(_f.read()).hexdigest()
 
 # Where the cost estimator's copy of the live lead's STLs goes. NOT
 # live_lead.LIVE_LEAD_DIR: that one is read by a running mesh_preview.py
@@ -105,6 +110,9 @@ LIVE_LEAD_POLL_MS = 1500   # cheap name-scan only -- see correction section abov
 DEFAULT_CROP_MM = 50.0
 
 # (region key in build_mesh.DEFAULT_PARAMS FIELDS) -> (property label, default, tooltip)
+REGION_CAPTIONS = {"dura": "Dura", "lead": "Lead", "white": "White matter", "canal": "Canal",
+                   "fine": "Roots, DRG, vessels", "coarse": "Bone, discs"}
+
 REGION_SPINS = [
     ("dura",  "Dura Near",  0.25,
      "Element size right at the dura surface -- the ~0.5mm-thick barrier "
@@ -151,9 +159,8 @@ def tissue_tree_label(doc, order_name):
 
 THREAD_ENV_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
                    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
-# One flat colour for every preview mesh. Not a tissue colour and not
-# derived from tissue_map.yaml -- see the top of this file's docstring:
-# tissue identity is carried by the tree row you toggle, not by a hue.
+# Fallback for a preview tissue tissue_map.yaml has no colour for. Each
+# tissue's preview mesh is otherwise painted its anatomy colour (tissue_rgb).
 PREVIEW_RGB = (1.0, 0.0, 1.0)   # magenta, Mohamed's own example
 
 
@@ -200,15 +207,34 @@ def cleanup_legacy_objects(doc):
 
 
 # ---------------------------------------------------------------------------
-# Tissue colours -- read once per process, from tissue_map.yaml, via the
-# repo's own dependency-free parser. Cached per `order` tuple (not just
-# once, ever): a live lead's own order (config.order_for(contact_stl)) has
-# an N-contact-long block that differs between leads of different contact
-# counts, so the SAME positional tissue_id (e.g. 5) means "grey matter" for
-# one lead's order and "contact6" for another's -- see mesh_preview.py's
-# report["order"], which is what tissue_ids' positions are actually indices
-# into for THAT run.
+# Tissue colours -- tissue_map.yaml's color_rgb, the palette apply_colors.py
+# paints the anatomy with, so each preview mesh looks like the tissue it
+# mirrors (Mohamed, 2026-10-23: one magenta for everything was hard to read;
+# per-tissue colour was dropped 2026-09-15 when the preview was ONE fused
+# mesh needing a per-facet material list, and is one material per object
+# now). Looked up by order NAME, never by tissue_id position, which means a
+# different tissue for leads with different contact counts.
 # ---------------------------------------------------------------------------
+_TISSUE_RGB = None
+
+
+def tissue_rgb(order_name):
+    """0-1 RGB for one preview tissue; contactN and insulator are the lead's
+    electrode_contact and lead_insulation."""
+    global _TISSUE_RGB
+    if _TISSUE_RGB is None:
+        entries, _ = C._load_tissue_map()
+        _TISSUE_RGB = {t["name"]: tuple(c/255.0 for c in t["color_rgb"])
+                       for t in entries if t.get("color_rgb")}
+    if order_name.startswith("contact"):
+        cls = "electrode_contact"
+    elif order_name == "insulator":
+        cls = "lead_insulation"
+    else:
+        cls = C.ORDER_TO_TISSUE_CLASS.get(order_name)
+    return _TISSUE_RGB.get(cls, PREVIEW_RGB)
+
+
 def flat_material(rgb=PREVIEW_RGB):
     """One FLAT, MATTE FreeCAD.Material of colour `rgb`.
 
@@ -220,8 +246,7 @@ def flat_material(rgb=PREVIEW_RGB):
     the diffuse colours were correct the whole time, read back off the
     ViewObject to prove it, but the specular highlights visually drowned
     them into plain grey/silver glitter. That is a legibility problem with
-    the material, not with the palette, so it survives the 2026-09-15
-    decision to stop colouring the preview by tissue at all."""
+    the material, not with the palette."""
     m = FreeCAD.Material()
     m.DiffuseColor = rgb
     m.AmbientColor = rgb
@@ -274,8 +299,8 @@ def load_preview_by_tissue(doc, vtp_path, order):
     `Mesh::Feature`s, one per tissue actually present, each independently
     visibility-toggleable in the tree -- matching how the anatomy itself is
     grouped ("01 Vertebrae", "04 Epidural space", ...). Replaces the single
-    fused SCS_MeshPreview mesh this macro used to build. All of them are one
-    flat PREVIEW_RGB; the tree row is what identifies the tissue.
+    fused SCS_MeshPreview mesh this macro used to build. Each is painted its
+    tissue's anatomy colour (tissue_rgb).
 
     `order` must be THIS run's own report["order"] -- callers pass it
     through from the mesh_report.json/finished_ok report, never config.ORDER
@@ -332,7 +357,11 @@ def load_preview_by_tissue(doc, vtp_path, order):
         # mixed every tissue into a single mesh; splitting by tissue removes
         # that need entirely. The flat/matte settings are still required --
         # see flat_material().
-        obj.ViewObject.ShapeAppearance = [flat_material()]
+        obj.ViewObject.ShapeAppearance = [flat_material(tissue_rgb(name))]
+        # The preview's triangles keep each tet face's own vertex order, so
+        # about half face inward; one-sided lighting draws those dark and the
+        # surface reads as speckle (2026-10-23, 415 M-tet dorsal mesh).
+        obj.ViewObject.Lighting = "Two side"
         if obj not in grp.Group:
             grp.addObject(obj)
         made[name] = obj
@@ -666,36 +695,45 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             "Rechecked automatically every %.1fs." % (LIVE_LEAD_POLL_MS / 1000.0))
         outer.addWidget(self.lead_status)
 
-        # -- size field -------------------------------------------------
-        size_box = QtWidgets.QGroupBox("Mesh size field (mm)")
-        form = QtWidgets.QFormLayout(size_box)
-        form.setLabelAlignment(QtCore.Qt.AlignRight)
+        # -- element sizes: two columns, so the panel stays short ------------
+        size_box = QtWidgets.QGroupBox("Element size")
+        grid = QtWidgets.QGridLayout(size_box)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+
+        def cell(row, col, caption, widget):
+            lab = QtWidgets.QLabel(caption)
+            lab.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            lab.setToolTip(widget.toolTip())
+            grid.addWidget(lab, row, 2*col)
+            grid.addWidget(widget, row, 2*col + 1)
 
         self.h_min = self.spin(
             "Lower clamp on all region sizes, mm. A smaller Near value is raised to this limit.", 0.05, 2.0, 0.05, 3,
             build_mesh.DEFAULT_PARAMS["H_MIN"])
-        form.addRow("H_Min", self.h_min)
         self.h_max = self.spin(
             "Upper clamp on every region size, mm. Reducing this refines the entire anatomical box.",
             0.5, 10.0, 0.25, 3, build_mesh.DEFAULT_PARAMS["H_MAX"])
-        form.addRow("H_Max", self.h_max)
+        cell(0, 0, "Smallest", self.h_min)
+        cell(0, 1, "Largest", self.h_max)
 
         self._region_defaults = {name: (near, plateau, growth)
                                  for name, near, plateau, growth in build_mesh.DEFAULT_PARAMS["FIELDS"]}
         self.region_spins = {}
-        for region, caption, default, tip in REGION_SPINS:
+        for n, (region, caption, default, tip) in enumerate(REGION_SPINS):
             # Three decimals: halving 0.25/0.75 gives 0.125/0.375, and a rounded value
             # changes the run key, so a finished mesh would not be found.
             spin = self.spin(tip, 0.05, 5.0, 0.05, 3, self._region_defaults[region][0])
             self.region_spins[region] = spin
-            form.addRow(caption, spin)
+            cell(1 + n//2, n % 2, REGION_CAPTIONS.get(region, caption), spin)
         self.crop = self.spin(
             "Mesh only this far below and above the lead (mm along z); 0 meshes the whole "
             "model. The cut faces are insulating for a bipolar or any balanced montage. "
             "Use it to refine the cord near one lead without meshing all of T6-T12.",
             0.0, 300.0, 5.0, 1, DEFAULT_CROP_MM)
         self.crop.setSpecialValueText("whole model")
-        form.addRow("Crop beyond lead", self.crop)
+        cell(1 + (len(REGION_SPINS) + 1)//2, 0, "Crop", self.crop)
+        size_box.setToolTip("Element size at each tissue, mm; the mesh grows away from them up to Largest.")
         outer.addWidget(size_box)
         import scs_document_cache
         saved = scs_document_cache.document_params(self.doc)
@@ -738,58 +776,46 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             w.valueChanged.connect(self.refresh_gates)
             w.valueChanged.connect(self.request_cost)
 
-        # Execution settings belong to the shared Job Manager.
-        self.execution_status = QtWidgets.QLabel()
-        outer.addWidget(self.execution_status)
-        manager = QtWidgets.QPushButton("Open Job Manager…")
+        # -- where it runs: one switch; settings live in the Job Manager -----
+        run_row = QtWidgets.QHBoxLayout()
+        run_row.addWidget(QtWidgets.QLabel("Run on"))
+        store = scs_job_service.service().store
+        self._profile_keys = sorted(store.profiles, key=lambda k: (store.profiles[k]["backend"] != "local", k))
+        self.run_on = scs_ui.Segmented([store.profiles[k]["name"].replace(" workstation", "")
+                                        for k in self._profile_keys])
+        self.run_on.changed.connect(self.on_run_on)
+        run_row.addWidget(self.run_on, 1)
+        manager = QtWidgets.QToolButton()
+        manager.setText("\u2699")
+        manager.setToolTip("Job Manager: execution settings (CPUs, memory, partition) and all jobs")
         manager.clicked.connect(lambda: __import__('scs_job_manager').show())
-        outer.addWidget(manager)
+        run_row.addWidget(manager)
+        outer.addLayout(run_row)
 
-        # -- Stage 1: mesh --------------------------------------------------
-        row1 = QtWidgets.QHBoxLayout()
-        self.btn_mesh = QtWidgets.QPushButton("Generate Mesh")
+        # -- one button, one progress view ----------------------------------
+        self.btn_mesh = QtWidgets.QPushButton("Generate mesh")
+        self.btn_mesh.setMinimumHeight(30)
+        self.btn_mesh.setStyleSheet(scs_ui.action_style(self.btn_mesh))
         self.btn_mesh.clicked.connect(self.toggle_mesh)
-        row1.addWidget(self.btn_mesh, 1)
-        outer.addLayout(row1)
+        outer.addWidget(self.btn_mesh)
 
-        self.mesh_progress = QtWidgets.QProgressBar()
-        self.mesh_progress.setRange(0, 100)
-        self.mesh_progress.setValue(0)
-        self.mesh_progress.setFormat("%p%")
-        outer.addWidget(self.mesh_progress)
+        self.stages = scs_stages.StageView("Mesh")
+        outer.addWidget(self.stages)
 
-        self.mesh_status = QtWidgets.QLabel("")
-        self.mesh_status.setAlignment(QtCore.Qt.AlignCenter)
-        self.mesh_status.setMinimumHeight(24)
-        outer.addWidget(self.mesh_status)
-        async_runner.set_status(self.mesh_status, "idle", "Not run yet")
-
-        mesh_report_form = QtWidgets.QFormLayout()
-        self.mesh_report_labels = {}
-        for key, caption in (("nodes", "Nodes"), ("tets_classified", "Tets"),
-                             ("tets_background_dropped", "Background (excluded from preview)"),
-                             ("dura_leak_pct", "Dura leak %"),
-                             ("elapsed_s", "Build time (s)")):
-            lbl = QtWidgets.QLabel("-")
-            self.mesh_report_labels[key] = lbl
-            mesh_report_form.addRow(caption, lbl)
-        outer.addLayout(mesh_report_form)
-
+        # -- log hidden until asked for (or until something fails) ----------
+        tools = QtWidgets.QHBoxLayout()
+        self.log_toggle = QtWidgets.QToolButton()
+        self.log_toggle.setText("Log")
+        self.log_toggle.setCheckable(True)
+        self.log_toggle.setToolTip("The worker's output for this mesh")
+        tools.addWidget(self.log_toggle)
+        tools.addStretch(1)
+        outer.addLayout(tools)
         self.mesh_detail = mono_textedit()
+        self.mesh_detail.setVisible(False)
+        self.log_toggle.toggled.connect(self.mesh_detail.setVisible)
         outer.addWidget(self.mesh_detail)
-
-        self.pick_preview = QtWidgets.QCheckBox("Pick mesh in viewport (slower for dense meshes)")
-        self.pick_preview.setToolTip(
-            "Off: avoid testing millions of triangles under the mouse. "
-            "Use the model tree to select tissues and toggle visibility. "
-            "This only affects interaction, not mesh resolution or the solver.")
-        self.pick_preview.toggled.connect(self.set_preview_picking)
-        outer.addWidget(self.pick_preview)
         self.set_preview_picking(False)
-
-        hint = QtWidgets.QLabel("Next: open SCS Potential Visualizer to solve and plot this mesh.")
-        hint.setWordWrap(True)
-        outer.addWidget(hint)
 
         outer.addStretch(1)
 
@@ -802,8 +828,47 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
     def set_mesh_state(self, state):
         # Worker callbacks own lifecycle transitions; rendering derives from state.
         self.mesh_state = state
-        self.btn_mesh.setText({"running": "Abort Mesh", "aborting": "Aborting…"}.get(
-            state, "Generate Mesh"))
+        self.btn_mesh.setStyleSheet(scs_ui.action_style(self.btn_mesh, stop=state in ("running", "aborting")))
+        self.btn_mesh.setText({"running": "Abort mesh", "aborting": "Aborting\u2026"}.get(
+            state, "Generate mesh"))
+
+    def on_run_on(self, i):
+        """The Run on switch: this document's execution profile."""
+        try:
+            scs_job_service.service().select_profile(self.doc, self._profile_keys[i])
+        except ValueError as exc:
+            self.status("failed", str(exc))
+        self.request_cost()
+        self.refresh_gates()
+
+    @staticmethod
+    def summary(report, cached=False):
+        """One line for a finished mesh; the rest goes in the tooltip."""
+        def big(n):
+            return ("%.0f M" % (n/1e6)) if n >= 1e8 else ("%.1f M" % (n/1e6)) if n >= 1e6 else ("%.0f k" % (n/1e3))
+        text = "%s tets \u00b7 %s nodes \u00b7 dura leak %.3f %% \u00b7 %s" % (
+            big(report["tets_classified"]), big(report["nodes"]), report["dura"]["leak_pct"],
+            scs_stages.duration(report["elapsed_s"]))
+        return text + (" \u00b7 saved mesh" if cached else "")
+
+    def show_report(self, report, cached=False):
+        self.stages.done(self.summary(report, cached))
+        self.stages.caption.setToolTip(
+            "Nodes %d\nTets %d\nBackground tets (outside every body, dropped) %d\nDura leak %.4f %%\n"
+            "Build time %.1f s%s"
+            % (report["nodes"], report["tets_classified"], report["tets_background_dropped"],
+               report["dura"]["leak_pct"], report["elapsed_s"], " (original build)" if cached else ""))
+
+    def status(self, level, text):
+        """The one status line: the stage view's caption."""
+        if level in ("failed", "aborted"):
+            self.stages.failed(text)
+        elif level == "done":
+            self.stages.done(text)
+        elif level == "running":
+            self.stages.set_caption(text)
+        else:
+            self.stages.idle(text)
 
     def toggle_mesh(self):
         if self.mesh_state == "aborting":
@@ -822,15 +887,16 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         report = live_lead.load_report(run, "mesh_report") if run else None
         if not report:
             return
-        for key, label in self.mesh_report_labels.items():
-            value = report.get("dura", {}).get("leak_pct") if key == "dura_leak_pct" else report.get(key)
-            label.setText(str(value) if value is not None else "-")
-        self.mesh_progress.setValue(100)
         self.set_mesh_state("completed")
-        async_runner.set_status(self.mesh_status, "done", "Saved mesh for " + self.doc.Label)
+        try:
+            self.show_report(report, cached=True)
+        except (KeyError, TypeError):
+            self.status("done", "Saved mesh for " + self.doc.Label)
 
     # -- widget helpers ------------------------------------------------
     def set_preview_picking(self, enabled):
+        # Off always: the viewport would otherwise test millions of preview
+        # triangles under the mouse on every move. The tree selects tissues.
         group = self.doc.getObject(PREVIEW_GROUP_NAME)
         if group is not None:
             for obj in group.Group:
@@ -848,7 +914,7 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         return w
 
     def _set_mesh_progress(self, pct):
-        self.mesh_progress.setValue(pct)
+        self.stages.progress(pct)
 
     # -- live lead / cache resolution -------------------------------------
     def mesh_params(self):
@@ -964,12 +1030,16 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         profile = None
         try:
             profile = scs_job_service.service().profile(self.doc)
-            where = (' on %s (%s)' % (profile['host'], profile['sbatch_options'])
-                     if profile['backend'] == 'slurm' else '')
-            self.execution_status.setText('Execution: ' + profile['name'] + where + ' — settings in Job Manager')
+            self.run_on.setToolTip(
+                ("%s: %s, sbatch %s" % (profile['name'], profile['host'], profile['sbatch_options']))
+                if profile['backend'] == 'slurm' else
+                ("%s: %d mesh threads" % (profile['name'], profile.get('mesh_threads', 0))))
         except ValueError as exc:
-            self.execution_status.setText(str(exc))
+            self.run_on.setToolTip(str(exc))
         key = scs_job_service.service().profile_key(self.doc)
+        if key in self._profile_keys:
+            self.run_on.set_index(self._profile_keys.index(key))
+        self.run_on.setEnabled(not busy)
         if key != self._profile_key:
             self._profile_key = key
             self.request_cost()
@@ -991,7 +1061,7 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         # missing) never blocks -- an absent prediction is not a bad one.
         # A finished mesh for this lead and these settings only needs loading,
         # so the memory estimate for BUILDING it must not block that.
-        cached = valid_lead and artifacts.preview_ready(run_dir)
+        cached = valid_lead and live_lead.mesh_ready(run_dir)
         too_big = self._cost_sev == "danger" and not cached
         other_busy = self.job_owner is not None and self.job_owner.other_job_running(self)
         self.btn_mesh.setEnabled(self.mesh_state != "aborting" and
@@ -1046,14 +1116,14 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         try:
             scs_job_service.service().profile(self.doc)
         except ValueError as exc:
-            async_runner.set_status(self.mesh_status, "failed", str(exc))
+            self.status("failed", str(exc))
             return
         self._remote_note = ""
         info, run_dir = self.resolve_run()
         if run_dir is None:
             self.refresh_gates()
             return
-        if artifacts.preview_ready(run_dir):
+        if live_lead.mesh_ready(run_dir):
             # Already built (here or fetched from the cluster): load it. This
             # comes before the memory refusal, which is about building.
             self._load_cached_mesh(run_dir)
@@ -1064,7 +1134,7 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             # disabled button is a UI state, not an invariant -- a stale
             # gate, a keyboard activation or a programmatic click must not
             # be able to start a 20-minute build that cannot finish.
-            async_runner.set_status(self.mesh_status, "failed",
+            self.status("failed",
                                     "refused: " + self._cost_text)
             self.refresh_gates()
             return
@@ -1085,11 +1155,9 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
             json.dump(params, fh, indent=2)
 
         self._mesh_run_dir = run_dir
-        for label in self.mesh_report_labels.values():
-            label.setText("-")
         self.mesh_detail.setPlainText("")
-        self.mesh_progress.setValue(0)
-        async_runner.set_status(self.mesh_status, "running", "starting...")
+        self.stages.caption.setToolTip("")
+        self.stages.start("starting\u2026")
         # start() FIRST -- refresh_gates() reads is_running() off the
         # runner, so calling it before the process actually exists would
         # leave Generate Mesh wrongly enabled for the whole run (caught live
@@ -1107,14 +1175,13 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         preview is reloaded from that run's own preview.vtp, which
         mesh_preview.py always writes alongside mesh.npz."""
         self.set_mesh_state("completed")
-        self.mesh_progress.setValue(100)
         report = live_lead.load_report(run_dir, "mesh_report")
         preview_vtp = os.path.join(run_dir, "preview.vtp")
         order = report.get("order") if report else None
         try:
             if os.path.isfile(preview_vtp) and order is not None:
                 load_preview_by_tissue(self.doc, preview_vtp, order)
-                self.set_preview_picking(self.pick_preview.isChecked())
+                self.set_preview_picking(False)
             elif os.path.isfile(preview_vtp):
                 print("SCS Mesh Generator: cached mesh_report.json for %s predates "
                       "per-run tissue order metadata -- skipping the coloured "
@@ -1122,25 +1189,23 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
                       % run_dir)
         except Exception as exc:
             self.set_mesh_state("failed")
-            async_runner.set_status(self.mesh_status, "failed",
+            self.status("failed",
                                     "cached mesh found but preview could not be "
                                     "loaded: %s" % exc)
             return
         if report:
-            self.mesh_report_labels["nodes"].setText(str(report["nodes"]))
-            self.mesh_report_labels["tets_classified"].setText(str(report["tets_classified"]))
-            self.mesh_report_labels["tets_background_dropped"].setText(
-                str(report["tets_background_dropped"]))
-            self.mesh_report_labels["dura_leak_pct"].setText("%.3f" % report["dura"]["leak_pct"])
-            self.mesh_report_labels["elapsed_s"].setText("%.1f (original build)" % report["elapsed_s"])
-        async_runner.set_status(self.mesh_status, "done",
-                                "reused cached mesh -- no rebuild needed")
+            self.show_report(report, cached=True)
+        else:
+            self.status("done", "Saved mesh loaded")
         self.refresh_gates()
 
     def on_mesh_tick(self, elapsed):
-        note = (" — " + self._remote_note) if self._remote_note else ""
-        async_runner.set_status(self.mesh_status, "running",
-                                "meshing... %d%% (%.0fs elapsed)%s" % (self.mesh_progress.value(), elapsed, note))
+        svc = scs_job_service.service()
+        ident = next((i for i, r in svc.runners.items() if r is self.mesh_runner), None)
+        if ident:
+            self.stages.attach(ident, svc.records[ident].get("created"))
+        self.stages.tick(self._remote_note)
+        self.stages.set_resources(scs_monitor.monitor().line(ident) if ident else "")
 
     def on_mesh_stage(self, message):
         if message.startswith("HPC: "):
@@ -1148,31 +1213,27 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
 
     def on_mesh_aborted(self, msg):
         self.set_mesh_state("aborted")
-        async_runner.set_status(self.mesh_status, "aborted", msg)
+        self.status("aborted", msg)
         self.refresh_gates()
 
     def on_mesh_failed(self, msg):
         self.set_mesh_state("failed")
-        async_runner.set_status(self.mesh_status, "failed", "mesh_preview.py failed")
+        self.status("failed", "Failed \u2014 see the log")
         self.mesh_detail.setPlainText(msg)
+        self.log_toggle.setChecked(True)
         self.refresh_gates()
 
     def on_mesh_finished(self, report):
         self.set_mesh_state("completed")
         import scs_document_cache
-        self.mesh_report_labels["nodes"].setText(str(report["nodes"]))
-        self.mesh_report_labels["tets_classified"].setText(str(report["tets_classified"]))
-        self.mesh_report_labels["tets_background_dropped"].setText(str(report["tets_background_dropped"]))
-        self.mesh_report_labels["dura_leak_pct"].setText("%.3f" % report["dura"]["leak_pct"])
-        self.mesh_report_labels["elapsed_s"].setText("%.1f" % report["elapsed_s"])
         self.mesh_detail.setPlainText(report.get("_stdout_tail", ""))
 
         try:
             load_preview_by_tissue(self.doc, report["preview_vtp"], report["order"])
-            self.set_preview_picking(self.pick_preview.isChecked())
+            self.set_preview_picking(False)
         except Exception as exc:
             self.set_mesh_state("failed")
-            async_runner.set_status(self.mesh_status, "failed",
+            self.status("failed",
                                     "generated but could not load/colour: %s" % exc)
             self.refresh_gates()
             return
@@ -1180,10 +1241,7 @@ class MeshGeneratorPanel(QtWidgets.QWidget):
         live_lead.save_report(self._mesh_run_dir, "mesh_report", report)
         scs_document_cache.bind_mesh(self.doc, self._mesh_run_dir,
                                      scs_document_cache.run_params(self._mesh_run_dir))
-        async_runner.set_status(self.mesh_status, "done",
-                                "%d nodes, %d tets, dura leak %.3f%%, %.1fs"
-                                % (report["nodes"], report["tets_classified"],
-                                   report["dura"]["leak_pct"], report["elapsed_s"]))
+        self.show_report(report)
         self.refresh_gates()
 
     def on_dock_closing(self):
@@ -1204,6 +1262,7 @@ class DocumentMeshPanels(QtWidgets.QStackedWidget):
     """
     def __init__(self):
         super(DocumentMeshPanels, self).__init__()
+        self.source = SOURCE
         self.panels = {}
         self.empty = QtWidgets.QLabel("Open a model to generate a mesh.")
         self.addWidget(self.empty)
@@ -1252,8 +1311,12 @@ def show_panel():
         mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
     else:
         old = dock.widget()
-        # Reopening a current panel must not abort jobs or discard edited settings.
-        if old is not None and hasattr(old, "sync_document"):
+        # Reopening a current panel must not abort jobs or discard edited
+        # settings -- unless this macro's code has changed since the panel was
+        # built and no mesh is running in it. Closing the dock only hides it,
+        # so without this new code never showed until FreeCAD restarted.
+        busy = any(p.mesh_runner.is_running() for p in getattr(old, "panels", {}).values())
+        if old is not None and hasattr(old, "sync_document") and (busy or getattr(old, "source", None) == SOURCE):
             old.sync_document()
             dock.show()
             dock.raise_()
@@ -1261,6 +1324,8 @@ def show_panel():
         if old is not None and hasattr(old, "on_dock_closing"):
             old.on_dock_closing()
     dock.setWidget(DocumentMeshPanels())
+    if old is not None:
+        old.deleteLater()
     dock.show()
     dock.raise_()
     return dock
