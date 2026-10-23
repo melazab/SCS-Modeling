@@ -145,8 +145,13 @@ class RemoteJobTests(unittest.TestCase):
         self.assertEqual(report['lead_dir'], str(self.run_dir / 'lead'))
         self.assertIn(remote, (self.fake / 'jobs').joinpath('101.submit').read_text())
         self.assertEqual(json.loads((self.remote_run() / 'params.json').read_text())['LEAD_DIR'], remote + '/lead')
-        # The artifact came back intact; the local params.json was not overwritten.
-        self.assertEqual((self.run_dir / 'mesh.npz').read_bytes(), (self.remote_run() / 'mesh.npz').read_bytes())
+        # mesh.npz stays on the cluster: its manifest comes back and remote.json
+        # records where it is; the local params.json was not overwritten.
+        self.assertFalse((self.run_dir / 'mesh.npz').exists())
+        self.assertEqual((self.run_dir / 'mesh.npz.manifest.json').read_bytes(),
+                         (self.remote_run() / 'mesh.npz.manifest.json').read_bytes())
+        kept = json.loads((self.run_dir / 'remote.json').read_text())
+        self.assertEqual((kept['host'], kept['dir'], kept['files']), ('fakehost', remote, {'mesh.npz': 4096}))
         self.assertEqual(json.loads((self.run_dir / 'params.json').read_text())['LEAD_DIR'], str(self.run_dir / 'lead'))
         self.assertIn(str(self.run_dir), (self.run_dir / 'mesh_report.json').read_text())
         self.assertEqual(seen[0], 10)

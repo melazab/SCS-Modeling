@@ -34,9 +34,16 @@ import config as C
 import scs_jobs as J
 
 POLL_MS = 10_000
-FETCH = ['mesh.npz', 'mesh.npz.manifest.json', 'preview.vtp', 'preview.vtp.manifest.json',
-         'solution.npz', 'solution.npz.manifest.json', 'solution_bg.npz',
-         'solution_bg.npz.manifest.json', 'mesh_report.json', 'solve_report.json']
+# The large artifacts stay on the cluster, only their manifests come back:
+# FreeCAD shows preview.vtp, plots fields from surface_basis*.npz, and a
+# cluster solve reads mesh.npz in place (live_lead.mesh_remote_only).
+# fem/hpc/fetch_run.sh brings them back when wanted.
+KEPT = ['mesh.npz', 'solution.npz', 'solution_bg.npz']
+FETCH = [name + '.manifest.json' for name in KEPT] + [
+    'preview.vtp', 'preview.vtp.manifest.json',
+    'surface_basis.npz', 'surface_basis.npz.manifest.json',
+    'surface_basis_bg.npz', 'surface_basis_bg.npz.manifest.json',
+    'mesh_report.json', 'solve_report.json']
 TERMINAL_SLURM = {'COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT', 'OUT_OF_MEMORY',
                   'NODE_FAIL', 'PREEMPTED', 'BOOT_FAIL', 'DEADLINE'}
 
@@ -283,6 +290,27 @@ class RemoteJob(QtCore.QObject):
     # -- results ---------------------------------------------------------
     def _fetch(self):
         self.stage_message.emit('HPC: fetching results')
+        run = self._remote(self.rel_run)
+        self._ssh('cd %s && stat -c "%%n %%s" %s 2>/dev/null; true' % (shlex.quote(run), ' '.join(KEPT)),
+                  self._kept, 'list the results kept on the cluster', transient=True)
+
+    def _kept(self, out):
+        """Record where the large artifacts stay (remote.json), for the panels'
+        sizes and for fetching one later; then bring back everything else."""
+        files = {}
+        for line in out.splitlines():
+            name, _, size = line.strip().rpartition(' ')
+            if name in KEPT and size.isdigit():
+                files[name] = int(size)
+        path = Path(self.local_run, 'remote.json')
+        try:
+            old = json.loads(path.read_text())
+        except (OSError, ValueError):
+            old = {}
+        if old.get('host') == self.host:
+            files = dict(old.get('files', {}), **files)
+        import artifacts
+        artifacts.atomic_json(str(path), dict(host=self.host, dir=self._remote(self.rel_run), files=files))
         filters = ['--include=' + name for name in FETCH] + ['--exclude=*']
         self._rsync(filters + ['%s:%s/' % (self.host, self._remote(self.rel_run)),
                                self.local_run + '/'], self._fetched, 'fetch results', transient=True)
@@ -325,7 +353,10 @@ class RemoteJob(QtCore.QObject):
 
     def _ssh_options(self):
         control = os.path.join(tempfile.gettempdir(), 'scs-ssh-%C')
+        # ServerAlive: a VPN that drops under the shared master connection is
+        # noticed in ~45 s, instead of a poll hanging until TCP gives up.
         return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=yes',
+                '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
                 '-o', 'ControlMaster=auto', '-o', 'ControlPath=' + control, '-o', 'ControlPersist=120']
 
     def _ssh(self, command, then, what, transient=False):

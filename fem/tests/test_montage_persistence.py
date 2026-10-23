@@ -27,8 +27,8 @@ class MontagePersistenceTests(unittest.TestCase):
 
     def test_recompute_notifies_even_when_summary_is_identical(self):
         fp = SimpleNamespace(SolutionNpz='/run/solution.npz', ClampVolts=0.,
-                             Contact1_mA=-1., Contact2_mA=1., PlotRevision=0, WaveformMode='Static',
-                             PropertiesList=['Contact1_mA','Contact2_mA','PlotRevision'],
+                             Contact1_mA=-1., Contact2_mA=1., PlotRevision=0, PlotQuantity='Potential', WaveformMode='Static',
+                             PropertiesList=['Contact1_mA','Contact2_mA','PlotRevision','PlotQuantity'],
                              setEditorMode=lambda *args: None)
         proxy = F.SCSMontageProxy.__new__(F.SCSMontageProxy)
         stats = dict(clamp_v=1., charge_sum_mA=0., tissues={
@@ -43,10 +43,10 @@ class MontagePersistenceTests(unittest.TestCase):
 
     def test_biphasic_snapshot_keeps_peak_currents_and_scale(self):
         fp = SimpleNamespace(SolutionNpz='/run/solution.npz', ClampVolts=0.,
-             Contact1_mA=-2.4, Contact2_mA=2.4, PlotRevision=0,
+             Contact1_mA=-2.4, Contact2_mA=2.4, PlotRevision=0, PlotQuantity='Potential',
              WaveformMode='FAST-style biphasic', FrequencyHz=90., PhaseWidthUs=220.,
              InterphaseGapUs=0., WaveformTimeMs=.3,
-             PropertiesList=['Contact1_mA','Contact2_mA','PlotRevision'],
+             PropertiesList=['Contact1_mA','Contact2_mA','PlotRevision','PlotQuantity'],
              setEditorMode=lambda *args: None)
         proxy=F.SCSMontageProxy.__new__(F.SCSMontageProxy)
         stats=dict(clamp_v=2.,charge_sum_mA=0.,tissues={

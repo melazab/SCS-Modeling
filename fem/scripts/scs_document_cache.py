@@ -167,7 +167,7 @@ def resolve_run(doc, arrays, params):
         try:
             if not same_params(run_params(run), params):
                 continue
-            if artifacts.preview_ready(run) and geometry_matches(arrays, run):
+            if live_lead.mesh_ready(run) and geometry_matches(arrays, run):
                 bind_mesh(doc, run, params)
                 return run
         except (OSError, ValueError, KeyError):

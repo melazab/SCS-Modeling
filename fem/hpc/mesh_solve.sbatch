@@ -3,7 +3,8 @@
 #SBATCH -A tlv
 #SBATCH -N 1
 #SBATCH -o %x-%j.log
-# Usage: sbatch -n <tasks> --mem=<size> --time=<limit> mesh_solve.sbatch <run_dir> [mesh|solve|both] [background|nobackground]
+# Usage: sbatch -n <tasks> --mem=<size> --time=<limit> mesh_solve.sbatch <run_dir> [mesh|solve|both|basis] [background|nobackground]
+# basis rebuilds only the surface basis from a solution already here (no solve).
 # <run_dir> holds params.json and lead/. The solve includes the background
 # tissue (solution_bg.npz) unless told nobackground (solution.npz). One MPI
 # task per core; meshing uses the same cores as threads. The solve budget is
@@ -26,5 +27,11 @@ if [[ $STAGE == solve || $STAGE == both ]]; then
     | tee "$RUN/solve_lead.log"
   # The same solve_report.json the Potential Visualizer writes after a local solve.
   sed -n 's/^SOLVE_JSON //p' "$RUN/solve_lead.log" > "$RUN/solve_report.json"
+fi
+if [[ $STAGE == solve || $STAGE == both || $STAGE == basis ]]; then
+  # The solution stays here (~12 GB at T6-T12 resolution); FreeCAD plots any
+  # montage from each contact's potential at the drawn surfaces.
+  echo "== surface basis $(date)"
+  "$SCS_PY" -u surface_basis.py "$RUN" $BG_FLAG
 fi
 echo "== DONE $(date)"

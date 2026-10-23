@@ -51,6 +51,7 @@ PIPE_NAMES = {
 }
 
 PIPE_NAMES.update({t: 'SCS_%s_PotentialField' % t for t in M.TISSUES if t not in PIPE_NAMES})
+QUANTITIES = ['Potential', 'Electric field']
 
 def group_lead_pipes(doc, contact_map):
     """Move existing field pipelines into persistent per-lead tree groups."""
@@ -194,18 +195,21 @@ class SCSMontageProxy:
             fp.addProperty('App::PropertyInteger', 'PlotRevision', 'Montage',
                            'Successful plot update counter')
         fp.setEditorMode('PlotRevision', 2)
+        if 'PlotQuantity' not in fp.PropertiesList:
+            fp.addProperty('App::PropertyEnumeration', 'PlotQuantity', 'Display',
+                           'Potential (V) or electric field magnitude (V/m) on the surfaces')
+            fp.PlotQuantity = QUANTITIES
+            fp.PlotQuantity = QUANTITIES[0]
 
     @staticmethod
     def validate_binding(fp):
-        import artifacts
         import live_lead
         path = fp.SolutionNpz
-        if not os.path.isfile(path):
-            raise RuntimeError('Saved FEM cache is missing: %s. Restore the cache directory to reuse this solve.' % path)
         run_dir = os.path.dirname(path)
         background = os.path.basename(path) == 'solution_bg.npz'
-        if not artifacts.valid(path, artifacts.solution_signature(run_dir, background)):
-            raise RuntimeError('Cached solution is missing or stale. Use Solve / Plot Field.')
+        # The solution here, or its surface basis when a cluster solve kept it there.
+        if not live_lead.field_ready(run_dir, background):
+            raise RuntimeError('Solved field is missing or stale: %s. Solve again.' % path)
         info = live_lead.find_live_lead(fp.Document)
         if info['status'] != live_lead.LiveLeadStatus.OK:
             raise RuntimeError('Cannot match the plotted field to the current lead.')
@@ -299,6 +303,7 @@ class SCSMontageProxy:
         ids = contact_indices(fp)
         currents_mA = [getattr(fp, contact_prop_name(i)) for i in ids]
         clamp_v = None if fp.ClampVolts == 0.0 else fp.ClampVolts
+        quantity = 'E' if getattr(fp, 'PlotQuantity', QUANTITIES[0]) == QUANTITIES[1] else 'V'
         sol_npz = fp.SolutionNpz
         out_dir = os.path.join(os.path.dirname(sol_npz), "scs_viz")
         try:
@@ -311,16 +316,17 @@ class SCSMontageProxy:
                                              fp.PhaseWidthUs, fp.InterphaseGapUs)
                 # Fix the scale to the first-phase field, including off frames.
                 if clamp_v is None:
-                    clamp_v = M.choose_clamp_v(currents_mA, sol_npz=sol_npz)
+                    clamp_v = M.choose_clamp_v(currents_mA, sol_npz=sol_npz, quantity=quantity)
             source, sink = W.totals(currents_mA)
-            stats = M.run_montage([factor*v for v in currents_mA], out_dir=out_dir, clamp_v=clamp_v, sol_npz=sol_npz)
+            stats = M.run_montage([factor*v for v in currents_mA], out_dir=out_dir, clamp_v=clamp_v,
+                                  sol_npz=sol_npz, quantity=quantity)
         except Exception as exc:
             fp.Status = 'Field update failed: %s' % exc
             return
         stats.update(phase=phase_name, factor=factor, source_mA=source, sink_mA=sink)
         self._last_stats = stats
         bits = [phase_name, "source=%.4g mA; sink=%.4g mA" % (source, sink),
-            "clamp=+/-%.3gV" % stats["clamp_v"],
+            "clamp=+/-%.3g%s" % (stats["clamp_v"], 'V/m' if quantity == 'E' else 'V'),
             "charge_sum=%.4gmA" % stats["charge_sum_mA"],
         ]
         for t in M.TISSUES:
@@ -430,9 +436,10 @@ class SCSMontageViewProxy:
             doc.recompute([pipe])
             pipe.ViewObject.DisplayMode = "Surface"
             doc.recompute([pipe])
-            clamp_field = "V_clamped_%gV" % stats["clamp_v"]
+            raw_name, clamp_fmt = M.QUANTITY_ARRAYS[stats.get("quantity", "V")]
+            clamp_field = clamp_fmt % stats["clamp_v"]
             enum = pipe.ViewObject.getEnumerationsOfProperty("Field")
-            target = clamp_field if clamp_field in enum else ("V_volts" if "V_volts" in enum else None)
+            target = clamp_field if clamp_field in enum else (raw_name if raw_name in enum else None)
             if target is None:
                 print("WARNING: no expected Field on %s -- got %s" % (pipe_name, enum))
                 continue

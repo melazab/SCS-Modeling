@@ -297,3 +297,73 @@ def load_report(run_dir, name):
         return None
     with open(path) as fh:
         return json.load(fh)
+
+
+# -- meshes that stay on the cluster ------------------------------------------
+# A cluster mesh run brings back only preview.vtp, mesh_report.json and
+# mesh.npz's manifest: preview.vtp is everything FreeCAD shows, and mesh.npz
+# (4.4 GB for the 415 M-tet dorsal mesh, ~40 min over the VPN) is read only by
+# a solve, which then runs on that cluster. These stand in for
+# artifacts.preview_ready()/solution_signature() without touching
+# artifacts.py, which is part of every mesh's signature.
+
+def mesh_remote_only(run_dir):
+    """True when this run's mesh.npz is on the cluster that built it and its
+    preview, report and the mesh's manifest are here and current."""
+    import artifacts
+    mesh = os.path.join(run_dir, 'mesh.npz')
+    try:
+        with open(os.path.join(run_dir, 'mesh_report.json')) as f:
+            report = json.load(f)
+        with open(mesh + '.manifest.json') as f:
+            manifest = json.load(f)
+        sig = report['signature']
+        return (not os.path.isfile(mesh)
+                and report['model_signature'] == artifacts.model_signature()
+                and manifest['signature'] == sig
+                and artifacts.valid(os.path.join(run_dir, 'preview.vtp'), sig))
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def mesh_ready(run_dir):
+    """A current mesh for run_dir, here or kept on the cluster."""
+    import artifacts
+    return artifacts.preview_ready(run_dir) or mesh_remote_only(run_dir)
+
+
+def solution_signature(run_dir, background=False):
+    """artifacts.solution_signature(), also when mesh.npz is on the cluster:
+    its manifest's sha256 is the same file_hash() of the same file."""
+    import artifacts
+    mesh = os.path.join(run_dir, 'mesh.npz')
+    if os.path.isfile(mesh):
+        return artifacts.solution_signature(run_dir, background)
+    with open(mesh + '.manifest.json') as f:
+        sha = json.load(f)['sha256']
+    return artifacts.digest(dict(model=artifacts.model_signature('solve'), mesh=sha,
+                                 background=bool(background)))
+
+
+def field_ready(run_dir, background=False):
+    """A current solved field for run_dir: the solution here, or, when a cluster
+    solve kept it there, its surface basis (all the Potential Visualizer reads)."""
+    import artifacts
+    import surface_basis
+    sol = os.path.join(run_dir, 'solution_bg.npz' if background else 'solution.npz')
+    try:
+        if os.path.isfile(sol):
+            return artifacts.valid(sol, solution_signature(run_dir, background))
+        return surface_basis.valid(sol)
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def kept_on_cluster(run_dir):
+    """{host, dir, files: {name: bytes}} for the large artifacts a cluster run
+    left there (scs_remote writes remote.json when it fetches), or {}."""
+    try:
+        with open(os.path.join(run_dir, 'remote.json')) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}

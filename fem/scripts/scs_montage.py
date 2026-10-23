@@ -229,6 +229,30 @@ def montage_at_points(currents_mA, pts, sol_npz=None):
     return (currents_A[:, None] * phi_at_pts).sum(axis=0)
 
 
+_BASIS = {}  # {(path, mtime): NpzFile} -- one entry
+
+
+def surface_basis(sol_npz, even_if_solution_here=False):
+    """surface_basis.py's per-contact surface potentials (and E) for sol_npz.
+    By default only when the solution itself is not on this machine (a
+    cluster solve keeps its ~12 GB solution.npz there); the electric field
+    always comes from here. None when there is no basis. Raises if a basis
+    exists but no longer matches its solution or its code."""
+    if not sol_npz or (os.path.isfile(sol_npz) and not even_if_solution_here):
+        return None
+    import surface_basis as B
+    path = B.basis_path(sol_npz)
+    if not os.path.isfile(path):
+        return None
+    key = (path, os.path.getmtime(path))
+    if key not in _BASIS:
+        if not B.valid(sol_npz):
+            raise RuntimeError('%s does not match its solution or its manifest' % path)
+        _BASIS.clear()
+        _BASIS[key] = np.load(path, allow_pickle=False)
+    return _BASIS[key]
+
+
 def sample_tissue(tissue, currents_mA, sol_npz=None, surface_path=None):
     """Return (verts mm, tris, V volts) for one of config.TISSUE_STL's keys,
     sampled at the tissue's OWN STL vertices -- the real anatomy, not the
@@ -249,6 +273,13 @@ def sample_tissue(tissue, currents_mA, sol_npz=None, surface_path=None):
     not extrapolated). Reported below, not hidden."""
     path = surface_path or C.TISSUE_BODIES[tissue]
     verts, tris = read_surface(path)
+    basis = surface_basis(sol_npz)
+    if basis is not None:
+        import surface_basis as B
+        if str(basis['verts_' + tissue]) != B.verts_hash(verts):
+            raise RuntimeError("'%s' changed since its field was sampled" % tissue)
+        phi = basis['phi_' + tissue]
+        return verts, tris, currents_mA_to_A(currents_mA, phi.shape[0]) @ phi
     V = montage_at_points(currents_mA, verts, sol_npz=sol_npz)
     nan_mask = np.isnan(V)
     n_nan = int(nan_mask.sum())
@@ -273,13 +304,48 @@ def sample_tissue(tissue, currents_mA, sol_npz=None, surface_path=None):
     return verts, tris, V
 
 
-def choose_clamp_v(currents_mA, sol_npz=None):
+def has_E(sol_npz):
+    """The electric field can be plotted for sol_npz (its surface basis has it)."""
+    try:
+        basis = surface_basis(sol_npz, even_if_solution_here=True)
+    except RuntimeError:
+        return False
+    return basis is not None and ('E_' + str(basis['names'][0])) in basis.files
+
+
+def sample_tissue_E(tissue, currents_mA, sol_npz=None, surface_path=None):
+    """(verts mm, tris, |E| V/m) on one surface for these currents, from the
+    surface basis: each contact's E vector, summed with its current, then the
+    magnitude (E is a vector; the magnitudes of the parts do not add)."""
+    path = surface_path or C.TISSUE_BODIES[tissue]
+    verts, tris = read_surface(path)
+    basis = surface_basis(sol_npz, even_if_solution_here=True)
+    if basis is None or ('E_' + tissue) not in basis.files:
+        raise RuntimeError("no electric field for '%s': its surface basis predates it" % tissue)
+    import surface_basis as B
+    if str(basis['verts_' + tissue]) != B.verts_hash(verts):
+        raise RuntimeError("'%s' changed since its field was sampled" % tissue)
+    E = basis['E_' + tissue]                                    # (contacts, vertices, 3)
+    currents_A = currents_mA_to_A(currents_mA, E.shape[0])
+    return verts, tris, np.linalg.norm(np.tensordot(currents_A, E, axes=1), axis=1)
+
+
+def sample(quantity, tissue, currents_mA, sol_npz=None, surface_path=None):
+    """'V' (potential, V) or 'E' (field magnitude, V/m) on one surface."""
+    fn = sample_tissue_E if quantity == 'E' else sample_tissue
+    return fn(tissue, currents_mA, sol_npz=sol_npz, surface_path=surface_path)
+
+
+QUANTITY_ARRAYS = {'V': ('V_volts', 'V_clamped_%gV'), 'E': ('E_V_per_m', 'E_clamped_%g_V_per_m')}
+
+
+def choose_clamp_v(currents_mA, sol_npz=None, quantity='V'):
     """Pick a bulk-tissue-legible colour-legend clamp: the 95th percentile of
     |V| pooled over the three target tissues' own vertices, for THIS
     montage, rounded up to a tidy number a clinician can read at a glance."""
     pooled = []
     for t in CORE_TISSUES:
-        _v, _t, V = sample_tissue(t, currents_mA, sol_npz=sol_npz)
+        _v, _t, V = sample(quantity, t, currents_mA, sol_npz=sol_npz)
         finite = V[np.isfinite(V)]
         if finite.size:
             pooled.append(np.abs(finite))
@@ -292,7 +358,7 @@ def choose_clamp_v(currents_mA, sol_npz=None):
     return float(np.ceil(p95 / 500.0) * 500.0)
 
 
-def write_vtp(path, verts, tris, V, clamp_v):
+def write_vtp(path, verts, tris, V, clamp_v, quantity='V'):
     """Write a vtkPolyData (.vtp) surface -- same triangulation as the source
     STL -- carrying both 'V_volts' (true) and 'V_clamped_<N>V' (saturated to
     +/-clamp_v) as point-data arrays. Loadable directly by FreeCAD's
@@ -319,10 +385,11 @@ def write_vtp(path, verts, tris, V, clamp_v):
     poly.SetPolys(polys)
 
     v_raw = vnp.numpy_to_vtk(np.ascontiguousarray(V, dtype=np.float64), deep=True)
-    v_raw.SetName("V_volts")
+    raw_name, clamp_fmt = QUANTITY_ARRAYS[quantity]
+    v_raw.SetName(raw_name)
     poly.GetPointData().AddArray(v_raw)
 
-    clamp_name = "V_clamped_%gV" % clamp_v
+    clamp_name = clamp_fmt % clamp_v
     v_clamp = np.clip(V, -clamp_v, clamp_v)
     v_clamp_arr = vnp.numpy_to_vtk(np.ascontiguousarray(v_clamp, dtype=np.float64), deep=True)
     v_clamp_arr.SetName(clamp_name)
@@ -356,7 +423,7 @@ def surface_paths(sol_npz=None):
     return paths
 
 
-def run_montage(currents_mA, out_dir=None, clamp_v=None, sol_npz=None):
+def run_montage(currents_mA, out_dir=None, clamp_v=None, sol_npz=None, quantity='V'):
     """Write all anatomical and lead surfaces for the given per-contact currents
     (mA, + = source/anode, - = sink/cathode). Returns a stats dict for the
     caller (FreeCAD glue or the CLI below) to print/warn on."""
@@ -364,16 +431,17 @@ def run_montage(currents_mA, out_dir=None, clamp_v=None, sol_npz=None):
     os.makedirs(out_dir, exist_ok=True)
     currents_mA = np.asarray(currents_mA, dtype=np.float64)
     if clamp_v is None:
-        clamp_v = choose_clamp_v(currents_mA, sol_npz=sol_npz)
+        clamp_v = choose_clamp_v(currents_mA, sol_npz=sol_npz, quantity=quantity)
     stats = {
+        "quantity": quantity,
         "clamp_v": float(clamp_v),
         "charge_sum_mA": float(currents_mA.sum()),
         "tissues": {},
     }
     for t, surface_path in surface_paths(sol_npz).items():
-        verts, tris, V = sample_tissue(t, currents_mA, sol_npz=sol_npz, surface_path=surface_path)
+        verts, tris, V = sample(quantity, t, currents_mA, sol_npz=sol_npz, surface_path=surface_path)
         path = os.path.join(out_dir, "%s.vtp" % t)
-        write_vtp(path, verts, tris, V, clamp_v)
+        write_vtp(path, verts, tris, V, clamp_v, quantity)
         finite = V[np.isfinite(V)]
         stats["tissues"][t] = dict(
             path=path,
@@ -402,6 +470,9 @@ def self_check(sol_npz=None, atol=1e-3):
     returns ok=True with an explanatory message instead of a false FAIL,
     since a live N<5-contact lead is exactly the case this pipeline was
     just generalized to support, not an error."""
+    basis = surface_basis(sol_npz)
+    if basis is not None:                       # run beside the solution, on the cluster
+        return bool(basis['self_check_ok']), str(basis['self_check_msg'])
     f, d, _t = _load_basis(sol_npz)
     n_contacts = f.values.shape[0]
     if n_contacts < max(C.SOURCE_CONTACT, C.SINK_CONTACT):
