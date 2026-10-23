@@ -3,7 +3,9 @@
 Mesh settings come from the open mesh dock, or its last generated settings.
 The visualizer requires a verified mesh for the live lead. It solves per-contact
 basis fields once per model/background configuration; montage changes only
-combine those fields. It does not generate meshes or save the CAD document.
+combine those fields. A cluster solve keeps its solution there and plots from
+each contact's potential at the drawn surfaces (surface_basis.py). It does not
+generate meshes or save the CAD document.
 """
 import json
 import os
@@ -41,7 +43,11 @@ import scs_montage_feature as F
 import scs_document_cache
 import scs_waveform as W
 import scs_fast_viewer
+import scs_stages
+import scs_monitor          # one sampler per session; never reloaded (it owns a poll timer)
 from solve_cpu_limit import physical_core_limit
+sys.path.insert(0, os.path.join(REPO_ROOT, "src", "freecad"))
+import scs_ui
 
 # Reloaded on every run -- same reason src/freecad/lead_designer.FCMacro's
 # own load_builder() reloads build_lead_config, and the same reason
@@ -50,7 +56,7 @@ from solve_cpu_limit import physical_core_limit
 # scs_montage_feature.py/live_lead.py and re-running this macro would
 # otherwise keep running the OLD code with no error.
 import importlib
-for _m in (C, artifacts, M, F, live_lead, build_mesh, async_runner):
+for _m in (C, artifacts, M, F, live_lead, build_mesh, async_runner, scs_stages, scs_ui):
     try:
         importlib.reload(_m)
     except Exception:
@@ -270,8 +276,9 @@ ROLE_STYLES = {
 
 
 class PotentialVisualizerPanel(QtWidgets.QWidget):
-    """Live-lead status, one current control per discovered contact,
-    Solve / Plot Field for the matching mesh, and a result readout."""
+    """Live-lead status, one current per contact, one Solve / Plot button for
+    the matching mesh, its stages and a short readout -- laid out like SCS Mesh
+    Generator."""
 
     def __init__(self, doc):
         super(PotentialVisualizerPanel, self).__init__()
@@ -284,23 +291,29 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
             if run_dir:
                 try:
                     with open(os.path.join(run_dir, 'solve_report.json')) as fh:
-                        report = json.load(fh)
-                    candidate = os.path.join(run_dir, 'solution_bg.npz' if report['background_included'] else 'solution.npz')
-                    if artifacts.valid(candidate, artifacts.solution_signature(run_dir, report['background_included'])):
-                        self.montage_obj.SolutionNpz = candidate
+                        background = json.load(fh)['background_included']
+                    if live_lead.field_ready(run_dir, background):
+                        self.montage_obj.SolutionNpz = os.path.join(
+                            run_dir, 'solution_bg.npz' if background else 'solution.npz')
                 except (OSError, ValueError, KeyError):
                     pass
         W.ensure_properties(self.montage_obj)
+        # Field surfaces are never picked under the mouse: dense surfaces make
+        # every mouse move slow. The tree selects them.
+        scs_field_display.set_enabled(doc, False)
         self._current_sol_npz = self.montage_obj.SolutionNpz or None
         self._live_lead_info = dict(status=live_lead.LiveLeadStatus.NONE, reason="")
         self._pending_run_dir = None
         self._pending_live_dir = None
+        self._aborting = False
+        self._gate = None
+        self._remote_note = ""
 
         self.solve_runner = async_runner.AsyncProcessRunner(
             self, FEM_VENV_PY, SOLVE_LEAD_SCRIPT, "SOLVE_JSON ")
         self.solve_runner.progress.connect(self.on_plot_solve_progress)
         self.solve_runner.stage_message.connect(self.on_solve_stage)
-        self._remote_note = ""
+        self.solve_runner.tick.connect(self.on_solve_tick)
         self.solve_runner.finished_ok.connect(self.on_plot_solve_finished)
         self.solve_runner.failed.connect(self.on_plot_failed)
         self.solve_runner.aborted.connect(self.on_plot_aborted)
@@ -316,30 +329,53 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
-        # -- live lead status (replaces the old combo box + Refresh) -------
         self.lead_status = QtWidgets.QLabel("")
         self.lead_status.setAlignment(QtCore.Qt.AlignCenter)
         self.lead_status.setMinimumHeight(24)
         self.lead_status.setWordWrap(True)
         self.lead_status.setToolTip(
-            "All leads currently in this document's tree (placed by Lead "
-            "Designer), found by object name -- no export, no picker. "
-            "Rechecked automatically every %.1fs." % (LIVE_LEAD_POLL_MS / 1000.0))
+            "Leads in this document's tree (placed by Lead Designer), rechecked every %.1f s."
+            % (LIVE_LEAD_POLL_MS / 1000.0))
         outer.addWidget(self.lead_status)
 
-        # -- montage controls, disabled as a whole while gated ------------
-        self.montage_group = QtWidgets.QGroupBox("Montage")
-        mv = QtWidgets.QVBoxLayout(self.montage_group)
+        # -- the solve: one field per contact (1 A each), so it needs no currents.
+        # Where it runs, and whether the volume outside the anatomy conducts.
+        run_row = QtWidgets.QHBoxLayout()
+        run_row.addWidget(QtWidgets.QLabel("Run on"))
+        store = scs_job_service.service().store
+        self._profile_keys = sorted(store.profiles, key=lambda k: (store.profiles[k]["backend"] != "local", k))
+        self.run_on = scs_ui.Segmented([store.profiles[k]["name"].replace(" workstation", "")
+                                        for k in self._profile_keys])
+        self.run_on.changed.connect(self.on_run_on)
+        run_row.addWidget(self.run_on, 1)
+        manager = QtWidgets.QToolButton()
+        manager.setText("⚙")
+        manager.setToolTip("Job Manager: execution settings (CPUs, memory, partition) and all jobs")
+        manager.clicked.connect(lambda: __import__('scs_job_manager').show())
+        run_row.addWidget(manager)
+        outer.addLayout(run_row)
 
-        # 2026-09-14 CORRECTION: this used to build a FIXED M.N_CONTACTS
-        # (== 8) rows here in __init__, once, no matter what lead was
-        # actually in the document -- a 4-contact live lead got 8 rows, 4
-        # of them meaningless. self.contact_form is its own QFormLayout,
-        # rebuilt by _rebuild_contact_rows() (below) to hold EXACTLY as
-        # many rows as the CURRENT live lead has contacts, whenever that
-        # count changes (including the very first time a lead is found --
-        # it starts with 0 rows here, since no lead is known yet at
-        # __init__ time).
+        self.background_check = QtWidgets.QCheckBox("Include background tissue")
+        self.background_check.setChecked(self.montage_obj.IncludeBackground)
+        self.background_check.setToolTip(
+            "Solve the mesh volume outside the classified anatomy as conducting background "
+            "(bone conductivity). A separate solve, cached separately.")
+        self.background_check.toggled.connect(
+            lambda checked: setattr(self.montage_obj, 'IncludeBackground', checked))
+        self.background_check.toggled.connect(self.refresh_gates)
+        outer.addWidget(self.background_check)
+        self.btn_solve = QtWidgets.QPushButton("Solve")
+        self.btn_solve.setMinimumHeight(30)
+        self.btn_solve.setStyleSheet(scs_ui.action_style(self.btn_solve))
+        self.btn_solve.clicked.connect(self.on_solve_button)
+        outer.addWidget(self.btn_solve)
+        self.stages = scs_stages.StageView("Solve")
+        outer.addWidget(self.stages)
+
+        # -- currents: any montage of the solved fields, plotted in seconds -----
+        self.montage_group = QtWidgets.QGroupBox("Currents")
+        mv = QtWidgets.QVBoxLayout(self.montage_group)
+        # Rebuilt by _rebuild_contact_rows() to exactly the live lead's contacts.
         self.contact_form = QtWidgets.QFormLayout()
         self.contact_form.setLabelAlignment(QtCore.Qt.AlignRight)
         self.contact_spins = []
@@ -349,9 +385,10 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
         contact_widget.setLayout(self.contact_form)
         contact_scroll = QtWidgets.QScrollArea()
         contact_scroll.setWidgetResizable(True)
+        contact_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         contact_scroll.setWidget(contact_widget)
-        contact_scroll.setMinimumHeight(180)
-        contact_scroll.setMaximumHeight(300)
+        contact_scroll.setMinimumHeight(160)
+        contact_scroll.setMaximumHeight(280)
         mv.addWidget(contact_scroll)
         current_row = QtWidgets.QHBoxLayout()
         self.total_current = QtWidgets.QDoubleSpinBox()
@@ -359,139 +396,123 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
         self.total_current.setDecimals(3)
         self.total_current.setValue(sum(max(0., getattr(self.montage_obj, F.contact_prop_name(i))) for i in F.contact_indices(self.montage_obj)) or 2.4)
         self.total_current.setSuffix(' mA total')
-        self.total_current.setToolTip('Total positive current across ALL leads; equal negative return. Same value in both models for a matched-current comparison.')
-        current_row.addWidget(self.total_current)
+        self.total_current.setToolTip('Total source current across all leads, with an equal return.')
+        current_row.addWidget(self.total_current, 1)
         scale_button = QtWidgets.QPushButton('Scale to total')
+        scale_button.setToolTip('Scale the contacts above to this total, keeping their ratios.')
         scale_button.clicked.connect(self.scale_to_total)
         current_row.addWidget(scale_button)
         mv.addLayout(current_row)
-        self.total_label = QtWidgets.QLabel('Select source and sink contacts; no contacts are preassigned.')
-        self.total_label.setWordWrap(True)
+        self.total_label = QtWidgets.QLabel('')
+        self.total_label.setStyleSheet('color: gray;')
         mv.addWidget(self.total_label)
 
+        show_row = QtWidgets.QHBoxLayout()
+        show_row.addWidget(QtWidgets.QLabel("Show"))
+        self.show_quantity = scs_ui.Segmented(F.QUANTITIES, [
+            "Potential, V", "Electric field magnitude |E|, V/m, inside each tissue (needs a field "
+            "solved since 2026-10-23, or its surface basis rebuilt)"])
+        self.show_quantity.set_index(F.QUANTITIES.index(self.montage_obj.PlotQuantity))
+        self.show_quantity.changed.connect(self.on_quantity)
+        show_row.addWidget(self.show_quantity, 1)
+        mv.addLayout(show_row)
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignRight)
         self.clamp_spin = QtWidgets.QDoubleSpinBox()
         self.clamp_spin.setRange(0.0, 100000.0)
         self.clamp_spin.setSingleStep(10.0)
         self.clamp_spin.setDecimals(3)
-        self.clamp_spin.setSuffix(" V")
+        self.clamp_spin.setSuffix(" " + self.unit())
+        self.clamp_spin.setSpecialValueText("auto")
         self.clamp_spin.setValue(self.montage_obj.ClampVolts)
         self.clamp_spin.setToolTip(
-            "Colour-legend saturation, +/-volts (see the V_clamped_* array "
-            "note in scs_montage.py). 0 = auto-choose from this montage's "
-            "own data (95th percentile |V|).")
-        form.addRow("Colour clamp (0=auto)", self.clamp_spin)
+            "Colour scale saturates at +/- this voltage. auto: the 95th percentile of |V| "
+            "over epidural space, dura, CSF and the cord, for this montage.")
+        form.addRow("Colour range ±", self.clamp_spin)
         mv.addLayout(form)
+        self.btn_plot = QtWidgets.QPushButton("Plot field")
+        self.btn_plot.setMinimumHeight(30)
+        self.btn_plot.setStyleSheet(scs_ui.action_style(self.btn_plot))
+        self.btn_plot.setToolTip("Plot these currents on the solved field")
+        self.btn_plot.clicked.connect(self.on_plot_button)
+        mv.addWidget(self.btn_plot)
+        outer.addWidget(self.montage_group)
 
-        waveform = QtWidgets.QGroupBox('Waveform and phase snapshots')
-        wf = QtWidgets.QFormLayout(waveform)
+        # -- what the plotted montage reads, once plotted -------------------
+        self.readout = QtWidgets.QWidget()
+        rg = QtWidgets.QGridLayout(self.readout)
+        rg.setContentsMargins(0, 0, 0, 0)
+        rg.setHorizontalSpacing(10)
+        rg.setVerticalSpacing(1)
+        self.plot_line = QtWidgets.QLabel("")
+        rg.addWidget(self.plot_line, 0, 0, 1, 4)
+        self.tissue_labels = {}
+        for n, t in enumerate(M.TISSUES):
+            name = QtWidgets.QLabel(M.TISSUE_LABELS.get(t, t))
+            name.setStyleSheet("color: gray;")
+            value = QtWidgets.QLabel("-")
+            rg.addWidget(name, 1 + n//2, 2*(n % 2))
+            rg.addWidget(value, 1 + n//2, 2*(n % 2) + 1)
+            self.tissue_labels[t] = value
+        self.readout.setToolTip("Voltage range on each tissue's surface for the plotted montage.")
+        self.readout.setVisible(False)
+        outer.addWidget(self.readout)
+
+        # -- log and waveform, hidden until asked for -----------------------
+        tools = QtWidgets.QHBoxLayout()
+        self.log_toggle = QtWidgets.QToolButton()
+        self.log_toggle.setText("Log")
+        self.log_toggle.setCheckable(True)
+        self.log_toggle.setToolTip("The solver's output")
+        tools.addWidget(self.log_toggle)
+        self.wave_toggle = QtWidgets.QToolButton()
+        self.wave_toggle.setText("Waveform")
+        self.wave_toggle.setCheckable(True)
+        self.wave_toggle.setToolTip("Biphasic waveform snapshots and the shareable animation export")
+        tools.addWidget(self.wave_toggle)
+        tools.addStretch(1)
+        outer.addLayout(tools)
+
+        self.waveform = QtWidgets.QWidget()
+        wf = QtWidgets.QFormLayout(self.waveform)
+        wf.setContentsMargins(0, 0, 0, 0)
+        wf.setLabelAlignment(QtCore.Qt.AlignRight)
         self.wave_mode = QtWidgets.QComboBox()
         self.wave_mode.addItems(['Static', 'FAST-style biphasic'])
         self.wave_mode.setCurrentText(str(self.montage_obj.WaveformMode))
         wf.addRow('Mode', self.wave_mode)
         self.wave_spins = {}
-        for prop, label, low, high, suffix in (
-            ('FrequencyHz', 'Frequency', .01, 10000., ' Hz'),
-            ('PhaseWidthUs', 'Width per phase', 1., 100000., ' µs'),
-            ('InterphaseGapUs', 'Gap (assumption)', 0., 100000., ' µs')):
+        for prop, label, low, high, suffix, tip in (
+            ('FrequencyHz', 'Frequency', .01, 10000., ' Hz', ''),
+            ('PhaseWidthUs', 'Width per phase', 1., 100000., ' µs', '220 µs is the usual comparison'),
+            ('InterphaseGapUs', 'Gap', 0., 100000., ' µs', 'Assumed; 0 unless known')):
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(low, high)
             spin.setDecimals(2)
             spin.setSuffix(suffix)
             spin.setValue(getattr(self.montage_obj, prop))
+            spin.setToolTip(tip)
             self.wave_spins[prop] = spin
             wf.addRow(label, spin)
         self.phase_choice = QtWidgets.QComboBox()
         self.phase_choice.addItems(['First phase', 'Reverse phase', 'Interpulse interval'])
-        wf.addRow('Snapshot phase', self.phase_choice)
         self.phase_choice.currentIndexChanged.connect(lambda *_: self.apply_montage())
-        apply_phase = QtWidgets.QPushButton('Update phase / currents (cached field)')
-        apply_phase.clicked.connect(self.apply_montage)
-        wf.addRow(apply_phase)
-        viewer = QtWidgets.QPushButton('Export animation + PNG snapshot viewer…')
+        wf.addRow('Snapshot', self.phase_choice)
+        viewer = QtWidgets.QPushButton('Export animation…')
+        viewer.setToolTip('A self-contained HTML viewer: playback and annotated PNGs of this montage')
         viewer.clicked.connect(self.export_fast_viewer)
         wf.addRow(viewer)
-        note = QtWidgets.QLabel('90 Hz, symmetric active recharge. 220 µs is the common comparison default. Gap=0 is assumed. Field-only visualization; not a perception or efficacy prediction.')
-        note.setWordWrap(True)
-        wf.addRow(note)
-        mv.addWidget(waveform)
+        self.waveform.setVisible(False)
+        self.wave_toggle.toggled.connect(self.waveform.setVisible)
+        outer.addWidget(self.waveform)
 
-        self.background_check = QtWidgets.QCheckBox("Include background tissue")
-        self.background_check.setChecked(self.montage_obj.IncludeBackground)
-        self.background_check.setToolTip(
-            "Include mesh elements outside the classified anatomy/lead as a conducting "
-            "background at bone conductivity. Off removes those elements from the solve. "
-            "This changes the solved field and memory use, not tissue visibility; "
-            "each setting has a separate solution cache.")
-        self.background_check.toggled.connect(
-            lambda checked: setattr(self.montage_obj, 'IncludeBackground', checked))
-        self.background_check.toggled.connect(self.refresh_gates)
-        mv.addWidget(self.background_check)
-        self.local_group = QtWidgets.QGroupBox('Execution')
-        local_form = QtWidgets.QVBoxLayout(self.local_group)
-        self.execution_status = QtWidgets.QLabel()
-        local_form.addWidget(self.execution_status)
-        manager = QtWidgets.QPushButton('Open Job Manager…')
-        manager.clicked.connect(lambda: __import__('scs_job_manager').show())
-        local_form.addWidget(manager)
-        mv.addWidget(self.local_group)
         self.solve_detail = QtWidgets.QPlainTextEdit()
         self.solve_detail.setReadOnly(True)
         self.solve_detail.document().setMaximumBlockCount(200)
-        self.solve_runner.stage_message.connect(self.solve_detail.appendPlainText)
-        self.solve_detail.setMaximumHeight(100)
-        mv.addWidget(self.solve_detail)
-
-        row = QtWidgets.QHBoxLayout()
-        self.btn_plot = QtWidgets.QPushButton("Solve / Plot Field")
-        self.btn_plot.setToolTip(
-            "Solve the completed mesh from SCS Mesh Generator, then plot the "
-            "contact currents. Changing only currents reuses the basis fields.")
-        self.btn_plot.clicked.connect(self.start_plot)
-        row.addWidget(self.btn_plot, 1)
-        self.btn_plot_abort = QtWidgets.QPushButton("Abort")
-        self.btn_plot_abort.setEnabled(False)
-        self.btn_plot_abort.setToolTip(
-            "Kills the solve subprocess currently "
-            "running for this Plot Field press, and verifies it actually "
-            "exited.")
-        self.btn_plot_abort.clicked.connect(self.abort_plot)
-        row.addWidget(self.btn_plot_abort, 1)
-        mv.addLayout(row)
-
-        self.plot_progress = QtWidgets.QProgressBar()
-        self.plot_progress.setRange(0, 100)
-        self.plot_progress.setValue(0)
-        self.plot_progress.setFormat("%p%")
-        mv.addWidget(self.plot_progress)
-
-        self.status = QtWidgets.QLabel("")
-        self.status.setAlignment(QtCore.Qt.AlignCenter)
-        self.status.setMinimumHeight(24)
-        self.status.setWordWrap(True)
-        self.status.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
-        mv.addWidget(self.status)
-        async_runner.set_status(self.status, "idle", "Not plotted yet this session")
-
-        readout_form = QtWidgets.QFormLayout()
-        self.clamp_label = QtWidgets.QLabel("-")
-        readout_form.addRow("Clamp shown", self.clamp_label)
-        self.charge_label = QtWidgets.QLabel("-")
-        readout_form.addRow("Charge balance", self.charge_label)
-        self.tissue_labels = {}
-        for t in M.TISSUES:
-            lbl = QtWidgets.QLabel("-")
-            self.tissue_labels[t] = lbl
-            readout_form.addRow("%s V range" % t, lbl)
-        mv.addLayout(readout_form)
-        self.pick_field = QtWidgets.QCheckBox('Pick field in viewport (slower for dense models)')
-        self.pick_field.setChecked(bool(self.montage_obj.PickFieldInViewport))
-        self.pick_field.setToolTip('Enable only when selecting field surfaces with the mouse. Model-tree selection and visibility remain available when off.')
-        self.pick_field.toggled.connect(lambda enabled: scs_field_display.set_enabled(self.doc, enabled))
-        mv.addWidget(self.pick_field)
-
-        outer.addWidget(self.montage_group)
+        self.solve_detail.setMaximumHeight(160)
+        self.solve_detail.setVisible(False)
+        self.log_toggle.toggled.connect(self.solve_detail.setVisible)
+        outer.addWidget(self.solve_detail)
         outer.addStretch(1)
 
         self._poll_timer = QtCore.QTimer(self)
@@ -515,21 +536,57 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
         if info["status"] != live_lead.LiveLeadStatus.OK:
             return info, None
         arrays = live_lead.tessellate_lead_arrays(info)
-        geom_fp = live_lead.fingerprint_from_arrays(arrays)
         run_dir = scs_document_cache.resolve_run(self.doc, arrays, read_shared_mesh_params())
         return info, run_dir
 
+    def on_run_on(self, i):
+        """The Run on switch: this document's execution profile."""
+        try:
+            scs_job_service.service().select_profile(self.doc, self._profile_keys[i])
+        except ValueError as exc:
+            self.stages.idle(str(exc))
+        self.refresh_gates()
+
+    def solve_summary(self, run_dir, background):
+        """One line for a solved field: contacts, worst residual, peak memory,
+        time, and where the solution itself is."""
+        report = live_lead.load_report(run_dir, "solve_report") if run_dir else None
+        if not report:
+            return "Solved field"
+        res = report.get("relative_residuals") or []
+        bits = ["%d contacts" % len(res) if res else "solved",
+                ("residual ≤ %.0e" % max(res)) if res else "",
+                ("peak %.0f GB" % report["peak_rss_gb"]) if report.get("peak_rss_gb") else "",
+                scs_stages.duration(report["elapsed_s"]) if report.get("elapsed_s") else ""]
+        name = 'solution_bg.npz' if background else 'solution.npz'
+        if not os.path.isfile(os.path.join(run_dir, name)):
+            kept = live_lead.kept_on_cluster(run_dir)
+            size = kept.get('files', {}).get(name)
+            bits.append("solution on %s%s" % (kept.get('host', 'the cluster'),
+                                              (" (%.1f GB)" % (size/1e9)) if size else ""))
+        return " · ".join(b for b in bits if b)
+
     def refresh_gates(self):
+        busy = self.busy()
         try:
             profile = scs_job_service.service().profile(self.doc)
-            where = (' on %s (%s)' % (profile['host'], profile['sbatch_options'])
-                     if profile['backend'] == 'slurm' else '')
-            self.execution_status.setText('Execution: ' + profile['name'] + where)
+            self.run_on.setToolTip(
+                ("%s: %s, sbatch %s" % (profile['name'], profile['host'], profile['sbatch_options']))
+                if profile['backend'] == 'slurm' else
+                ("%s: %d CPUs, %.0f GB" % (profile['name'], profile.get('solve_cpus', 0), profile.get('memory_gb', 0))))
         except ValueError as exc:
-            self.execution_status.setText(str(exc))
-        self.local_group.setEnabled(not self.busy())
-        if self.busy():
-            return  # don't fight the running pipeline's own status text
+            self.run_on.setToolTip(str(exc))
+        key = scs_job_service.service().profile_key(self.doc)
+        if key in self._profile_keys:
+            self.run_on.set_index(self._profile_keys.index(key))
+        self.run_on.setEnabled(not busy)
+        self.btn_solve.setStyleSheet(scs_ui.action_style(self.btn_solve, stop=busy))
+        if busy:
+            self.btn_solve.setText("Aborting…" if self._aborting else "Abort solve")
+            self.btn_solve.setEnabled(not self._aborting)
+            self.btn_plot.setEnabled(False)
+            return  # don't fight the running solve's own stages
+        self._aborting = False
         info, run_dir = self.resolve_run()
         if info["status"] == live_lead.LiveLeadStatus.OK:
             n = info["n_contacts"]
@@ -537,30 +594,49 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
                 F.SCSMontageProxy.ensure_contact_mapping(self.montage_obj, info)
                 self._contact_map = info['contact_map']
                 self._rebuild_contact_rows(n)
-            async_runner.set_status(self.lead_status, "active",
-                                    live_lead.ready_text(info))
+            async_runner.set_status(self.lead_status, "active", live_lead.ready_text(info))
         elif info["status"] == live_lead.LiveLeadStatus.NONE:
             async_runner.set_status(self.lead_status, "idle", info["reason"])
         else:
             async_runner.set_status(self.lead_status, "gated", info["reason"])
 
+        background = self.background_check.isChecked()
         if self._current_sol_npz is not None:
-            expected_name = 'solution_bg.npz' if self.background_check.isChecked() else 'solution.npz'
-            expected = os.path.join(run_dir, expected_name) if run_dir else None
-            if expected != self._current_sol_npz or not artifacts.valid(expected, artifacts.solution_signature(run_dir, self.background_check.isChecked())):
+            expected = os.path.join(run_dir, 'solution_bg.npz' if background else 'solution.npz') if run_dir else None
+            if expected != self._current_sol_npz or not live_lead.field_ready(run_dir, background):
                 self._current_sol_npz = None
                 self.montage_obj.SolutionNpz = ''
                 for pipe in self.pipes.values():
                     pipe.ViewObject.Visibility = False
-                async_runner.set_status(self.status, 'gated', 'Field is stale for the current lead/model. Solve / Plot Field to update.')
+                self.readout.setVisible(False)
+                self._gate = None
         valid_lead = run_dir is not None
         self.montage_group.setEnabled(valid_lead)
-        ready = valid_lead and artifacts.preview_ready(run_dir)
-        self.btn_plot.setEnabled(ready)
-        if valid_lead and not ready:
-            async_runner.set_status(self.status, 'gated', 'Generate a mesh for this lead and settings in SCS Mesh Generator first.')
-        if not valid_lead:
-            self.btn_plot.setToolTip(info["reason"])
+        mesh = valid_lead and live_lead.mesh_ready(run_dir)
+        field = mesh and live_lead.field_ready(run_dir, background)
+        self.btn_solve.setText("Solved" if field else "Solve")
+        self.btn_solve.setEnabled(mesh and not field)
+        self.btn_solve.setToolTip(
+            "This mesh is solved; plot any currents below" if field else
+            "One field per contact (1 A each) for this mesh; any currents are then a quick plot" if mesh else
+            "Mesh this lead first (SCS Mesh Generator)" if valid_lead else info["reason"])
+        self.btn_plot.setEnabled(field)
+        sol = os.path.join(run_dir, 'solution_bg.npz' if background else 'solution.npz') if field else None
+        has_e = bool(sol) and M.has_E(sol)
+        self.show_quantity.group.button(1).setEnabled(has_e)
+        if not has_e and self.show_quantity.index() == 1:
+            self.show_quantity.set_index(0)
+            self.on_quantity(0)
+        # Only a change of state rewrites the caption, so a result or an error stays put.
+        gate = "field" if field else "solve" if mesh else "mesh" if valid_lead else "lead"
+        if gate != self._gate:
+            self._gate = gate
+            if gate == "field":
+                self.stages.done(self.solve_summary(run_dir, background))
+            elif gate == "mesh":
+                self.stages.idle("Mesh this lead first (SCS Mesh Generator).")
+            else:
+                self.stages.idle("")
 
     def _rebuild_contact_rows(self, n_contacts):
         """Rebuild self.contact_form so it has EXACTLY n_contacts spinbox
@@ -585,16 +661,13 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(-5000.0, 5000.0)
             spin.setSingleStep(0.1)
-            spin.setDecimals(6)
+            spin.setDecimals(3)
             spin.setSuffix(" mA")
             spin.setValue(float(getattr(self.montage_obj, 'Contact%d_mA' % i, 0.0)))
-            spin.setToolTip(
-                "Current into contact %d, mA. Positive = source/anode, "
-                "negative = sink/cathode (assign_and_solve.py's own "
-                "convention). Starts at 0 -- nothing is pre-assigned." % i)
+            spin.setToolTip("Current into contact %d: + source (anode), − sink (cathode), 0 floating." % i)
             role_lbl = QtWidgets.QLabel(role_of(spin.value()))
             role_lbl.setStyleSheet(ROLE_STYLES[role_of(spin.value())])
-            role_lbl.setMinimumWidth(90)
+            role_lbl.setMinimumWidth(56)
             spin.valueChanged.connect(lambda v, lbl=role_lbl: self.update_role(lbl, v))
             spin.valueChanged.connect(self.update_totals)
             self.contact_spins.append(spin)
@@ -608,7 +681,7 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
 
     def update_totals(self, *_):
         source, sink = W.totals([spin.value() for spin in self.contact_spins])
-        self.total_label.setText('First phase: source %.6g mA; sink %.6g mA across all leads' % (source, sink))
+        self.total_label.setText('source %.4g · sink %.4g mA' % (abs(source), abs(sink)))
 
     def scale_to_total(self):
         try:
@@ -637,7 +710,7 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
 
     def export_fast_viewer(self):
         if self.busy() or not self.montage_obj.SolutionNpz:
-            self.status.setText('Solve / Plot Field first; export uses the cached solution.')
+            self.stages.set_caption('Plot a field first.')
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Export shareable FAST viewer',
                           os.path.join(REPO_ROOT, self.doc.Name+'_FAST.html'), 'HTML (*.html)')
@@ -667,9 +740,21 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
             if not path.lower().endswith('.html'):
                 path += '.html'
             scs_fast_viewer.export(path, surfaces, metadata)
-            self.status.setText('Exported '+path+'; open in a browser for playback and annotated PNGs.')
+            self.stages.set_caption('Exported ' + path)
         except Exception as exc:
-            self.status.setText('Export failed: '+str(exc))
+            self.stages.set_caption('Export failed: ' + str(exc), scs_stages.FAIL_FG)
+
+    def unit(self):
+        return "V/m" if self.montage_obj.PlotQuantity == F.QUANTITIES[1] else "V"
+
+    def on_quantity(self, i):
+        """Potential or |E|: the colour range starts over (volts are not V/m),
+        and a plotted montage is redrawn as the other quantity."""
+        self.montage_obj.PlotQuantity = F.QUANTITIES[i]
+        self.clamp_spin.setValue(0.0)
+        self.clamp_spin.setSuffix(" " + self.unit())
+        if self._current_sol_npz is not None and self.readout.isVisible():
+            self.apply_montage()
 
     def update_role(self, label, value):
         role = role_of(value)
@@ -681,47 +766,48 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
         # preparation and each rank must not spawn another full pool of threads.
         return {v: 1 for v in THREAD_ENV_VARS}
 
-    # -- Plot Field: mesh-if-needed -> solve-if-needed -> combine ---------
-    def start_plot(self):
+    # -- Solve (or Abort) and Plot field ---------------------------------
+    def on_solve_button(self):
+        if self.busy():
+            if not self._aborting:
+                self._aborting = True
+                self.refresh_gates()
+                self.solve_runner.abort()
+            return
+        self.start_solve()
+
+    def prepare_run(self):
+        """The live lead's matching mesh run, with its lead surfaces written, or None."""
         try:
             scs_job_service.service().profile(self.doc)
-            self.sync_waveform()
         except ValueError as exc:
-            self.status.setText(str(exc))
-            return
+            self.stages.idle(str(exc))
+            return None
         info, run_dir = self.resolve_run()
-        if run_dir is None or not artifacts.preview_ready(run_dir):
+        if run_dir is None or not live_lead.mesh_ready(run_dir):
             self.refresh_gates()
-            return
-        os.makedirs(run_dir, exist_ok=True)
-
+            return None
         live_dir = os.path.join(run_dir, "lead")
         live_lead.write_insulator_surfaces(live_lead.tessellate_lead_arrays(info), live_dir)
-
         self._pending_run_dir = run_dir
         self._pending_background = self.background_check.isChecked()
         self._pending_live_dir = live_dir
-        self.solve_detail.clear()
-        self.plot_progress.setValue(0)
-        self.btn_plot.setEnabled(False)
-        self.btn_plot_abort.setEnabled(True)
-        async_runner.set_status(self.status, "active", "checking cache...")
-        self._advance_to_solve()
+        return run_dir
 
-    def abort_plot(self):
-        if self.solve_runner.is_running():
-            self.solve_runner.abort()
-
-    def _advance_to_solve(self):
-        run_dir = self._pending_run_dir
+    def start_solve(self):
+        run_dir = self.prepare_run()
+        if run_dir is None:
+            return
         background = self.background_check.isChecked()
-        sol_npz = os.path.join(run_dir, "solution_bg.npz" if background else "solution.npz")
-        if artifacts.valid(sol_npz, artifacts.solution_signature(run_dir, background)):
-            self.plot_progress.setValue(100)
-            self._finish_plot(sol_npz)
+        if live_lead.field_ready(run_dir, background):
+            self.refresh_gates()
             return
         args = [run_dir, "--lead-dir", self._pending_live_dir]
         profile = scs_job_service.service().profile(self.doc)
+        if profile['backend'] == 'local' and live_lead.mesh_remote_only(run_dir):
+            self.on_plot_failed("This mesh is on the cluster: solve there, or fetch mesh.npz "
+                                "with fem/hpc/fetch_run.sh.")
+            return
         if profile['backend'] == 'local':
             settings = dict(cpus=profile['solve_cpus'], memory_gb=profile['memory_gb'])
             artifacts.atomic_json(os.path.join(C.OUT, 'solve_settings.json'), settings)
@@ -731,71 +817,90 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
         if background:
             args.append('--background')
         self.background_check.setEnabled(False)
-        self.local_group.setEnabled(False)
-        async_runner.set_status(self.status, "active",
-                                "solving... %d%%" % 0)
+        self.solve_detail.clear()
+        self.stages.start("starting…")
         scs_job_service.service().submit(self.doc, 'Solve', self.solve_runner, args, self.env_overrides())
+        self.refresh_gates()
+
+    def on_plot_button(self):
+        try:
+            self.sync_waveform()
+        except ValueError as exc:
+            self.stages.set_caption(str(exc), scs_stages.FAIL_FG)
+            return
+        run_dir = self.prepare_run()
+        if run_dir is None:
+            return
+        background = self.background_check.isChecked()
+        if not live_lead.field_ready(run_dir, background):
+            self.refresh_gates()
+            return
+        sol_npz = os.path.join(run_dir, "solution_bg.npz" if background else "solution.npz")
+        if sol_npz != self._current_sol_npz and not self.bind_field(sol_npz):
+            return
+        self.apply_montage()
 
     def on_plot_solve_progress(self, pct):
-        overall = pct
-        self.plot_progress.setValue(overall)
-        note = (" — " + self._remote_note) if self._remote_note else ""
-        async_runner.set_status(self.status, "active", "solving... %d%%%s" % (overall, note))
+        self.stages.progress(pct)
 
     def on_solve_stage(self, message):
+        self.solve_detail.appendPlainText(message)
         if message.startswith("HPC: "):
             self._remote_note = message[len("HPC: "):]
-            self.on_plot_solve_progress(self.plot_progress.value())
+
+    def on_solve_tick(self, _elapsed):
+        svc = scs_job_service.service()
+        ident = next((i for i, r in svc.runners.items() if r is self.solve_runner), None)
+        if ident:
+            self.stages.attach(ident, svc.records[ident].get("created"))
+        self.stages.tick(self._remote_note)
+        self.stages.set_resources(scs_monitor.monitor().line(ident) if ident else "")
 
     def on_plot_solve_finished(self, report):
         self.background_check.setEnabled(True)
         self.solve_detail.setPlainText(report.get("_stdout_tail", ""))
         live_lead.save_report(self._pending_run_dir, "solve_report", report)
-        self.plot_progress.setValue(100)
-        self._finish_plot(report["solution_npz"])
+        # Plot straight away only if currents are already set; a solve needs none.
+        if self.bind_field(report["solution_npz"]) and any(s.value() for s in self.contact_spins):
+            self.apply_montage()
 
     def on_plot_failed(self, msg):
         self.solve_detail.setPlainText(msg)
-        async_runner.set_status(self.status, "failed", "Plot Field failed: " + msg.splitlines()[0])
-        self.btn_plot.setEnabled(True)
-        self.btn_plot_abort.setEnabled(False)
+        self.log_toggle.setChecked(True)
+        self.stages.failed("Solve failed: " + msg.splitlines()[0])
         self.background_check.setEnabled(True)
+        self._aborting = False
+        self._gate = "failed"
         self.refresh_gates()
 
     def on_plot_aborted(self, msg):
-        async_runner.set_status(self.status, "failed", msg)
-        self.btn_plot.setEnabled(True)
-        self.btn_plot_abort.setEnabled(False)
+        self.stages.failed(msg)
         self.background_check.setEnabled(True)
+        self._aborting = False
+        self._gate = "failed"
         self.refresh_gates()
 
-    def _finish_plot(self, sol_npz):
-        """The mesh+solve chain (or the cache) has produced sol_npz for the
-        CURRENT live lead. Sanity-check scs_montage.py's own general-
-        montage arithmetic against it (self_check() diffs the default
-        bipolar case's general-path V against solve_basis_fields()'s own
-        stored V for THIS solution.npz -- lead-agnostic, see module
-        docstring), then combine with the current spinbox currents exactly
-        as before."""
+    def bind_field(self, sol_npz):
+        """Make sol_npz, solved for the CURRENT live lead, the field to plot.
+        First the montage arithmetic's self check (the default bipolar case's
+        general-path V against the solve's own stored V -- run on the cluster,
+        beside the solution, when the solution stayed there)."""
         current_info, current_run = self.resolve_run()
         if current_run != self._pending_run_dir:
             self.on_plot_failed('Lead geometry or mesh settings changed during solve. Generate/select the matching mesh first.')
-            return
-        self.btn_plot_abort.setEnabled(False)
-        ok, msg = M.self_check(sol_npz=sol_npz)
+            return False
+        try:
+            ok, msg = M.self_check(sol_npz=sol_npz)
+        except Exception as exc:
+            ok, msg = False, str(exc)
         if not ok:
-            async_runner.set_status(self.status, "failed",
-                                    "Montage self-check FAILED for this lead's solution: %s" % msg)
-            self.btn_plot.setEnabled(True)
-            self.refresh_gates()
-            return
+            self.on_plot_failed("Montage self-check failed for this solution: %s" % msg)
+            return False
         self._current_sol_npz = sol_npz
         self.montage_obj.SolutionNpz = sol_npz
-        for pipe in self.pipes.values():
-            pipe.ViewObject.Visibility = True
-        self.apply_montage()
-        self.btn_plot.setEnabled(True)
+        self._gate = None
         self.refresh_gates()
+        return True
 
     # -- combine (fast, synchronous -- no FEM solve here) ------------------
     def apply_montage(self):
@@ -816,28 +921,31 @@ class PotentialVisualizerPanel(QtWidgets.QWidget):
                 raise RuntimeError(self.montage_obj.Status)
             stats = self.montage_obj.Proxy._last_stats
         except Exception as exc:
-            async_runner.set_status(self.status, "failed", "update failed: %s" % exc)
             QtWidgets.QApplication.restoreOverrideCursor()
+            self.stages.set_caption("Plot failed: %s" % exc, scs_stages.FAIL_FG)
             return
         QtWidgets.QApplication.restoreOverrideCursor()
+        for pipe in self.pipes.values():
+            pipe.ViewObject.Visibility = True
         self.refresh_readout(stats)
-        self.status.setToolTip(str(self.montage_obj.Status))
-        async_runner.set_status(self.status, "active", "Field updated — " + self.phase_choice.currentText())
+        self.readout.setToolTip(str(self.montage_obj.Status))
 
     def refresh_readout(self, stats):
-        self.clamp_label.setText("+/-%.4g V" % stats["clamp_v"])
         charge = stats.get("source_mA", 0)-stats.get("sink_mA", 0)
         scale = max(1.0, max(abs(s.value()) for s in self.contact_spins))
         balanced = abs(charge) < 1e-6 * scale
-        self.charge_label.setText(
-            "%.4g mA%s" % (charge, "" if balanced else "  -- UNBALANCED source/return"))
-        self.charge_label.setStyleSheet("" if balanced else "color: #8e0000; font-weight: bold;")
+        phase = self.phase_choice.currentText().lower() if self.wave_mode.currentText() != 'Static' else ''
+        bits = ["colour ±%.4g %s" % (stats["clamp_v"], self.unit()),
+                "balanced" if balanced else "UNBALANCED by %.4g mA" % charge, phase]
+        self.plot_line.setText(" · ".join(b for b in bits if b))
+        self.plot_line.setStyleSheet("" if balanced else "color: %s; font-weight: bold;" % scs_stages.FAIL_FG)
         for t in M.TISSUES:
             s = stats["tissues"][t]
-            txt = "[%.1f, %.1f] V" % (s["v_min"], s["v_max"])
+            txt = "%.3g … %.3g %s" % (s["v_min"], s["v_max"], self.unit())
             if s["n_nan"]:
-                txt += "  NaN=%d" % s["n_nan"]
+                txt += "  NaN %d" % s["n_nan"]
             self.tissue_labels[t].setText(txt)
+        self.readout.setVisible(True)
 
     def on_dock_closing(self):
         self._poll_timer.stop()
@@ -865,8 +973,11 @@ def show_panel():
             return dock
         if old_widget is not None and hasattr(old_widget, "on_dock_closing"):
             old_widget.on_dock_closing()
+    old_widget = dock.widget()
     panel = PotentialVisualizerPanel(doc)
     dock.setWidget(panel)
+    if old_widget is not None:
+        old_widget.deleteLater()
     dock.show()
     dock.raise_()
     return dock
