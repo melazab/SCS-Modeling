@@ -1,7 +1,19 @@
 """Open the shared SCS execution profiles and job monitor."""
+import importlib
 import sys
 SCRIPTS='/home/mohamed/Projects/SCS-Modeling/fem/scripts'
 if SCRIPTS not in sys.path:sys.path.insert(0,SCRIPTS)
 # Do not reload the service: its identity and workers must survive macro reruns.
-import scs_job_manager
+# The window's own code, and the resource sampler (stopped first, so no
+# second set of polls), are reloaded, so a rerun shows the current UI.
+import scs_monitor
+_old = scs_monitor._MONITOR
+if _old is not None:
+    if hasattr(_old, 'shutdown'):
+        _old.shutdown()
+    else:
+        _old.timer.stop()
+import scs_stages, scs_job_manager
+for _m in (scs_monitor, scs_stages, scs_job_manager):
+    importlib.reload(_m)
 scs_job_manager.show()

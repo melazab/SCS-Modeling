@@ -122,6 +122,15 @@ class JobTests(unittest.TestCase):
             self.assertTrue((Path(tmp)/'cleared'/(done['id']+'.json')).is_file())
             self.assertTrue((Path(tmp)/'cleared'/(done['id']+'.log')).is_file())
 
+    def test_clear_finished_only_the_given_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=J.Store(tmp)
+            jobs=[store.new_job({'name':n},'Solve',store.profiles['local'],[],{},None) for n in 'ab']
+            for job in jobs:store.transition(job,'running');store.transition(job,'completed')
+            with patch.object(S.J,'Store',return_value=store):service=S.JobService()
+            self.assertEqual(service.clear_finished({jobs[0]['id']}),1)
+            self.assertEqual(list(service.records),[jobs[1]['id']])
+
     def test_probe_output_survives_refresh(self):
         # Widgets need a QApplication; the other tests already own a QCoreApplication.
         script=PROBE_WIDGET_SCRIPT%str(Path(__file__).resolve().parents[1]/'scripts')
@@ -143,18 +152,28 @@ import scs_jobs as J,scs_job_service as S,scs_job_manager as M
 tmp=tempfile.mkdtemp();store=J.Store(tmp)
 job=store.new_job({'name':'a','label':'A','path':''},'Solve',store.profiles['local'],[],{},None)
 store.transition(job,'running');store.transition(job,'completed')
+other=store.new_job({'name':'b','label':'B','path':''},'Mesh',store.profiles['local'],[],{},None)
+store.transition(other,'running');store.transition(other,'completed')
 S.J.Store=lambda:store;S._SERVICE=None
 M.service=S.service
 w=M.JobManager();w.timer.stop()
-w.table.selectRow(0)
-assert job['id'] in w.details.toPlainText()
+w.table.selectRow(1)
+assert '>A<' in w.summary.text(),w.summary.text()
 w.probe_text='SSH exit code: 0\\nhpc8';w.show_details()
 w.refresh();w.refresh()
 assert w.details.toPlainText().startswith('SSH exit code'),w.details.toPlainText()[:200]
 w.select_job()
-assert job['id'] in w.details.toPlainText()
+assert '>A<' in w.summary.text() and not w.details.toPlainText().startswith('SSH')
 assert w.clear.isEnabled()
-w.clear_finished()
+w.table.selectAll();w.refresh();w.refresh()
+assert w.selected_ids()=={job['id'],other['id']},w.selected_ids()
+w.table.selectRow(1);w.refresh()
+assert w.selected_ids()=={job['id']}
+w.clear_selected()
+assert w.table.rowCount()==1 and w.table.item(0,0).data(256)==other['id']
+w.refresh();w.table.selectRow(0);w.refresh()
+assert w.clear.isEnabled()
+w.clear_selected()
 assert w.table.rowCount()==0 and not w.clear.isEnabled()
 '''
 

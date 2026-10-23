@@ -188,8 +188,10 @@ class JobService(QtCore.QObject):
         self.store.transition(self.records[ident],'cancelling')
         self.changed.emit();runner.abort()
 
-    def clear_finished(self):
-        finished=[i for i,r in self.records.items() if r['state'] in J.TERMINAL and i not in self.runners]
+    def clear_finished(self, idents=None):
+        """Archive finished records; only those in idents, if given."""
+        finished=[i for i,r in self.records.items() if r['state'] in J.TERMINAL and i not in self.runners
+                  and (idents is None or i in idents)]
         for ident in finished:
             self.store.clear(ident);self.records.pop(ident)
         self.changed.emit()
